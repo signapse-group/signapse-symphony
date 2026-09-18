@@ -1,0 +1,6 @@
+interface:
+  display_name: "To Ticket"
+  short_description: "Publish a brief as structured GitHub issues"
+  default_prompt: "Use $to-ticket to publish this brief as structured GitHub issues."
+policy:
+  allow_implicit_invocation: false

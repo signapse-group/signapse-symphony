@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify and Log Bug"
+  short_description: "Reproduce product bugs and publish workflow-compliant issues"
+  default_prompt: "Use $verify-and-log-bug to verify this report in the requested context and log a Bug only when the evidence gate passes."
