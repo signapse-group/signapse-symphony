@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 - Unreleased
+
+- Add Story implementation-leakage guidance so backend/frontend references remain only when they express verifiable security, privacy, data-integrity, localization, reliability, or compatibility constraints.
+- Clarify that surface-specific Tasks require independent deliverables and verification boundaries.
+
 ## 0.3.0 - Unreleased
 
 - Decouple repository adoption from the installed plugin version so routine upgrades do not require `AGENTS.md` edits.

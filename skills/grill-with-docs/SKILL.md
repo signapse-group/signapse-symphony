@@ -7,6 +7,8 @@ description: Clarify decisions with the user and record accepted domain terms or
 
 Require repository adoption and load [workflow](../workflow/SKILL.md) before workflow-dependent documentation. Use [grilling](../grilling/SKILL.md) for the conversation. This wrapper owns selective documentation, not a second interview process. Read existing domain context/ADRs only where they bear on the topic; follow repository locations and formats.
 
+When this skill is invoked as part of requirement or issue planning, keep accepted requirements and task decisions in the owning issue. Do not create or update an ADR merely because a decision has technical consequences. Create or update an ADR only when the user explicitly asks for architecture documentation or the repository policy requires it as a deliverable.
+
 ## What to Record
 
 | Accepted content | Action |

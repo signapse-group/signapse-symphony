@@ -7,6 +7,8 @@ description: Publish or reconcile agreed work as GitHub issues when the user req
 
 Turn agreed input into durable work contracts. This skill owns issue publication and decomposition, not implementation or the choice of implementation tools.
 
+This is an issue-first flow. Record requirements, accepted decisions, scope, and verification boundaries in the owning issue. Do not create or update ADRs, context files, or other architecture documents while publishing or normalizing issues unless the user explicitly requests that documentation or the repository's policy names it as a required deliverable. A technical choice that is routine, reversible, or needed only to implement a Task remains in the Task or with the implementer.
+
 An explicit request to publish or restructure issues authorizes the corresponding writes. Do not require another approval of the whole tree. Ask only when a new material decision is needed; a recommendation, assumption, or unanswered question is not an accepted requirement. A request merely to review or plan ticket creation does not authorize publication.
 
 ## Read the Sources
@@ -39,6 +41,7 @@ Before publication, run a contract-quality pass:
 
 - Map every Epic High-Level Requirement and Success Criterion to one or more Stories; report uncovered or multiply-owned requirements.
 - Give each Story one observable stakeholder outcome and a vertical verification boundary. Do not split Stories by backend/frontend, database, API, or other technical layer.
+- Run an implementation-leakage pass on every Story. Do not make a team, layer, service, endpoint, framework, or database the subject of a Story requirement. Rewrite those statements as an externally verifiable outcome, business rule, or quality constraint. Keep a server-side or backend reference only when it expresses a necessary security, privacy, data-integrity, localization, reliability, or compatibility invariant; omit the implementation mechanism and let Tasks choose the seam.
 - Ensure each Story separates Acceptance Criteria, Business Rules, and Quality & Constraints. Acceptance Criteria must cover the successful outcome and meaningful exceptions; add authorization, privacy, lifecycle, concurrency, idempotency, or data-integrity cases when applicable.
 - Keep accepted domain rules and constraints in the parent or Story that owns them. Do not invent values, states, metrics, endpoints, or policies to fill a template.
 - Create child Tasks only when the Story has enough contract detail for an independently verifiable deliverable. A broad or unresolved Story remains Open with the missing contract recorded.
@@ -53,6 +56,7 @@ Use current native `gh` commands where supported. Always pass the target reposit
 - Create enough Stories to represent the known Epic scope. Create execution children only for branches with sufficient requirements, accepted technical decisions, verification, and valid deliverables. Report unready branches without inventing their implementation.
 - Prefer the Epic/Story structure as a set of user-visible vertical capabilities. Carry shared requirements to the parent and keep child-specific behavior in the owning Story; do not repeat the entire Epic in every child.
 - Separate BE and FE Tasks when each has its own deliverable. Include necessary validation and automated checks in the behavior Task; do not split solely by file, layer, or test type.
+- Do not infer a BE or FE Task merely because a Story mentions the server, client, API, or UI. Create a surface-specific Task only when that surface has an independently deliverable and verifiable contribution to the Story outcome.
 - Prefix backend Task/Bug titles with `BE:` and frontend Task/Bug titles with `FE:`. Do not invent a surface for work that belongs to neither. Epic/Story stay in the configured planning repository, execution issues in their code repositories.
 - Default to one FE UI-plus-integration Task blocked by the BE API Task when a new API is required. Split UI from integration only if UI can land as a valid deliverable on its own; integration then depends on both UI and BE. Mocking does not satisfy the live integration dependency.
 - Keep shared decisions at the appropriate parent or linked source. Preserve Task-specific decisions in the Task and map its Requirement Coverage to relevant Story criteria. Do not copy the entire parent into each child.

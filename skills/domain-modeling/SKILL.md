@@ -9,6 +9,8 @@ If the working repository adopts Agent Workflow, load [workflow](../workflow/SKI
 
 Actively build and sharpen the project's domain model as you design. This is the *active* discipline — challenging terms, inventing edge-case scenarios, and writing the glossary and decisions down the moment they crystallise. (Merely *reading* `CONTEXT.md` for vocabulary is not this skill — that's a one-line habit any skill can do. This skill is for when you're changing the model, not just consuming it.)
 
+When another workflow is publishing or normalizing requirements, do not activate the documentation behavior of this skill implicitly. ADR or context updates require an explicit architecture/domain-documentation request or an adopting repository policy that names the document as a deliverable.
+
 ## File structure
 
 Most repos have a single context:

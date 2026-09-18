@@ -1,6 +1,6 @@
 {
   "name": "agent-workflow",
-  "version": "0.3.0",
+  "version": "0.3.1+codex.20260918164438",
   "description": "Reusable planning-to-delivery workflow for Codex repositories",
   "author": {
     "name": "Signapse"
@@ -12,7 +12,10 @@
     "longDescription": "Shared workflow policy and skills for planning, GitHub work contracts, implementation, verification, independent review, and delivery handoff.",
     "developerName": "Signapse",
     "category": "Productivity",
-    "capabilities": ["Planning", "Write"],
+    "capabilities": [
+      "Planning",
+      "Write"
+    ],
     "defaultPrompt": [
       "Load this repository's adopted workflow.",
       "Turn this agreed brief into work contracts.",
