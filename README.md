@@ -37,7 +37,7 @@ Installing the plugin does not adopt it for every repository. A consuming reposi
 ```markdown
 ## Agent Workflow
 
-This repository adopts the `agent-workflow` plugin version `0.1.0`.
+This repository adopts the `agent-workflow` plugin version `0.2.0`.
 At the start of each new session, read `$workflow` and verify the installed version before workflow-dependent action. If the plugin is missing or mismatched, report the blocked portion and continue only independent valid work.
 
 - Repository role and planning/execution repositories: ...

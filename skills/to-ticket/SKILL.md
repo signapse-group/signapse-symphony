@@ -35,6 +35,15 @@ Before any write:
 
 Apply the shared [business analysis guidance](../workflow/references/business-analysis.md) in this check: requirement quality, alignment with accepted needs and impact on related contracts when reconciling. Preserve criterion-level traceability using the selected templates.
 
+Before publication, run a contract-quality pass:
+
+- Map every Epic High-Level Requirement and Success Criterion to one or more Stories; report uncovered or multiply-owned requirements.
+- Give each Story one observable stakeholder outcome and a vertical verification boundary. Do not split Stories by backend/frontend, database, API, or other technical layer.
+- Ensure each Story separates Acceptance Criteria, Business Rules, and Quality & Constraints. Acceptance Criteria must cover the successful outcome and meaningful exceptions; add authorization, privacy, lifecycle, concurrency, idempotency, or data-integrity cases when applicable.
+- Keep accepted domain rules and constraints in the parent or Story that owns them. Do not invent values, states, metrics, endpoints, or policies to fill a template.
+- Create child Tasks only when the Story has enough contract detail for an independently verifiable deliverable. A broad or unresolved Story remains Open with the missing contract recorded.
+- Check scope boundaries and dependencies for overlap, omission, and cycles before publishing.
+
 Use current native `gh` commands where supported. Always pass the target repository explicitly. Use Project owner/number and resolve IDs at runtime when needed; do not hardcode opaque IDs. Missing access or required native functionality must be reported, not replaced with labels or duplicate relationship lists in the body.
 
 ## Classify and Decompose
@@ -42,6 +51,7 @@ Use current native `gh` commands where supported. Always pass the target reposit
 - Reuse/retype the source root according to scope: Epic, Story, Task, or Bug. Without a source issue, create the appropriate root in the configured repository.
 - Use Epic -> Story -> Task/Bug when the scope warrants it. Standalone technical work and bugs do not need artificial parents. Do not create a Sub-task type.
 - Create enough Stories to represent the known Epic scope. Create execution children only for branches with sufficient requirements, accepted technical decisions, verification, and valid deliverables. Report unready branches without inventing their implementation.
+- Prefer the Epic/Story structure as a set of user-visible vertical capabilities. Carry shared requirements to the parent and keep child-specific behavior in the owning Story; do not repeat the entire Epic in every child.
 - Separate BE and FE Tasks when each has its own deliverable. Include necessary validation and automated checks in the behavior Task; do not split solely by file, layer, or test type.
 - Prefix backend Task/Bug titles with `BE:` and frontend Task/Bug titles with `FE:`. Do not invent a surface for work that belongs to neither. Epic/Story stay in the configured planning repository, execution issues in their code repositories.
 - Default to one FE UI-plus-integration Task blocked by the BE API Task when a new API is required. Split UI from integration only if UI can land as a valid deliverable on its own; integration then depends on both UI and BE. Mocking does not satisfy the live integration dependency.

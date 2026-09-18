@@ -5,8 +5,11 @@ An Epic is a capability or large outcome requiring multiple independently valuab
 ## Required body
 
 ```markdown
-## Need
-Why this outcome matters and the accepted basis.
+## Problem / Opportunity
+The user or business problem, why it matters, and the accepted basis.
+
+## Desired Outcome
+The observable capability or change that should result.
 
 ## Stakeholders and Value
 Who benefits or is affected, and what useful change is expected.
@@ -21,11 +24,17 @@ Who benefits or is affected, and what useful change is expected.
 ## Success Criteria
 - Observable outcome and evidence source.
 
-## Constraints and Dependencies
+## High-Level Requirements
+- Product or domain behavior required to reach the outcome.
+
+## Shared Constraints and Decisions
 - ...
+
+## References
+- Relevant domain, product, or existing-behavior references.
 
 ## Open Decisions
 - Material unresolved decisions only.
 ```
 
-Use a concise capability/outcome title without type prefixes. Keep implementation decomposition in Stories and Tasks. Do not manufacture metrics, dates, child issues, or transition requirements without accepted need. New Epics enter the configured Project state; their later lifecycle remains human-owned.
+Use a concise capability/outcome title without type prefixes. Keep implementation decomposition in Stories and Tasks. Do not manufacture metrics, dates, child issues, or transition requirements without accepted need. High-Level Requirements must be traceable to one or more Stories; Shared Constraints and Decisions must contain only accepted rules, not speculative implementation. New Epics enter the configured Project state; their later lifecycle remains human-owned.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0 - Unreleased
+
+- Improve Epic and Story contract templates with outcome traceability, business rules, and quality constraints.
+- Add contract-quality checks to `to-ticket` for vertical Story boundaries, requirement coverage, dependencies, and readiness.
+
 ## 0.1.0 - Unreleased
 
 - Add a GitHub marketplace with two-command installation.
