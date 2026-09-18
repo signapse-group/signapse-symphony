@@ -7,9 +7,9 @@ description: Load and apply the shared planning, execution, review, issue, and d
 
 Apply this workflow only when the working repository's `AGENTS.md` explicitly adopts Agent Workflow, or when the user explicitly asks to apply it for the current scope. Installation alone does not adopt the workflow.
 
-Read [references/workflow.md](references/workflow.md) before workflow-dependent action. Then read the repository-root `AGENTS.md` for its verified plugin version, repository roles, GitHub Project identity, build and test commands, delivery condition, coding standards, and domain-document locations. Repository instructions take precedence for project-specific facts; the shared policy remains authoritative for workflow behavior unless the user explicitly changes it.
+Read [references/workflow.md](references/workflow.md) before workflow-dependent action. Then read the repository-root `AGENTS.md` for repository roles, GitHub Project identity, build and test commands, delivery condition, coding standards, and domain-document locations. Repository instructions take precedence for project-specific facts; the shared policy remains authoritative for workflow behavior unless the user explicitly changes it.
 
-If the repository requires a different plugin version than the active installation, report the mismatch before workflow-dependent action and continue only independent work that remains valid. Do not silently use the latest version or rewrite the repository's adoption declaration.
+Adoption does not require a plugin version in `AGENTS.md`. If the installed workflow requires project-specific configuration that the repository has not declared, report the missing configuration before the dependent action and continue independent work that remains valid. Do not rewrite the repository's adoption declaration to follow routine plugin upgrades.
 
 Load references only when the task needs them:
 

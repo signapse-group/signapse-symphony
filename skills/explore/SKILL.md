@@ -7,7 +7,7 @@ description: Investigate an idea or current system read-only before deciding wha
 
 Act as a read-only thinking partner. Build enough shared understanding for the user to decide what, if anything, should happen next.
 
-If the working repository adopts Agent Workflow, load [workflow](../workflow/SKILL.md) and verify the declared plugin version before applying workflow-dependent policy. In a repository without adoption, keep this skill read-only and do not apply Project lifecycle behavior.
+If the working repository adopts Agent Workflow, load [workflow](../workflow/SKILL.md) before applying workflow-dependent policy. In a repository without adoption, keep this skill read-only and do not apply Project lifecycle behavior.
 
 ## Boundaries
 

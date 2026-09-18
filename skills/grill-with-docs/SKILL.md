@@ -5,7 +5,7 @@ description: Clarify decisions with the user and record accepted domain terms or
 
 # Grill with Docs
 
-Require repository adoption and load [workflow](../workflow/SKILL.md), verifying the declared plugin version before workflow-dependent documentation. Use [grilling](../grilling/SKILL.md) for the conversation. This wrapper owns selective documentation, not a second interview process. Read existing domain context/ADRs only where they bear on the topic; follow repository locations and formats.
+Require repository adoption and load [workflow](../workflow/SKILL.md) before workflow-dependent documentation. Use [grilling](../grilling/SKILL.md) for the conversation. This wrapper owns selective documentation, not a second interview process. Read existing domain context/ADRs only where they bear on the topic; follow repository locations and formats.
 
 ## What to Record
 

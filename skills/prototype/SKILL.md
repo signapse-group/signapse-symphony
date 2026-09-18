@@ -5,7 +5,7 @@ description: Build a throwaway prototype to answer a design question. Use when t
 
 # Prototype
 
-If the working repository adopts Agent Workflow, load [workflow](../workflow/SKILL.md) and verify the declared plugin version before applying workflow-dependent policy. In a repository without adoption, prototype only within the user's request and do not apply Project lifecycle behavior.
+If the working repository adopts Agent Workflow, load [workflow](../workflow/SKILL.md) before applying workflow-dependent policy. In a repository without adoption, prototype only within the user's request and do not apply Project lifecycle behavior.
 
 A prototype is **throwaway code that answers a question**. The question decides the shape.
 

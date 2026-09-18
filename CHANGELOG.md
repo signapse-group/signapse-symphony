@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0 - Unreleased
+
+- Decouple repository adoption from the installed plugin version so routine upgrades do not require `AGENTS.md` edits.
+- Treat missing plugin availability or required repository configuration as the workflow bootstrap blocker.
+
 ## 0.2.1 - Unreleased
 
 - Simplify Story contracts by removing generic context and relationship-reference sections.

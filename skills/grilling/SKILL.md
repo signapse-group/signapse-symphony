@@ -5,7 +5,7 @@ description: Clarify needs and stress-test consequential decisions without expan
 
 # Grilling
 
-If the working repository adopts Agent Workflow, load [workflow](../workflow/SKILL.md) and verify the declared plugin version before applying workflow-dependent policy. In a repository without adoption, use this skill only for the requested clarification and do not apply Project lifecycle behavior.
+If the working repository adopts Agent Workflow, load [workflow](../workflow/SKILL.md) before applying workflow-dependent policy. In a repository without adoption, use this skill only for the requested clarification and do not apply Project lifecycle behavior.
 
 Resolve uncertainties that materially affect the need, scope, or solution choice. Start with the desired outcome, a concrete usage example, and what would be sufficient, using the conversation before asking for missing information. For an already bounded plan or technical decision, work within its established purpose instead of restarting product discovery.
 

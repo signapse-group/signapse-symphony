@@ -37,8 +37,8 @@ Installing the plugin does not adopt it for every repository. A consuming reposi
 ```markdown
 ## Agent Workflow
 
-This repository adopts the `agent-workflow` plugin version `0.2.1`.
-At the start of each new session, read `$workflow` and verify the installed version before workflow-dependent action. If the plugin is missing or mismatched, report the blocked portion and continue only independent valid work.
+This repository adopts the `agent-workflow` plugin.
+At the start of each new session, read `$workflow` before workflow-dependent action. If the plugin is unavailable or required repository configuration is missing, report the blocked portion and continue independent valid work.
 
 - Repository role and planning/execution repositories: ...
 - GitHub Project owner/number: ...
@@ -60,13 +60,13 @@ python tests/validate_package.py
 python <plugin-creator>/scripts/validate_plugin.py .
 ```
 
-Validate every changed skill with `skill-creator/scripts/quick_validate.py <skill-directory>`. Test installation and upgrades in a new conversation. Before adoption, verify whether the installed plugin version is shared across repositories; coordinate upgrades when the runtime cannot isolate versions per repository.
+Validate every changed skill with `skill-creator/scripts/quick_validate.py <skill-directory>`. Test installation and upgrades in a new conversation. One installed plugin may serve multiple repositories on the same host; validate release migrations against affected repositories before upgrading that shared installation.
 
-Static package validation is the P1 gate. Runtime acceptance for policy bootstrap, non-adopted repositories, GitHub fixtures, multi-repository version mismatch, upgrade, and rollback requires an installed marketplace build in fresh conversations; do not claim P2 complete from the static validators alone.
+Static package validation is the P1 gate. Runtime acceptance for policy bootstrap, non-adopted repositories, GitHub fixtures, upgrade, migration, and rollback requires an installed marketplace build in fresh conversations; do not claim P2 complete from the static validators alone.
 
 ## Upgrade and rollback
 
-Test a candidate release in a new conversation before updating repository adoption declarations. If one installation serves multiple repositories, verify each affected repository against the candidate. Roll back the installed release and the affected adoption declarations together, then start new conversations to confirm the active policy. Do not keep duplicate active copies of the same skills as a rollback mechanism.
+Routine compatible upgrades do not change repository adoption declarations. For a release that requires new repository configuration, document the migration and update only affected repositories before using the dependent workflow. If one installation serves multiple repositories, verify each affected repository against the candidate. Roll back the installed release and any release-specific repository migration together, then start new conversations to confirm the active policy. Do not keep duplicate active copies of the same skills as a rollback mechanism.
 
 ## Removal
 

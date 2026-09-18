@@ -5,7 +5,7 @@ description: Build and sharpen a project's domain model. Use when the user wants
 
 # Domain Modeling
 
-If the working repository adopts Agent Workflow, load [workflow](../workflow/SKILL.md) and verify the declared plugin version before workflow-dependent documentation. In a repository without adoption, follow the user's request and local repository instructions without applying Project lifecycle behavior.
+If the working repository adopts Agent Workflow, load [workflow](../workflow/SKILL.md) before workflow-dependent documentation. In a repository without adoption, follow the user's request and local repository instructions without applying Project lifecycle behavior.
 
 Actively build and sharpen the project's domain model as you design. This is the *active* discipline — challenging terms, inventing edge-case scenarios, and writing the glossary and decisions down the moment they crystallise. (Merely *reading* `CONTEXT.md` for vocabulary is not this skill — that's a one-line habit any skill can do. This skill is for when you're changing the model, not just consuming it.)
 

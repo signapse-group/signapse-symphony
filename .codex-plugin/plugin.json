@@ -1,6 +1,6 @@
 {
   "name": "agent-workflow",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Reusable planning-to-delivery workflow for Codex repositories",
   "author": {
     "name": "Signapse"
