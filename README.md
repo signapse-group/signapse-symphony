@@ -2,7 +2,18 @@
 
 `agent-workflow` packages a shared planning-to-delivery workflow for Codex desktop and CLI. It includes workflow policy, issue formats, decision and API handoff guidance, and reusable skills for exploration, specification, implementation, testing, review, diagnosis, and domain work.
 
-## Install from a local release
+## Install from GitHub
+
+With Codex CLI installed and Git authenticated for this private repository, run:
+
+```powershell
+codex plugin marketplace add signapse-group/signapse-workflow
+codex plugin add agent-workflow@signapse-workflow
+```
+
+Start a new conversation in the consuming repository, then follow the adoption section below. The marketplace manifest at `.agents/plugins/marketplace.json` points to the plugin at this repository's root; no Python, scaffolding, or manual file copy is needed for this installation.
+
+## Local development installation
 
 For a personal installation, first let `plugin-creator` create the supported marketplace entry and destination:
 

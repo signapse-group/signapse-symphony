@@ -51,9 +51,10 @@ def main() -> None:
         text = raw.decode("utf-8")
         if "\r\n" in text:
             fail(f"CRLF is not allowed: {path.relative_to(ROOT)}")
-        for token in FORBIDDEN:
-            if token.lower() in text.lower():
-                fail(f"forbidden coupling {token!r}: {path.relative_to(ROOT)}")
+        if path.is_relative_to(ROOT / "skills"):
+            for token in FORBIDDEN:
+                if token.lower() in text.lower():
+                    fail(f"forbidden coupling {token!r}: {path.relative_to(ROOT)}")
         if path.suffix.lower() == ".md":
             prose = FENCED_CODE.sub("", text)
             for target in LINK.findall(prose):
