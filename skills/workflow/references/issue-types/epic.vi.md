@@ -32,9 +32,8 @@ Who benefits or is affected, and what useful change is expected.
 
 ## References
 - Relevant domain, product, or existing-behavior references.
-
-## Open Decisions
-- Material unresolved decisions only.
 ```
+
+Add an `Open Decisions` section only while material decisions remain unresolved. Remove resolved items after incorporating their durable results into the relevant contract sections, and omit the section when none remain.
 
 Use a concise capability/outcome title without type prefixes. Keep implementation decomposition in Stories and Tasks. Do not manufacture metrics, dates, child issues, or transition requirements without accepted need. High-Level Requirements must be traceable to one or more Stories; Shared Constraints and Decisions must contain only accepted rules, not speculative implementation. New Epics enter the configured Project state; their later lifecycle remains human-owned.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 - Unreleased
+
+- Simplify Story contracts by removing generic context and relationship-reference sections.
+- Keep Open Decisions only while material decisions remain unresolved, then incorporate accepted results into the owning contract sections.
+
 ## 0.2.0 - Unreleased
 
 - Improve Epic and Story contract templates with outcome traceability, business rules, and quality constraints.

@@ -42,6 +42,8 @@ Use Epic → Story → Task/Bug only when that hierarchy reflects real outcomes 
 
 Keep shared design in the appropriate parent/reference and child-specific application in the child. Issue bodies describe durable work contracts, not agent skills, branches, or PR mechanics. Use native types, parents, sub-issues, and dependencies. Do not invent labels or Project fields absent from repository configuration.
 
+Do not duplicate native parent, sub-issue, or dependency relationships in issue bodies. Keep rationale and external references only when they are needed to understand, execute, or verify the contract. In Stories, place them beside the specific contract term they support instead of adding generic context or reference sections. Include an Open Decisions section only while material decisions remain unresolved; after acceptance, incorporate the durable result into the owning contract section and remove the resolved item or empty section.
+
 For an accepted change within the same deliverable, update the current contract and affected evidence. A different deliverable/boundary needs a human replacement or cancellation decision. A new requirement for completed work needs a new issue. Use [decision-gate.md](decision-gate.md) for unresolved material decisions.
 
 ## Evidence and adoption

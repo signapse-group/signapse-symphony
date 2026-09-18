@@ -28,10 +28,9 @@ Concrete result this Task delivers.
 - Stable public seam and required evidence/checks.
 
 ## Dependencies and References
-- Native blockers, parent, design, or API contract URLs.
-
-## Open Decisions
-- Material unresolved decisions only.
+- Design, API contract, or other external references needed to execute or verify this Task.
 ```
+
+Add an `Open Decisions` section only while material decisions remain unresolved. Remove resolved items after incorporating their durable results into the relevant contract sections, and omit the section when none remain.
 
 Do not split Tasks by database/service/controller, file count, or agent step. Keep branch, skill, PR, and status-transition instructions out of the body. Use repository mapping and title prefixes only when the adopting repository requires them. For cross-repository APIs, link the exact producer `API Contract` comment; a planning contract is not delivery evidence.
