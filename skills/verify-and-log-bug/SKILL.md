@@ -5,13 +5,13 @@ description: Verify a reported product defect through reproduction or sufficient
 
 # Verify and Log Bug
 
-Require repository adoption and load [workflow](../workflow/SKILL.md). Apply the shared [business analysis guidance](../workflow/references/business-analysis.md), [issue tracker policy](../workflow/references/issue-tracker.md), [Bug format](../workflow/references/issue-types/bug.vi.md), and the repository's `AGENTS.md`. Stop before diagnosis, source inspection, instrumentation, or a fix unless separately requested.
+Require repository adoption and load [workflow](../workflow/SKILL.md). Apply the shared [business analysis guidance](../workflow/references/business-analysis.md), [issue tracker policy](../workflow/references/issue-tracker.md), [Bug format](../workflow/references/issue-types/bug.md), and the repository's `AGENTS.md`. Stop before diagnosis, source inspection, instrumentation, or a fix unless separately requested.
 
 ## Establish the test contract
 
-Resolve the exact environment, actor role/account, trigger, observable symptom, valid input constraints, Expected Behavior and its accepted Basis, and likely owning Story. Do not substitute another environment or assume the active account. Record only a non-secret actor identifier when repeatability requires it.
+Gather the environment, actor role/account, trigger, observable symptom, valid input constraints, Expected Behavior and its accepted Basis, and likely owning Story when they are available. Do not substitute another environment or assume the active account. Record only a non-secret actor identifier when repeatability requires it; mark unavailable context for follow-up.
 
-If Expected Behavior lacks an accepted Basis, report the requirement gap rather than manufacture a Bug contract.
+If Expected Behavior or its accepted Basis is not yet available, record it as `To confirm` and preserve the requirement gap for follow-up; do not manufacture a fact or silently block recording a concrete incident.
 
 ## Reproduce without diagnosing
 
@@ -21,9 +21,9 @@ Use benign test data and mark created records as test artifacts. Obtain any conf
 
 ## Evidence gate
 
-Create a Bug only when reproduction or incident evidence identifies the requested environment and actor, the input satisfies the contract, Actual Behavior differs from Expected Behavior under equivalent conditions, the result is stable enough to investigate, the observation is repeatable or sufficiently specific, and duplicate search finds no matching issue.
+Create a Bug when a concrete symptom is supported by reproduction or sufficiently specific incident evidence. Capture the requested environment, actor, input, expected behavior, repeatability, and impact when available; mark unknown items for follow-up instead of requiring them at intake. Do not create a report with only a vague concern or an ungrounded hypothesis, and search for duplicates before creation.
 
-When incident evidence is sufficient but the current run does not reproduce, distinguish the incident from this session's attempted reproduction and state evidence limits. If neither source establishes a deviation, report what was tested and do not create a speculative Bug.
+When incident evidence is sufficient but the current run does not reproduce, distinguish the incident from this session's attempted reproduction and state evidence limits. If neither source provides a concrete observation, report what was tested and do not create a speculative Bug.
 
 ## Route and publish
 
@@ -31,6 +31,6 @@ Use the repository mapping, Project identity, native Issue Type, parent rules, a
 
 An explicit request to log the verified defect authorizes issue creation within that scope. It does not authorize changing the Story contract, assigning implementation, diagnosing the cause, or marking the Bug ready for execution.
 
-Follow the canonical [Bug format](../workflow/references/issue-types/bug.vi.md). Preserve Expected Behavior with Basis, Actual Behavior, Impact, Reproduction or Observation, Fix Scope, and Verification Requirements. Keep the body free of unverified root-cause claims. Use native relationships and Project fields; do not invent labels or optional fields absent from the adopted workflow.
+Follow the canonical [Bug format](../workflow/references/issue-types/bug.md). Preserve known Expected Behavior and Basis, Actual Behavior, Impact, Reproduction or Observation, and follow-up needs. Mark unavailable details explicitly and keep the body free of unverified root-cause claims. Use native relationships and Project fields; do not invent labels or optional fields absent from the adopted workflow.
 
 After creation, verify the issue URL, Type, Project membership, initial Status, and parent relationship when applicable. Return the verified links, evidence summary, and any test artifacts left behind.

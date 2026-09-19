@@ -19,10 +19,10 @@ Require repository adoption and load [workflow](../workflow/SKILL.md). Read the 
 
 Read the selected type's core sections and template before drafting. Use the shared [issue-tracker policy](../workflow/references/issue-tracker.md) and consult type guidance only when needed:
 
-- [Epic](../workflow/references/issue-types/epic.vi.md): a capability or large outcome requiring multiple Stories.
-- [Story](../workflow/references/issue-types/story.vi.md): one observable stakeholder outcome.
-- [Task](../workflow/references/issue-types/task.vi.md): a concrete deliverable with a valid completion boundary.
-- [Bug](../workflow/references/issue-types/bug.vi.md): actual behavior deviating from an established expected behavior and basis.
+- [Epic](../workflow/references/issue-types/epic.md): a capability or large outcome requiring multiple Stories.
+- [Story](../workflow/references/issue-types/story.md): one observable stakeholder outcome.
+- [Task](../workflow/references/issue-types/task.md): a concrete deliverable with a valid completion boundary.
+- [Bug](../workflow/references/issue-types/bug.md): actual behavior deviating from an established expected behavior and basis.
 
 For work spanning producer and consumer repositories, also read [API handoff](../workflow/references/api-handoff.md). These documents own the body formats; do not maintain duplicate templates here. Preserve the source language unless the user requests another language.
 

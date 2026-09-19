@@ -48,6 +48,8 @@ For an accepted change within the same deliverable, update the current contract 
 
 ## Evidence and adoption
 
+The consuming repository decides the language for agent responses, issue bodies, generated documents, and other workflow outputs. Read that setting from the repository's `AGENTS.md` and preserve the requested language; the plugin's English resource files are implementation references, not an output-language requirement.
+
 Evidence lives in the working session, PR, and configured tracker; no parallel snapshot or fingerprint is required. Re-read live contracts when resuming and before handoff. Code, contract, dependency, or base changes invalidate only affected evidence.
 
 At each new session, an adopting repository must load `$workflow` and read project-specific facts before workflow-dependent action. Adoption is independent of the installed plugin version. If the plugin is unavailable or required project-specific configuration is missing, report the blocked portion and continue valid independent work. Routine plugin upgrades do not require changes to the repository's adoption declaration. In a repository without adoption, individual skills may serve a user request, but they must not apply this lifecycle, mutate Project state, or edit `AGENTS.md` to opt in.
