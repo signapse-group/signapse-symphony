@@ -5,7 +5,7 @@ defmodule SymphonyElixir.GitHub.Adapter do
 
   @behaviour SymphonyElixir.Tracker
 
-  alias SymphonyElixir.GitHub.{AgentTool, Client}
+  alias SymphonyElixir.GitHub.{AgentTool, Client, Project}
   alias SymphonyElixir.Tracker.Issue
 
   @active_states ["open"]
@@ -13,11 +13,25 @@ defmodule SymphonyElixir.GitHub.Adapter do
 
   @spec validate_config(map()) :: :ok | {:error, term()}
   def validate_config(tracker_settings) do
+    if Project.configured?(tracker_settings) do
+      with :ok <- Client.validate_settings(tracker_settings), do: Project.validate_config(tracker_settings)
+    else
+      validate_repository_config(tracker_settings)
+    end
+  end
+
+  defp validate_repository_config(tracker_settings) do
     with :ok <-
            validate_states(
              tracker_settings.active_states,
              @active_states,
              :missing_github_active_states
+           ),
+         :ok <-
+           validate_states(
+             Map.get(tracker_settings, :dispatch_states, tracker_settings.active_states),
+             @active_states,
+             :missing_github_dispatch_states
            ),
          :ok <-
            validate_states(

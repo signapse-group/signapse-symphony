@@ -394,7 +394,12 @@ Fields:
   - A blank configured label matches no issue.
 - `active_states` (list of strings)
   - REQUIRED unless the selected adapter profile documents a default.
-  - Values are provider-native state names compared case-insensitively by the scheduler.
+  - Values are provider-native states in which an already claimed worker may continue.
+  - Compared case-insensitively by the scheduler.
+- `dispatch_states` (list of strings)
+  - Default: the effective `active_states` value.
+  - Values are provider-native states eligible for new worker dispatch.
+  - Compared case-insensitively by the scheduler.
 - `terminal_states` (list of strings)
   - REQUIRED unless the selected adapter profile documents a default.
   - Values are provider-native state names compared case-insensitively by the scheduler.
@@ -611,6 +616,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `tracker.kind`: string, REQUIRED, selects one supported adapter
 - `tracker.provider`: object, default `{}`, adapter-owned endpoint/scope/auth settings
 - `tracker.required_labels`: list of strings, default `[]`
+- `tracker.dispatch_states`: list of provider-native state names, default `active_states`
 - `tracker.active_states`: list of provider-native state names, adapter-defined default
 - `tracker.terminal_states`: list of provider-native state names, adapter-defined default
 - `polling.interval_ms`: integer, default `30000`
@@ -756,7 +762,7 @@ first.
 An issue is dispatch-eligible only if all are true:
 
 - It has `id`, `identifier`, `title`, and `state`.
-- Its state is in `active_states` and not in `terminal_states`.
+- Its state is in `dispatch_states` and not in `terminal_states`.
 - Its adapter-provided `dispatchable` value is `true`.
 - It contains every label in `tracker.required_labels`.
 - It is not already in `running`.
@@ -766,7 +772,8 @@ An issue is dispatch-eligible only if all are true:
 
 For refresh and continuation checks, `issue_routable(issue)` means only that adapter-provided
 `dispatchable` is true and all `tracker.required_labels` match. State, claims, and concurrency are
-checked separately by the surrounding algorithm.
+checked separately by the surrounding algorithm. Running and retrying workers use `active_states`,
+so an agent-owned state transition can leave `dispatch_states` without stopping the current work.
 
 Sorting order (stable intent):
 
@@ -1841,7 +1848,7 @@ on_tick(state):
     schedule_tick(state.poll_interval_ms)
     return state
 
-  issues = tracker.fetch_issues_by_states(active_states)
+  issues = tracker.fetch_issues_by_states(dispatch_states)
   if issues failed:
     log_tracker_error()
     notify_observers()

@@ -238,6 +238,41 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
              )
   end
 
+  test "project mode dispatches only configured Task items in Ready and refreshes active IDs" do
+    settings = project_tracker_settings()
+    assert :ok = GitHubAdapter.validate_config(settings)
+
+    request_fun = fn "POST", "/graphql", %{}, body, request_settings ->
+      send(self(), {:github_project_query, body, request_settings})
+      {:ok, %{status: 200, body: project_response()}}
+    end
+
+    assert {:ok, [ready]} =
+             GitHubClient.fetch_issues_by_states_for_test(["Ready"], settings, request_fun)
+
+    assert ready.id == "1"
+    assert ready.state == "Ready"
+    assert ready.native_ref["issue_type"] == "Task"
+    assert ready.native_ref["project_item_id"] == "PVTI_1"
+    assert ready.dispatchable
+
+    assert {:ok, [active]} =
+             GitHubClient.fetch_issues_by_ids_for_test(["2"], settings, request_fun)
+
+    assert active.id == "2"
+    assert active.state == "In progress"
+    assert active.dispatchable
+
+    assert_received {:github_project_query,
+                     %{
+                       "variables" => %{
+                         "owner" => "signapse-group",
+                         "number" => 1,
+                         "after" => nil
+                       }
+                     }, %{repo: "signapse-group/signapse"}}
+  end
+
   test "github_api preserves REST status and body while rejecting unsafe arguments" do
     test_pid = self()
     tracker_settings = tracker_settings()
@@ -409,6 +444,74 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
         ),
       active_states: ["open"],
       terminal_states: ["closed"]
+    }
+  end
+
+  defp project_tracker_settings do
+    %{
+      kind: "github",
+      provider: %{
+        "repo" => "signapse-group/signapse",
+        "token" => "test-token",
+        "project_owner" => "signapse-group",
+        "project_number" => 1,
+        "issue_types" => ["Task"]
+      },
+      dispatch_states: ["Ready"],
+      active_states: ["Ready", "In progress"],
+      terminal_states: ["Done"]
+    }
+  end
+
+  defp project_response do
+    %{
+      "data" => %{
+        "organization" => %{
+          "projectV2" => %{
+            "id" => "PVT_project",
+            "field" => %{
+              "id" => "PVTSSF_status",
+              "options" => [
+                %{"id" => "open", "name" => "Open"},
+                %{"id" => "ready", "name" => "Ready"},
+                %{"id" => "active", "name" => "In progress"},
+                %{"id" => "review", "name" => "In review"},
+                %{"id" => "blocked", "name" => "Blocked"},
+                %{"id" => "done", "name" => "Done"}
+              ]
+            },
+            "items" => %{
+              "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil},
+              "nodes" => [
+                project_item(1, "Task", "Ready"),
+                project_item(2, "Task", "In progress"),
+                project_item(3, "Bug", "Ready")
+              ]
+            }
+          }
+        }
+      }
+    }
+  end
+
+  defp project_item(number, type, status) do
+    %{
+      "id" => "PVTI_#{number}",
+      "isArchived" => false,
+      "fieldValueByName" => %{"name" => status, "optionId" => String.downcase(status)},
+      "content" => %{
+        "__typename" => "Issue",
+        "id" => "I_#{number}",
+        "number" => number,
+        "title" => "Project issue #{number}",
+        "body" => "Body #{number}",
+        "state" => "OPEN",
+        "url" => "https://github.test/signapse-group/signapse/issues/#{number}",
+        "createdAt" => "2026-01-01T00:00:00Z",
+        "updatedAt" => "2026-01-02T00:00:00Z",
+        "repository" => %{"nameWithOwner" => "signapse-group/signapse"},
+        "issueType" => %{"name" => type}
+      }
     }
   end
 

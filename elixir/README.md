@@ -149,6 +149,9 @@ Notes:
 - `tracker.required_labels` is optional. When set, an issue must have every
   configured label to dispatch or continue running. Label matching ignores
   case and surrounding whitespace. A blank configured label matches no issue.
+- `tracker.dispatch_states` selects states eligible for new work. It defaults to
+  `tracker.active_states` for existing workflows. `tracker.active_states` controls whether a
+  claimed worker continues after tracker refreshes and agent turns.
 - Safer Codex defaults are used when policy fields are omitted:
   - `codex.approval_policy` defaults to `{"reject":{"sandbox_approval":true,"rules":true,"mcp_elicitations":true}}`
   - `codex.thread_sandbox` defaults to `workspace-write`
@@ -251,10 +254,16 @@ codex:
 - Reads and identity: polling is scoped to the configured repository; `issue.id` is the
   repository issue number, `issue.identifier` is `GH-<number>`, hidden or deleted `404` issues are
   omitted on refresh, and pull requests returned by the Issues API are not dispatchable.
+- GitHub Projects v2 mode: set `project_owner`, positive `project_number`, and non-empty
+  `issue_types` under `tracker.provider`. Symphony reads organization Project items through
+  GraphQL, uses native Project Status as the issue state, filters to the configured repository and
+  Issue Types, and retains GitHub open/closed state as a dispatch guard. Use `dispatch_states` for
+  new work and `active_states` for claimed work.
 - Tool and auth: `github_api` accepts a relative REST `path` plus optional `params` and JSON
   `body`; Symphony executes it host-side with the session-bound token, removes configured tracker
   credentials and provider authentication aliases from the Codex child, and leaves raw tool access
-  limited by that token's GitHub permissions.
+  limited by that token's GitHub permissions. The same tool accepts `POST /graphql` with a GraphQL
+  `query` and optional `variables`, which allows agent-owned GitHub Projects v2 transitions.
 
 ### Jira Cloud adapter
 

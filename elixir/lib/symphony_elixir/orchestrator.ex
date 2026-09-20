@@ -260,7 +260,7 @@ defmodule SymphonyElixir.Orchestrator do
       |> reconcile_blocked_issues()
 
     with :ok <- Config.validate!(),
-         {:ok, issues} <- Tracker.fetch_issues_by_states(Config.settings!().tracker.active_states),
+         {:ok, issues} <- Tracker.fetch_issues_by_states(Config.settings!().tracker.dispatch_states),
          true <- available_slots(state) > 0 do
       choose_issues(issues, state)
     else
@@ -384,7 +384,7 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec should_dispatch_issue_for_test(Issue.t(), term()) :: boolean()
   def should_dispatch_issue_for_test(%Issue{} = issue, %State{} = state) do
-    should_dispatch_issue?(issue, state, active_state_set(), terminal_state_set())
+    should_dispatch_issue?(issue, state, dispatch_state_set(), terminal_state_set())
   end
 
   @doc false
@@ -392,7 +392,7 @@ defmodule SymphonyElixir.Orchestrator do
           {:ok, Issue.t()} | {:skip, Issue.t() | :missing} | {:error, term()}
   def revalidate_issue_for_dispatch_for_test(%Issue{} = issue, issue_fetcher)
       when is_function(issue_fetcher, 1) do
-    revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set())
+    revalidate_issue_for_dispatch(issue, issue_fetcher, dispatch_state_set(), terminal_state_set())
   end
 
   @doc false
@@ -779,13 +779,13 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp choose_issues(issues, state) do
-    active_states = active_state_set()
+    dispatch_states = dispatch_state_set()
     terminal_states = terminal_state_set()
 
     issues
     |> sort_issues_for_dispatch()
     |> Enum.reduce(state, fn issue, state_acc ->
-      if should_dispatch_issue?(issue, state_acc, active_states, terminal_states) do
+      if should_dispatch_issue?(issue, state_acc, dispatch_states, terminal_states) do
         dispatch_issue(state_acc, issue)
       else
         state_acc
@@ -904,8 +904,15 @@ defmodule SymphonyElixir.Orchestrator do
     |> MapSet.new()
   end
 
+  defp dispatch_state_set do
+    Config.settings!().tracker.dispatch_states
+    |> Enum.map(&normalize_issue_state/1)
+    |> Enum.filter(&(&1 != ""))
+    |> MapSet.new()
+  end
+
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
-    case refresh_issue_for_dispatch(issue) do
+    case refresh_issue_for_dispatch(issue, dispatch_state_set()) do
       {:ok, %Issue{} = refreshed_issue} ->
         do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host)
 
@@ -917,8 +924,13 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp refresh_issue_for_dispatch(issue) do
-    case revalidate_issue_for_dispatch(issue, &Tracker.fetch_issues_by_ids/1, terminal_state_set()) do
+  defp refresh_issue_for_dispatch(issue, allowed_states) do
+    case revalidate_issue_for_dispatch(
+           issue,
+           &Tracker.fetch_issues_by_ids/1,
+           allowed_states,
+           terminal_state_set()
+         ) do
       {:ok, %Issue{} = refreshed_issue} ->
         {:ok, refreshed_issue}
 
@@ -1003,11 +1015,11 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states)
+  defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, allowed_states, terminal_states)
        when is_binary(issue_id) and is_function(issue_fetcher, 1) do
     case issue_fetcher.([issue_id]) do
       {:ok, [%Issue{} = refreshed_issue | _]} ->
-        if retry_candidate_issue?(refreshed_issue, terminal_states) do
+        if candidate_issue?(refreshed_issue, allowed_states, terminal_states) do
           {:ok, refreshed_issue}
         else
           {:skip, refreshed_issue}
@@ -1021,7 +1033,8 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states), do: {:ok, issue}
+  defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _allowed_states, _terminal_states),
+    do: {:ok, issue}
 
   defp complete_issue(%State{} = state, issue_id) do
     %{
@@ -1182,7 +1195,7 @@ defmodule SymphonyElixir.Orchestrator do
     if retry_candidate_issue?(issue, terminal_state_set()) and
          dispatch_slots_available?(issue, state) and
          worker_slots_available?(state, metadata[:worker_host]) do
-      case refresh_issue_for_dispatch(issue) do
+      case refresh_issue_for_dispatch(issue, active_state_set()) do
         {:ok, %Issue{} = refreshed_issue} ->
           {:noreply, do_dispatch_issue(state, refreshed_issue, attempt, metadata[:worker_host])}
 

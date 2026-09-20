@@ -5,6 +5,7 @@ defmodule SymphonyElixir.GitHub.Client do
 
   require Logger
   alias SymphonyElixir.Config
+  alias SymphonyElixir.GitHub.Project
   alias SymphonyElixir.Tracker.Issue
 
   @default_api_url "https://api.github.com"
@@ -75,6 +76,14 @@ defmodule SymphonyElixir.GitHub.Client do
   end
 
   defp fetch_issues_by_states(state_names, tracker_settings, request_fun) do
+    if Project.configured?(tracker_settings) do
+      Project.fetch(tracker_settings, request_fun, {:states, state_names})
+    else
+      fetch_repository_states(state_names, tracker_settings, request_fun)
+    end
+  end
+
+  defp fetch_repository_states(state_names, tracker_settings, request_fun) do
     normalized_states = state_names |> Enum.map(&normalize_state/1) |> MapSet.new()
 
     case github_state_query(normalized_states) do
@@ -89,6 +98,14 @@ defmodule SymphonyElixir.GitHub.Client do
   end
 
   defp fetch_issues_by_ids(issue_ids, tracker_settings, request_fun) do
+    if Project.configured?(tracker_settings) do
+      Project.fetch(tracker_settings, request_fun, {:ids, issue_ids})
+    else
+      fetch_repository_ids(issue_ids, tracker_settings, request_fun)
+    end
+  end
+
+  defp fetch_repository_ids(issue_ids, tracker_settings, request_fun) do
     ids = Enum.uniq(issue_ids)
 
     case ids do

@@ -15,6 +15,7 @@ defmodule SymphonyElixir.CoreTest do
     config = Config.settings!()
     assert config.polling.interval_ms == 30_000
     assert config.tracker.active_states == ["Todo", "In Progress"]
+    assert config.tracker.dispatch_states == ["Todo", "In Progress"]
     assert config.tracker.terminal_states == ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     assert config.tracker.assignee == nil
     assert config.agent.max_turns == 20
@@ -760,8 +761,14 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
-  test "reconcile updates running issue state for active issues" do
+  test "Ready to In progress keeps the running agent active" do
     issue_id = "issue-3"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_dispatch_states: ["Ready"],
+      tracker_active_states: ["Ready", "In progress"],
+      tracker_terminal_states: ["Done"]
+    )
 
     state = %Orchestrator.State{
       running: %{
@@ -772,7 +779,7 @@ defmodule SymphonyElixir.CoreTest do
           issue: %Issue{
             id: issue_id,
             identifier: "MT-557",
-            state: "Todo"
+            state: "Ready"
           },
           started_at: DateTime.utc_now()
         }
@@ -785,7 +792,7 @@ defmodule SymphonyElixir.CoreTest do
     issue = %Issue{
       id: issue_id,
       identifier: "MT-557",
-      state: "In Progress",
+      state: "In progress",
       title: "Active state refresh",
       description: "State should be refreshed",
       labels: [],
@@ -797,7 +804,7 @@ defmodule SymphonyElixir.CoreTest do
 
     assert Map.has_key?(updated_state.running, issue_id)
     assert MapSet.member?(updated_state.claimed, issue_id)
-    assert updated_entry.issue.state == "In Progress"
+    assert updated_entry.issue.state == "In progress"
   end
 
   test "reconcile stops running issue when it is reassigned away from this worker" do

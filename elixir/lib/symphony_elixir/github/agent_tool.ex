@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.GitHub.AgentTool do
   @moduledoc """
-  Provider-native GitHub REST tool exposed to Codex app-server turns.
+  Provider-native GitHub API tool exposed to Codex app-server turns.
   """
 
   alias SymphonyElixir.GitHub.Client
@@ -8,7 +8,8 @@ defmodule SymphonyElixir.GitHub.AgentTool do
   @github_api_tool "github_api"
   @allowed_methods ["GET", "POST", "PATCH", "PUT", "DELETE"]
   @github_api_description """
-  Execute a GitHub REST API request using Symphony's configured auth.
+  Execute a GitHub REST or GraphQL API request using Symphony's configured auth. Use POST
+  `/graphql` with a body containing `query` and optional `variables` for GitHub Projects v2.
   """
   @github_api_input_schema %{
     "type" => "object",
@@ -22,7 +23,7 @@ defmodule SymphonyElixir.GitHub.AgentTool do
       },
       "path" => %{
         "type" => "string",
-        "description" => "GitHub REST path such as /repos/owner/repo/issues/1/comments."
+        "description" => "GitHub API path such as /repos/owner/repo/issues/1/comments or /graphql."
       },
       "params" => %{
         "type" => ["object", "null"],

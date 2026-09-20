@@ -807,6 +807,33 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
+  test "dispatch states select new work independently from active states" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_dispatch_states: ["Ready"],
+      tracker_active_states: ["Ready", "In progress"],
+      tracker_terminal_states: ["Done"]
+    )
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    ready = %Issue{
+      id: "ready-dispatch",
+      identifier: "GH-101",
+      title: "Ready task",
+      state: "Ready",
+      dispatchable: true
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(ready, state)
+    refute Orchestrator.should_dispatch_issue_for_test(%{ready | state: "In progress"}, state)
+  end
+
   test "dispatch revalidation skips an issue when provider routing changes" do
     stale_issue = %Issue{
       id: "blocked-2",

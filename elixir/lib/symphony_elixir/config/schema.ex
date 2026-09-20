@@ -56,6 +56,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:provider, :map, default: %{})
       field(:secret_environment_names, {:array, :string}, default: [])
       field(:required_labels, {:array, :string}, default: [])
+      field(:dispatch_states, {:array, :string})
       field(:active_states, {:array, :string})
       field(:terminal_states, {:array, :string})
     end
@@ -73,6 +74,7 @@ defmodule SymphonyElixir.Config.Schema do
           :assignee,
           :provider,
           :required_labels,
+          :dispatch_states,
           :active_states,
           :terminal_states
         ],
@@ -437,6 +439,8 @@ defmodule SymphonyElixir.Config.Schema do
           {settings.tracker.active_states, settings.tracker.terminal_states}
       end
 
+    dispatch_states = default_dispatch_states(settings.tracker.dispatch_states, active_states)
+
     tracker = %{
       settings.tracker
       | endpoint: Map.get(provider, "endpoint", settings.tracker.endpoint),
@@ -445,6 +449,7 @@ defmodule SymphonyElixir.Config.Schema do
         assignee: assignee,
         provider: provider,
         secret_environment_names: Enum.uniq(secret_environment_names),
+        dispatch_states: dispatch_states,
         active_states: active_states,
         terminal_states: terminal_states
     }
@@ -471,6 +476,9 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp normalize_keys(value) when is_list(value), do: Enum.map(value, &normalize_keys/1)
   defp normalize_keys(value), do: value
+
+  defp default_dispatch_states(nil, active_states), do: active_states
+  defp default_dispatch_states(dispatch_states, _active_states), do: dispatch_states
 
   defp normalize_optional_map(nil), do: nil
   defp normalize_optional_map(value) when is_map(value), do: normalize_keys(value)
