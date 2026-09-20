@@ -52,6 +52,12 @@ At the start of each new session, read `$workflow` before workflow-dependent act
 
 Keep coding standards, technology-specific test seams, application commands, repository identity, and delivery facts in that repository's `AGENTS.md`. Remove active local copies of skills replaced by this plugin so duplicate names do not coexist.
 
+## Define and publish issues
+
+Invoke `$to-spec` to summarize the session and read the proposed issue structure before publication. Its chat output includes accepted decisions, scope and gaps, an issue map with dependencies and readiness, and full draft issue bodies. A spec file is written only when requested or required by the consuming repository.
+
+Invoke `$to-ticket` when you want that defined plan published or reconciled on GitHub. It checks live issues, resolves native relationships, publishes, and verifies the result. It does not take over session synthesis or issue decomposition. An equivalent fully defined plan, including a standalone issue, can be published directly. Both skills remain explicit-only.
+
 ## Local validation
 
 From the plugin source directory, run:

@@ -5,7 +5,7 @@ description: Publish or reconcile agreed work as GitHub issues when the user req
 
 # To Ticket
 
-Turn agreed input into durable work contracts. This skill owns issue publication and decomposition, not implementation or the choice of implementation tools.
+Publish and reconcile already-defined work contracts. Session synthesis, issue decomposition, and draft bodies belong to `to-spec`; this skill owns GitHub publication and verification.
 
 This is an issue-first flow. Record requirements, accepted decisions, scope, and verification boundaries in the owning issue. Do not create or update ADRs, context files, or other architecture documents while publishing or normalizing issues unless the user explicitly requests that documentation or the repository's policy names it as a required deliverable. A technical choice that is routine, reversible, or needed only to implement a Task remains in the Task or with the implementer.
 
@@ -13,7 +13,7 @@ An explicit request to publish or restructure issues authorizes the correspondin
 
 ## Read the Sources
 
-Read the supplied brief and any source issue's full body, comments, parent, children, and dependencies. Use repository-qualified URLs; a bare number needs an unambiguous repository from context. Inspect relevant code and domain documentation only when needed to establish facts.
+Read the supplied issue plan and draft bodies, and any source issue's full body, comments, parent, children, and dependencies. Use repository-qualified URLs; a bare number needs an unambiguous repository from context. Inspect relevant code and domain documentation only when needed to establish facts.
 
 Require repository adoption and load [workflow](../workflow/SKILL.md). Read the shared [issue-tracker policy](../workflow/references/issue-tracker.md) plus the repository's `AGENTS.md` for repository targets, Project, permissions, ownership, and delivery rules. Do not inherit legacy labels, automatic work selection, or closure conventions.
 
@@ -26,6 +26,12 @@ Read the selected type's core sections and template before drafting. Use the sha
 
 For work spanning producer and consumer repositories, also read [API handoff](../workflow/references/api-handoff.md). These documents own the body formats; do not maintain duplicate templates here. Preserve the source language unless the user requests another language.
 
+## Input Boundary
+
+Accept a readable issue plan from `to-spec` or equivalent explicit input that already defines the issue boundaries, types, bodies, repositories, and relationships. A fully defined single issue is sufficient; do not force a separate spec step when the input already supplies the contract.
+
+If input is only a conversation, broad brief, or restructuring goal that still requires synthesis or decomposition, report the specific missing definition and direct the user to `to-spec`. Do not silently perform that work or invoke the explicit-only skill. Continue independently publishable parts only when already authorized. Publication authorization does not turn new proposals or unresolved decisions into accepted requirements.
+
 ## Preflight and Reconciliation
 
 Before any write:
@@ -33,38 +39,11 @@ Before any write:
 1. Resolve the configured repositories and Project by owner/number. Verify access to the repositories involved, native issue types, required Project fields/options, and usable CLI capabilities. Never select a Project by an approximate title or silently fall back to another repository.
 2. Search existing issues in repositories relevant to the requested scope, including closed candidates. Expand across repositories when parent, dependency or contract links require it. Read candidate bodies and relationships; titles alone do not establish identity or duplication.
 3. Reuse the source issue as root when its repository and scope are appropriate. If it cannot remain the root in the correct repository, present the concrete transfer/restructuring question before proceeding with that branch; do not silently transfer it or create a duplicate root.
-4. Build an internal publication plan mapping every requirement and accepted decision to a root/child, repository, title, body, parent, dependency, and intended readiness. Check coverage and dependency cycles before publishing.
+4. Map the supplied draft keys to existing or new issues, repositories, native parents/dependencies, and intended readiness. Check coverage, overlaps, and dependency cycles against the supplied plan. Resolve live IDs and URLs; do not redesign deliverable boundaries. Report material conflicts or missing contracts for definition before writing the affected branch.
 
-Apply the shared [business analysis guidance](../workflow/references/business-analysis.md) in this check: requirement quality, alignment with accepted needs and impact on related contracts when reconciling. Preserve criterion-level traceability using the selected templates.
-
-Before publication, run a contract-quality pass:
-
-- Map every Epic High-Level Requirement and Success Criterion to one or more Stories; report uncovered or multiply-owned requirements.
-- Give each Story one observable stakeholder outcome and a vertical verification boundary. Do not split Stories by backend/frontend, database, API, or other technical layer.
-- Run an implementation-leakage pass on every Story. Do not make a team, layer, service, endpoint, framework, or database the subject of a Story requirement. Rewrite those statements as an externally verifiable outcome, business rule, or quality constraint. Keep a server-side or backend reference only when it expresses a necessary security, privacy, data-integrity, localization, reliability, or compatibility invariant; omit the implementation mechanism and let Tasks choose the seam.
-- Ensure each Story separates Acceptance Criteria, Business Rules, and Quality & Constraints. Acceptance Criteria must cover the successful outcome and meaningful exceptions; add authorization, privacy, lifecycle, concurrency, idempotency, or data-integrity cases when applicable.
-- Keep accepted domain rules and constraints in the parent or Story that owns them. Do not invent values, states, metrics, endpoints, or policies to fill a template.
-- Create child Tasks only when the Story has enough contract detail for an independently verifiable deliverable. A broad or unresolved Story remains Open with the missing contract recorded.
-- Check scope boundaries and dependencies for overlap, omission, and cycles before publishing.
+Verify the supplied bodies against the selected type templates and accepted scope. Preserve requirement coverage, accepted decisions, rationale, and verification requirements. Mechanical formatting and link resolution belong here; new requirements, changed boundaries, or substantive contract rewrites return to definition. Keep native relationships outside issue bodies and preserve concurrent human content.
 
 Use current native `gh` commands where supported. Always pass the target repository explicitly. Use Project owner/number and resolve IDs at runtime when needed; do not hardcode opaque IDs. Missing access or required native functionality must be reported, not replaced with labels or duplicate relationship lists in the body.
-
-## Classify and Decompose
-
-- Reuse/retype the source root according to scope: Epic, Story, Task, or Bug. Without a source issue, create the appropriate root in the configured repository.
-- Use Epic -> Story -> Task/Bug when the scope warrants it. Standalone technical work and bugs do not need artificial parents. Do not create a Sub-task type.
-- Create enough Stories to represent the known Epic scope. Create execution children only for branches with sufficient requirements, accepted technical decisions, verification, and valid deliverables. Report unready branches without inventing their implementation.
-- Prefer the Epic/Story structure as a set of user-visible vertical capabilities. Carry shared requirements to the parent and keep child-specific behavior in the owning Story; do not repeat the entire Epic in every child.
-- Separate BE and FE Tasks when each has its own deliverable. Include necessary validation and automated checks in the behavior Task; do not split solely by file, layer, or test type.
-- Do not infer a BE or FE Task merely because a Story mentions the server, client, API, or UI. Create a surface-specific Task only when that surface has an independently deliverable and verifiable contribution to the Story outcome.
-- Prefix backend Task/Bug titles with `BE:` and frontend Task/Bug titles with `FE:`. Do not invent a surface for work that belongs to neither. Epic/Story stay in the configured planning repository, execution issues in their code repositories.
-- Default to one FE UI-plus-integration Task blocked by the BE API Task when a new API is required. Split UI from integration only if UI can land as a valid deliverable on its own; integration then depends on both UI and BE. Mocking does not satisfy the live integration dependency.
-- Keep shared decisions at the appropriate parent or linked source. Preserve Task-specific decisions in the Task and map its Requirement Coverage to relevant Story criteria. Do not copy the entire parent into each child.
-- Render the selected type's body faithfully, omit unused optional sections and placeholders, and preserve accepted scope, rationale, and verification requirements. Do not repeat native parent, sub-issue, or dependency relationships in issue bodies. In Stories, keep necessary rationale or external references beside the contract term they support instead of adding generic context or reference sections; retain the reference sections defined for other issue types.
-- Include `Open Decisions` only when material decisions remain unresolved. When reconciling a resolved decision, incorporate its durable result into the owning contract section and remove the resolved item; remove the section when it becomes empty.
-- Keep workflow tools, branches, and PR lifecycle instructions out of issue bodies.
-
-Human owns work contracts. Do not extend an active or completed issue to absorb a different outcome. Changes to an active contract require the user's accepted decision; changed boundaries follow the replacement policy. New requirements for completed work need new issues. Preserve existing human content and comments when reconciling.
 
 ## API Contract Comment
 

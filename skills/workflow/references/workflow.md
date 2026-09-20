@@ -4,7 +4,7 @@ This policy applies only in repositories that explicitly adopt the `agent-workfl
 
 ## Authority and flow
 
-Need → explore or grill when material uncertainty remains → brief when synthesis helps → tickets when publication is requested → assigned Task/Bug → implementation and verification → independent review → findings resolved → PR and required CI ready → human review and acceptance.
+Need → explore or grill when material uncertainty remains → readable spec and issue plan when definition helps → tickets when publication is requested → assigned Task/Bug → implementation and verification → independent review → findings resolved → PR and required CI ready → human review and acceptance.
 
 Do not force every request through every step. A clear local contract may be implemented directly. Requests to explore, review, or plan do not authorize implementation or publication. Explicit publication authorizes the scoped issue writes; explicit assignment of a Task/Bug authorizes status management, a task branch, push, and PR creation/update. Human owners retain the contract, material decisions, merge, deployment, and acceptance unless explicitly delegated.
 
@@ -37,6 +37,8 @@ Feedback requiring changes returns work to In progress. A hard task or failing i
 Each repository declares its delivery condition and `Refs`/`Closes` rule in `AGENTS.md`. Merge may be sufficient for one repository while another requires deployment or handoff confirmation. Do not infer one repository's condition from another. Parent Epic/Story completion remains a human outcome decision.
 
 ## Planning and contract changes
+
+`to-spec` owns session synthesis, issue decomposition, and readable draft contracts. `to-ticket` consumes a defined plan, reconciles live GitHub state, and publishes/verifies authorized issues. Equivalent already-defined input may go directly to publication; incomplete input returns to definition instead of being silently decomposed during publication. Both skills remain explicit-only.
 
 Use Epic → Story → Task/Bug only when that hierarchy reflects real outcomes and deliverables. Do not create artificial parents. A Task has one independently deliverable result and verification boundary; do not split by technical layer or file count.
 

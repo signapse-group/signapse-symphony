@@ -1,6 +1,6 @@
 interface:
   display_name: "To Spec"
-  short_description: "Synthesize a conversation into a structured spec"
-  default_prompt: "Use $to-spec to synthesize our current conversation into a structured spec in this chat."
+  short_description: "Summarize the session and draft an issue plan"
+  default_prompt: "Use $to-spec to summarize our session and produce a readable spec with an issue map and full draft issue bodies in this chat."
 policy:
   allow_implicit_invocation: false
