@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3 - Unreleased
+
+- Strengthen Story boundary checks so planning separates independently valuable stakeholder outcomes without splitting mechanically by CRUD action or technical surface.
+- Require acceptance-significant terms and shared quality rules to have clear ownership and verifiable definitions before publication.
+
 ## 0.3.1 - Unreleased
 
 - Add Story implementation-leakage guidance so backend/frontend references remain only when they express verifiable security, privacy, data-integrity, localization, reliability, or compatibility constraints.
