@@ -20,11 +20,7 @@ The source repository is `signapse-group/signapse-symphony`. The reusable skills
 From the root of the consuming repository, install the complete collection into the project scope:
 
 ```powershell
-npx skills@latest add https://github.com/signapse-group/signapse-symphony/tree/main/workflow/skills `
-  --agent codex `
-  --skill "*" `
-  --copy `
-  --yes
+npx skills@latest add https://github.com/signapse-group/signapse-symphony/tree/main/workflow/skills
 ```
 
 The URL points directly to `workflow/skills`, so the wildcard selects its eight valid `SKILL.md` files, including `setup-workflow`. `--copy` makes the project installation independent of symlink support. Do not run this command from the Symphony source repository when setting up another project; run it from the target repository so the skills are installed into that project's scope.
