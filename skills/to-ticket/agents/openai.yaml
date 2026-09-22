@@ -1,6 +1,0 @@
-interface:
-  display_name: "To Ticket"
-  short_description: "Publish a defined issue plan to GitHub"
-  default_prompt: "Use $to-ticket to publish this defined issue plan and its draft bodies to GitHub."
-policy:
-  allow_implicit_invocation: false

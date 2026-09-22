@@ -7,10 +7,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_SKILLS = {
-    "workflow", "explore", "grilling", "grill-with-docs", "to-spec",
-    "to-ticket", "implement", "tdd", "code-review", "domain-modeling",
-    "diagnosing-bugs", "verify-and-log-bug", "resolving-merge-conflicts",
-    "research", "prototype", "codebase-design",
+    "workflow", "setup-workflow", "implement", "tdd", "code-review", "diagnosing-bugs",
+    "resolving-merge-conflicts", "codebase-design",
 }
 FORBIDDEN = (
     "signapse-group",
@@ -31,14 +29,13 @@ def fail(message: str) -> None:
 
 
 def main() -> None:
-    manifest = ROOT / ".codex-plugin" / "plugin.json"
-    if not manifest.is_file():
-        fail("missing .codex-plugin/plugin.json")
-
     actual = {path.parent.name for path in (ROOT / "skills").glob("*/SKILL.md")}
     missing = sorted(REQUIRED_SKILLS - actual)
     if missing:
         fail(f"missing skills: {', '.join(missing)}")
+    unexpected = sorted(actual - REQUIRED_SKILLS)
+    if unexpected:
+        fail(f"unexpected skills: {', '.join(unexpected)}")
 
     for path in ROOT.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in {".md", ".yaml", ".json", ".py", ".sh"}:

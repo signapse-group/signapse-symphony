@@ -1,80 +1,72 @@
-# Agent Workflow
+# Agent Workflow Skills
 
-`agent-workflow` packages a shared planning-to-delivery workflow for Codex desktop and CLI. It includes workflow policy, issue formats, decision and API handoff guidance, and reusable skills for exploration, specification, implementation, testing, review, diagnosis, and domain work.
+This repository contains reusable Codex skills for implementing an assigned contract through verification, independent review, and delivery handoff. Product discovery, requirement definition, issue decomposition, and issue publication belong to the planning repository or another upstream process.
 
-## Install from GitHub
+## Included skills
 
-With Codex CLI installed and Git authenticated for this private repository, run:
+- `workflow`: shared execution and delivery policy for adopting repositories.
+- `setup-workflow`: inspect a repository and configure its project-specific workflow adoption context.
+- `implement`: deliver assigned work through checks, independent review, PR, and required CI.
+- `tdd`: verify changed behavior at stable public seams.
+- `code-review`: review requirement adherence and technical correctness.
+- `diagnosing-bugs`: build a tight reproduction loop and identify root cause.
+- `resolving-merge-conflicts`: resolve an active merge or rebase while preserving intent.
+- `codebase-design`: design deep modules, interfaces, and test seams.
 
-```powershell
-codex plugin marketplace add signapse-group/signapse-workflow
-codex plugin add agent-workflow@signapse-workflow
-```
+## Install
 
-Start a new conversation in the consuming repository, then follow the adoption section below. The marketplace manifest at `.agents/plugins/marketplace.json` points to the plugin at this repository's root; no Python, scaffolding, or manual file copy is needed for this installation.
-
-## Local development installation
-
-For a personal installation, first let `plugin-creator` create the supported marketplace entry and destination:
-
-```powershell
-python <plugin-creator>/scripts/create_basic_plugin.py agent-workflow --with-skills --with-marketplace
-```
-
-Copy the complete released package over the generated `~/plugins/agent-workflow` directory, including `.codex-plugin/plugin.json`, `skills/`, and top-level documentation. Validate that directory, then install it using the marketplace name returned by `read_marketplace_name.py`:
+From the target repository, install the complete collection for Codex with the Skills CLI:
 
 ```powershell
-python <plugin-creator>/scripts/read_marketplace_name.py
-codex plugin add agent-workflow@<marketplace-name>
+npx skills@latest add signapse-group/signapse-workflow `
+  --agent codex `
+  --skill "*" `
+  --copy `
+  --yes
 ```
 
-The default personal marketplace is discovered automatically; do not add it with `codex plugin marketplace add`. For a team marketplace, scaffold with explicit `--path` and `--marketplace-path`, copy the release into the generated `plugins/agent-workflow` directory, add that non-default marketplace root when needed, and install from its validated marketplace name. Start a new conversation after installation or update so Codex loads the packaged skills.
+The command installs all eight skills, including `setup-workflow`, into the project scope. `--copy` keeps the installed files independent of symlink support. For a personal global installation, add `--global`; for a smaller install, repeat `--skill <name>` for the skills you need.
 
-## Adoption
+After installation, start a new conversation so the agent reloads the skill catalog. Then run `$setup-workflow` from the target repository.
 
-Installing the plugin does not adopt it for every repository. A consuming repository must add a section like this to its root `AGENTS.md`:
+To inspect the collection before installing it:
+
+```powershell
+npx skills@latest add signapse-group/signapse-workflow --list
+```
+
+To update project-scoped skills later, use `npx skills update -p`; review the resulting diff when the installed files are committed to the repository.
+
+## Adopt the execution workflow
+
+Installing the skills does not activate repository lifecycle behavior. A consuming repository that wants the shared execution workflow should add project-specific configuration to its root `AGENTS.md`:
+
+Run `$setup-workflow` to inspect the repository and draft this block interactively. It is explicit-only because it can update `AGENTS.md`; the skill shows the full draft and waits for acceptance before writing.
 
 ```markdown
 ## Agent Workflow
 
-This repository adopts the `agent-workflow` plugin.
-At the start of each new session, read `$workflow` before workflow-dependent action. If the plugin is unavailable or required repository configuration is missing, report the blocked portion and continue independent valid work.
+This repository adopts the Agent Workflow execution skills.
+At the start of each new session, read `$workflow` before workflow-dependent action.
 
-- Repository role and planning/execution repositories: ...
-- GitHub Project owner/number: ...
+- Repository role and contract source: ...
 - Focused and completion checks: ...
 - Required CI: ...
-- Delivery condition and Refs/Closes rule: ...
+- Delivery condition and issue-linking rule: ...
 - Human acceptance owner: ...
-- Domain context and ADR locations: ...
-- Output language for agent responses and generated artifacts: ...
+- Relevant architecture and contract locations: ...
+- Output language: ...
 ```
 
-Keep coding standards, technology-specific test seams, application commands, repository identity, and delivery facts in that repository's `AGENTS.md`. Remove active local copies of skills replaced by this plugin so duplicate names do not coexist.
+Planning repositories remain responsible for producing and publishing Task/Bug contracts. An explicitly accepted local contract is also valid input when the user assigns it directly.
 
-## Define and publish issues
+## Validate
 
-Invoke `$to-spec` to summarize the session and read the proposed issue structure before publication. Its chat output includes accepted decisions, scope and gaps, an issue map with dependencies and readiness, and full draft issue bodies. A spec file is written only when requested or required by the consuming repository.
-
-Invoke `$to-ticket` when you want that defined plan published or reconciled on GitHub. It checks live issues, resolves native relationships, publishes, and verifies the result. It does not take over session synthesis or issue decomposition. An equivalent fully defined plan, including a standalone issue, can be published directly. Both skills remain explicit-only.
-
-## Local validation
-
-From the plugin source directory, run:
+Validate every changed skill, then validate the collection:
 
 ```powershell
+python <skill-creator>/scripts/quick_validate.py skills/<skill-name>
 python tests/validate_package.py
-python <plugin-creator>/scripts/validate_plugin.py .
 ```
 
-Validate every changed skill with `skill-creator/scripts/quick_validate.py <skill-directory>`. Test installation and upgrades in a new conversation. One installed plugin may serve multiple repositories on the same host; validate release migrations against affected repositories before upgrading that shared installation.
-
-Static package validation is the P1 gate. Runtime acceptance for policy bootstrap, non-adopted repositories, GitHub fixtures, upgrade, migration, and rollback requires an installed marketplace build in fresh conversations; do not claim P2 complete from the static validators alone.
-
-## Upgrade and rollback
-
-Routine compatible upgrades do not change repository adoption declarations. For a release that requires new repository configuration, document the migration and update only affected repositories before using the dependent workflow. If one installation serves multiple repositories, verify each affected repository against the candidate. Roll back the installed release and any release-specific repository migration together, then start new conversations to confirm the active policy. Do not keep duplicate active copies of the same skills as a rollback mechanism.
-
-## Removal
-
-Remove the plugin through the Codex plugin manager, restore or select another workflow in the repository's `AGENTS.md`, and start a new conversation. Removing this plugin does not roll back application code or GitHub state.
+The collection validator checks the expected skill set, local links, encoding, line endings, and forbidden project-specific coupling.

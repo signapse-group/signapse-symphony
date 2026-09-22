@@ -1,0 +1,6 @@
+interface:
+  display_name: "Setup Workflow"
+  short_description: "Configure repository workflow adoption"
+  default_prompt: "Use $setup-workflow to inspect this repository and draft its Agent Workflow configuration."
+policy:
+  allow_implicit_invocation: false
