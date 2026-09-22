@@ -4,7 +4,7 @@ This repository contains reusable Codex skills for implementing an assigned cont
 
 ## Included skills
 
-- `workflow`: shared execution and delivery policy for adopting repositories.
+- `agent-execution-policy`: shared execution and delivery policy for adopting repositories.
 - `setup-workflow`: inspect a repository and configure its project-specific workflow adoption and Symphony entrypoint.
 - `implement`: deliver assigned work through checks, independent review, PR, and required CI.
 - `tdd`: verify changed behavior at stable public seams.
@@ -45,13 +45,13 @@ Update a project-scoped installation with `npx skills update -p`. Review the res
 
 Installing the skills does not activate repository lifecycle behavior. Run `$setup-workflow` to draft the project-specific adoption block in root `AGENTS.md` and, when Symphony is used, create or update its root `WORKFLOW.md`.
 
-The skill is explicit-only because it can update repository instruction and orchestration files. It shows the complete drafts and waits for acceptance before writing. The generated Symphony prompt loads `$workflow` and invokes `$implement`; shared execution policy stays in the installed skills rather than being copied into each repository.
+The skill is explicit-only because it can update repository instruction and orchestration files. It shows the complete drafts and waits for acceptance before writing. The generated Symphony prompt loads `$agent-execution-policy` and invokes `$implement`; shared execution policy stays in the installed skills rather than being copied into each repository.
 
 ```markdown
 ## Agent Workflow
 
 This repository adopts the Agent Workflow execution skills.
-At the start of each new session, read `$workflow` before workflow-dependent action.
+At the start of each new session, read `$agent-execution-policy` before workflow-dependent action.
 
 - Repository role and contract source: ...
 - Focused and completion checks: ...

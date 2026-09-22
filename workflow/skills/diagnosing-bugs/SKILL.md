@@ -5,7 +5,7 @@ description: Diagnosis loop for hard bugs and performance regressions. Use when 
 
 # Diagnosing Bugs
 
-A discipline for hard bugs. In an adopting repository, load [workflow](../workflow/SKILL.md) and apply phases proportionally to the actual uncertainty; a simple, established cause does not need an artificial multi-hypothesis exercise. A diagnosis-only request ends with findings. When a fix is assigned, return implementation and handoff ownership to [implement](../implement/SKILL.md).
+A discipline for hard bugs. In an adopting repository, load [agent-execution-policy](../agent-execution-policy/SKILL.md) and apply phases proportionally to the actual uncertainty; a simple, established cause does not need an artificial multi-hypothesis exercise. A diagnosis-only request ends with findings. When a fix is assigned, return implementation and handoff ownership to [implement](../implement/SKILL.md).
 
 When exploring the codebase, read `CONTEXT.md` (if it exists) to get a clear mental model of the relevant modules, and check ADRs in the area you're touching.
 

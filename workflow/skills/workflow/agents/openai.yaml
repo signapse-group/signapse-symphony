@@ -1,6 +1,0 @@
-interface:
-  display_name: "Agent Workflow"
-  short_description: "Load the adopted shared delivery workflow"
-  default_prompt: "Use $workflow to load this repository's adopted workflow before proceeding."
-policy:
-  allow_implicit_invocation: true

@@ -5,7 +5,7 @@ description: Execute assigned work from its issue or accepted contract through i
 
 # Implement
 
-Require repository adoption and load the shared policy through [workflow](../workflow/SKILL.md), then use the repository-root `AGENTS.md` for project facts. Read the [decision gate](../workflow/references/decision-gate.md) or [API handoff](../workflow/references/api-handoff.md) only when the work needs them. Reuse current context instead of rereading unchanged sources.
+Require repository adoption and load the shared policy through [agent-execution-policy](../agent-execution-policy/SKILL.md), then use the repository-root `AGENTS.md` for project facts. Read the [decision gate](../agent-execution-policy/references/decision-gate.md) or [API handoff](../agent-execution-policy/references/api-handoff.md) only when the work needs them. Reuse current context instead of rereading unchanged sources.
 
 Completion means the delivered PR revision satisfies required checks, independent review on both axes and required CI, with only the specified human acceptance remaining. Continue through fixes to that boundary. Authorization comes from the user's request and repository policy. A request only to diagnose or review does not authorize implementation. Do not select unassigned work merely because it is available.
 

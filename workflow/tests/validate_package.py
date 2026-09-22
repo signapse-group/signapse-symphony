@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_SKILLS = {
-    "workflow", "setup-workflow", "implement", "tdd", "code-review", "diagnosing-bugs",
+    "agent-execution-policy", "setup-workflow", "implement", "tdd", "code-review", "diagnosing-bugs",
     "resolving-merge-conflicts", "codebase-design",
 }
 FORBIDDEN = (

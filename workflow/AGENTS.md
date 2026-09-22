@@ -2,7 +2,7 @@
 
 This repository develops a reusable collection of Codex skills for implementation, verification, review, and delivery. Keep the skills free of product identity, credentials, opaque GitHub IDs, absolute author-machine paths, and application-specific build commands.
 
-Use `skills/workflow/references/workflow.md` as the shared operational policy. Keep project-specific adoption data in the consuming repository's `AGENTS.md` and Symphony runtime configuration in its `WORKFLOW.md`. Installation alone must not activate project lifecycle behavior.
+Use `skills/agent-execution-policy/references/execution-policy.md` as the shared operational policy. Keep project-specific adoption data in the consuming repository's `AGENTS.md` and Symphony runtime configuration in its `WORKFLOW.md`. Installation alone must not activate project lifecycle behavior.
 
 Planning, requirement definition, issue authoring, and issue publication belong to the planning repository or another upstream process. These skills consume an assigned issue or accepted local contract; they do not create or decompose product requirements.
 

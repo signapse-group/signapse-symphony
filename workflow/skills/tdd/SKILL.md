@@ -5,7 +5,7 @@ description: Verify changed behavior with regression and acceptance tests at sta
 
 # Behavior-Focused Testing
 
-Require repository adoption and follow [workflow](../workflow/SKILL.md) plus the repository-root `AGENTS.md`. Read contract references or architecture decisions only when they affect the behavior under test.
+Require repository adoption and follow [agent-execution-policy](../agent-execution-policy/SKILL.md) plus the repository-root `AGENTS.md`. Read contract references or architecture decisions only when they affect the behavior under test.
 
 ## Select the Seam
 

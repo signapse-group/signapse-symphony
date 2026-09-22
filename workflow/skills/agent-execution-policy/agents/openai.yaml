@@ -1,0 +1,6 @@
+interface:
+  display_name: "Agent Execution Policy"
+  short_description: "Load the adopted shared delivery workflow"
+  default_prompt: "Use $agent-execution-policy to load this repository's adopted delivery policy before proceeding."
+policy:
+  allow_implicit_invocation: true
