@@ -23,6 +23,33 @@ Treat the shared policy's `In progress`, `Blocked`, `In review`, and `Done` labe
 roles, not tracker configuration values. Read the exact provider-native names from the target
 board and map each role explicitly. Never substitute familiar Linear or GitHub state names.
 
+For a GitHub Projects v2 board using the standard Agent Workflow profile, start with this mapping
+and verify each option against the board's `Status` field before drafting:
+
+- `Open`: outside autonomous dispatch;
+- `Ready`: dispatch and initial active state;
+- `In progress`: active implementation state;
+- `In review`: non-terminal human handoff state;
+- `Blocked`: external-input wait state, outside active execution;
+- `Done`: terminal state.
+
+Generate `dispatch_states: [Ready]`, `active_states: [Ready, In progress]`,
+`review_state: In review`, and `terminal_states: [Done]`. Ask for a mapping override only when the
+board does not expose one of these exact options. Do not inspect application code to infer this
+mapping.
+
+The default Project issue filter is `issue_types: [Task, Bug]`. Verify that both `Task` and `Bug`
+occur in the target Project's Issue `issueType.name` values before writing the workflow. If either
+type is absent, stop the draft at that setting and ask for the intended issue types; do not silently
+dispatch a broader set. A Project with no matching items is not evidence that the type exists.
+
+Verify the mapping through the configured tracker connector or GitHub Projects API. When `gh` is
+available, `gh project field-list <number> --owner <owner> --format json` is the preferred read-only
+check. Repository source code is not evidence for the target board's live options.
+
+Verify issue types with the Project GraphQL item query used by the GitHub adapter and collect every
+`Issue.issueType.name` across all pages. The check passes only when both `Task` and `Bug` are present.
+
 Use evidence from the repository. Do not invent repository names, issue URLs, Project IDs, commands, CI requirements, delivery conditions, or owners. Mark a setting as `To confirm` when the repository does not establish it.
 
 ## Configuration boundary

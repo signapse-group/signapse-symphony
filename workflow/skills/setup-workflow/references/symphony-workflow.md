@@ -14,6 +14,28 @@ The front matter must establish:
 
 Keep tokens and secrets in environment variables or an existing external credential helper. The clone/bootstrap path must also make the installed workflow skills available to Codex. A project-scoped installation committed in the repository satisfies this after clone; a global installation must be verified on every worker host.
 
+For the standard GitHub Projects v2 Agent Workflow profile, use these verified roles:
+
+```yaml
+tracker:
+  kind: github
+  provider:
+    repo: owner/repository
+    project_owner: owner
+    project_number: 1
+    issue_types: [Task, Bug]
+  dispatch_states: [Ready]
+  active_states: [Ready, In progress]
+  review_state: In review
+  terminal_states: [Done]
+```
+
+`Open` remains outside autonomous dispatch, `Blocked` remains outside active execution, and
+`In review` is the human handoff boundary. Verify these exact option names against the target
+Project's `Status` field. Verify that both `Task` and `Bug` occur in the Project's
+`Issue.issueType.name` values before accepting the default filter. If either is absent, require an
+explicit issue-type override. If the board differs, change only the mapping; preserve the roles.
+
 Use this minimal prompt shape and adapt tracker terminology and allowed mutations to the
 consuming repository's policy. Do not copy state names from this example into a target
 repository: tracker-native names must come from that repository's configured board.

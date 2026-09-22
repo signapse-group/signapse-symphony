@@ -48,7 +48,8 @@ defmodule SymphonyElixir.GitHub.Project do
   def validate_config(%{provider: provider} = settings) do
     with :ok <- validate_project_scope(provider),
          :ok <- validate_state_list(settings.dispatch_states, :invalid_github_dispatch_states),
-         :ok <- validate_state_list(settings.active_states, :invalid_github_active_states) do
+         :ok <- validate_state_list(settings.active_states, :invalid_github_active_states),
+         :ok <- validate_optional_state(Map.get(settings, :review_state), :invalid_github_review_state) do
       validate_state_list(settings.terminal_states, :invalid_github_terminal_states)
     end
   end
@@ -65,6 +66,14 @@ defmodule SymphonyElixir.GitHub.Project do
   defp validate_state_list(states, error) do
     if string_list?(states), do: :ok, else: {:error, error}
   end
+
+  defp validate_optional_state(nil, _error), do: :ok
+
+  defp validate_optional_state(state, error) when is_binary(state) do
+    if String.trim(state) == "", do: {:error, error}, else: :ok
+  end
+
+  defp validate_optional_state(_state, error), do: {:error, error}
 
   @spec fetch(map(), function(), {:states | :ids, [String.t()]}) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch(_settings, _request_fun, {_selection, []}), do: {:ok, []}
@@ -124,7 +133,9 @@ defmodule SymphonyElixir.GitHub.Project do
        when is_binary(id) and is_list(options) do
     names = Enum.map(options, &normalize(&1["name"]))
 
-    configured_states = settings.dispatch_states ++ settings.active_states ++ settings.terminal_states
+    configured_states =
+      settings.dispatch_states ++ settings.active_states ++ settings.terminal_states ++
+        List.wrap(Map.get(settings, :review_state))
 
     if Enum.all?(configured_states, &(normalize(&1) in names)) do
       :ok

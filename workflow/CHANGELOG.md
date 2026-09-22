@@ -3,6 +3,7 @@
 ## 0.4.0 - Unreleased
 
 - Add the explicit-only `setup-workflow` skill to bootstrap repository-specific execution configuration in `AGENTS.md` and the Symphony entrypoint in `WORKFLOW.md`.
+- Add the GitHub Projects v2 setup profile: `Ready` dispatches work, `In progress` remains active, `In review` hands off to humans, and `Done` terminates work.
 - Rename the shared `workflow` skill to `agent-execution-policy` to distinguish it from Symphony's `WORKFLOW.md` runtime file.
 - Convert the package from a Codex plugin to an execution skill collection.
 - Move discovery, requirement definition, issue publication, domain documentation, research, prototyping, and bug intake out of this repository's distributed skills.

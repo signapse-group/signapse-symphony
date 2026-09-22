@@ -58,6 +58,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:required_labels, {:array, :string}, default: [])
       field(:dispatch_states, {:array, :string})
       field(:active_states, {:array, :string})
+      field(:review_state, :string)
       field(:terminal_states, {:array, :string})
     end
 
@@ -76,6 +77,7 @@ defmodule SymphonyElixir.Config.Schema do
           :required_labels,
           :dispatch_states,
           :active_states,
+          :review_state,
           :terminal_states
         ],
         empty_values: []

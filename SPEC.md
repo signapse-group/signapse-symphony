@@ -396,6 +396,9 @@ Fields:
   - REQUIRED unless the selected adapter profile documents a default.
   - Values are provider-native states in which an already claimed worker may continue.
   - Compared case-insensitively by the scheduler.
+- `review_state` (string, optional)
+  - Names the provider-native non-terminal state used as the human review handoff boundary.
+  - The tracker adapter MAY validate that the state exists; the scheduler does not treat it as active.
 - `dispatch_states` (list of strings)
   - Default: the effective `active_states` value.
   - Values are provider-native states eligible for new worker dispatch.
@@ -618,6 +621,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `tracker.required_labels`: list of strings, default `[]`
 - `tracker.dispatch_states`: list of provider-native state names, default `active_states`
 - `tracker.active_states`: list of provider-native state names, adapter-defined default
+- `tracker.review_state`: optional provider-native human review handoff state
 - `tracker.terminal_states`: list of provider-native state names, adapter-defined default
 - `polling.interval_ms`: integer, default `30000`
 - `workspace.root`: path resolved to absolute, default `<system-temp>/symphony_workspaces`

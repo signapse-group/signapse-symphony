@@ -45,7 +45,8 @@ tracker issue can become a dispatch candidate again after restart.
 4. Install or copy the Agent Workflow skills into the repository so cloned workspaces can discover
    `$agent-execution-policy` and `$implement`.
 5. Customize the copied `WORKFLOW.md` file for your project.
-   - Set `repo`, `project_owner`, `project_number`, and `issue_types` to the target GitHub Project.
+   - Set `repo`, `project_owner`, and `project_number` to the target GitHub Project. The default
+     `issue_types` filter is `[Task, Bug]`; verify both types occur in the Project before using it.
    - Map the board's exact status names into `dispatch_states`, `active_states`, and
      `terminal_states`; do not copy state names from another tracker.
 6. Follow the instructions below to install the required runtime dependencies and start the service.
@@ -129,8 +130,9 @@ tracker:
     project_owner: your-org
     project_number: 1
     issue_types: [Task, Bug]
-  dispatch_states: [Todo]
-  active_states: [Todo, In Progress]
+  dispatch_states: [Ready]
+  active_states: [Ready, In progress]
+  review_state: In review
   terminal_states: [Done]
 workspace:
   root: ~/code/workspaces
@@ -161,6 +163,8 @@ Notes:
 - `tracker.dispatch_states` selects states eligible for new work. It defaults to
   `tracker.active_states` for existing workflows. `tracker.active_states` controls whether a
   claimed worker continues after tracker refreshes and agent turns.
+- `tracker.review_state` optionally names the non-terminal human handoff state. GitHub Projects v2
+  validates that the option exists but does not keep the worker active in that state.
 - Safer Codex defaults are used when policy fields are omitted:
   - `codex.approval_policy` defaults to `{"reject":{"sandbox_approval":true,"rules":true,"mcp_elicitations":true}}`
   - `codex.thread_sandbox` defaults to `workspace-write`
@@ -267,7 +271,8 @@ codex:
   `issue_types` under `tracker.provider`. Symphony reads organization Project items through
   GraphQL, uses native Project Status as the issue state, filters to the configured repository and
   Issue Types, and retains GitHub open/closed state as a dispatch guard. Use `dispatch_states` for
-  new work and `active_states` for claimed work.
+  new work, `active_states` for claimed work, and optional `review_state` to validate the human
+  handoff option without keeping a worker active there.
 - Tool and auth: `github_api` accepts a relative REST `path` plus optional `params` and JSON
   `body`; Symphony executes it host-side with the session-bound token, removes configured tracker
   credentials and provider authentication aliases from the Codex child, and leaves raw tool access

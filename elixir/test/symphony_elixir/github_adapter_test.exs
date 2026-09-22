@@ -297,6 +297,9 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
     assert {:error, :invalid_github_active_states} =
              GitHubProject.validate_config(%{settings | active_states: [42]})
 
+    assert {:error, :invalid_github_review_state} =
+             GitHubProject.validate_config(%{settings | review_state: " "})
+
     assert {:error, :invalid_github_terminal_states} =
              GitHubProject.validate_config(%{settings | terminal_states: [""]})
   end
@@ -368,6 +371,8 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
     end)
 
     assert_project_error(%{settings | dispatch_states: ["Unknown"]}, :github_project_unknown_status, & &1)
+
+    assert_project_error(%{settings | review_state: "Unknown"}, :github_project_unknown_status, & &1)
 
     assert_project_error(settings, :github_project_unknown_status, fn response ->
       put_in(response, ["data", "organization", "projectV2", "field", "options"], [%{}])
@@ -595,6 +600,7 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
       },
       dispatch_states: ["Ready"],
       active_states: ["Ready", "In progress"],
+      review_state: "In review",
       terminal_states: ["Done"]
     }
   end

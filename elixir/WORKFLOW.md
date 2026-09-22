@@ -10,10 +10,11 @@ tracker:
       - Bug
   required_labels: []
   dispatch_states:
-    - Todo
+    - Ready
   active_states:
-    - Todo
-    - In Progress
+    - Ready
+    - In progress
+  review_state: In review
   terminal_states:
     - Done
 polling:
@@ -68,17 +69,19 @@ item. The work item is the accepted implementation contract for this unattended 
 
 Use this tracker lifecycle:
 
-- `Todo`: ready for autonomous work. Move it to `In Progress` before implementation.
-- `In Progress`: implementation, verification, review fixes, and required CI are agent-owned.
-- `In Review`: the current pull-request revision is ready for human review. Do not modify code or
-  merge while the item remains in this state. Human-requested changes return it to `In Progress`.
+- `Open`: not ready for autonomous work; do not dispatch it.
+- `Ready`: ready for autonomous work. Move it to `In progress` before implementation.
+- `In progress`: implementation, verification, review fixes, and required CI are agent-owned.
+- `In review`: the current pull-request revision is ready for human review. Do not modify code or
+  merge while the item remains in this state. Human-requested changes return it to `In progress`.
+- `Blocked`: use only when material input or access is required and no meaningful independent work remains.
 - `Done`: terminal; do nothing and stop.
 
 This run authorizes implementation, verification, commits, branch push, pull-request creation or
-update, required CI follow-up, and GitHub Project state transitions from `Todo` to `In Progress`
-and from `In Progress` to `In Review`. Move to `In Review` only after `$implement`'s checks,
+update, required CI follow-up, and GitHub Project state transitions from `Ready` to `In progress`
+and from `In progress` to `In review`. Move to `In review` only after `$implement`'s checks,
 independent review, pull-request evidence, and required CI are satisfied for the delivered revision.
 
 Do not merge, deploy, mark the item `Done`, change product requirements, or create additional work
-items unless the root `AGENTS.md` explicitly assigns that action. Stop only at the `In Review`
+items unless the root `AGENTS.md` explicitly assigns that action. Stop only at the `In review`
 handoff boundary, `Done`, or a true external blocker with no meaningful independent work remaining.

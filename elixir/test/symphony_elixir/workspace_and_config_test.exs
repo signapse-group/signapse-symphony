@@ -1298,6 +1298,21 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert settings.tracker.provider == %{}
   end
 
+  test "schema preserves an optional review handoff state" do
+    assert {:ok, settings} =
+             Schema.parse(%{
+               tracker: %{
+                 kind: "github",
+                 dispatch_states: ["Ready"],
+                 active_states: ["Ready", "In progress"],
+                 review_state: "In review",
+                 terminal_states: ["Done"]
+               }
+             })
+
+    assert settings.tracker.review_state == "In review"
+  end
+
   test "config no longer resolves legacy env: references" do
     workspace_env_var = "SYMP_WORKSPACE_ROOT_#{System.unique_integer([:positive])}"
     api_key_env_var = "SYMP_LINEAR_API_KEY_#{System.unique_integer([:positive])}"
