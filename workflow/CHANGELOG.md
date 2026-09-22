@@ -3,6 +3,7 @@
 ## 0.4.0 - Unreleased
 
 - Add the explicit-only `setup-workflow` skill to bootstrap repository-specific execution configuration in `AGENTS.md` and the Symphony entrypoint in `WORKFLOW.md`.
+- Make Symphony execution intrinsic to `setup-workflow` and separate repository-owned workflow facts from deployment-owned runtime settings so onboarding reuses the deployed profile instead of asking users to configure the host again.
 - Add the GitHub Projects v2 setup profile: `Ready` dispatches work, `In progress` remains active, `In review` hands off to humans, and `Done` terminates work.
 - Rename the shared `workflow` skill to `agent-execution-policy` to distinguish it from Symphony's `WORKFLOW.md` runtime file.
 - Convert the package from a Codex plugin to an execution skill collection.

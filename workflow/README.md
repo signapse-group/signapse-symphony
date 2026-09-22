@@ -27,7 +27,7 @@ The URL points directly to `workflow/skills`, so the wildcard selects its eight 
 
 For a personal installation shared across repositories, add `--global`. For a smaller project installation, replace `--skill "*"` with the required skill names, such as `--skill setup-workflow --skill workflow --skill implement`.
 
-After installation, start a new Codex conversation so it reloads the skill catalog. From the target repository, invoke `$setup-workflow`; it will inspect the repository and draft the `AGENTS.md` adoption block and, when Symphony is used, the root `WORKFLOW.md`.
+After installation, start a new Codex conversation so it reloads the skill catalog. From the target repository, invoke `$setup-workflow`; it will inspect the repository and draft the `AGENTS.md` adoption block and root `WORKFLOW.md` for Symphony execution.
 
 To preview the repository's discovered skills before installing them:
 
@@ -39,9 +39,9 @@ Update a project-scoped installation with `npx skills update -p`. Review the res
 
 ## Adopt the execution workflow
 
-Installing the skills does not activate repository lifecycle behavior. Run `$setup-workflow` to draft the project-specific adoption block in root `AGENTS.md` and, when Symphony is used, create or update its root `WORKFLOW.md`.
+Installing the skills does not activate repository lifecycle behavior. Run `$setup-workflow` to draft the project-specific adoption block in root `AGENTS.md` and create or update its root `WORKFLOW.md` for Symphony execution.
 
-The skill is explicit-only because it can update repository instruction and orchestration files. It shows the complete drafts and waits for acceptance before writing. The generated Symphony prompt loads `$agent-execution-policy` and invokes `$implement`; shared execution policy stays in the installed skills rather than being copied into each repository.
+The skill is explicit-only because it can update repository instruction and orchestration files. It shows the complete drafts and waits for acceptance before writing. The generated Symphony prompt loads `$agent-execution-policy` and invokes `$implement`; shared execution policy stays in the installed skills rather than being copied into each repository. Repository onboarding owns tracker scope, bootstrap, checks, and handoff policy; workspace paths, polling, concurrency, Codex settings, credentials, and sandbox policy come from the deployed Symphony profile.
 
 ```markdown
 ## Agent Workflow
