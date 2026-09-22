@@ -14,7 +14,9 @@ The front matter must establish:
 
 Keep tokens and secrets in environment variables or an existing external credential helper. The clone/bootstrap path must also make the installed workflow skills available to Codex. A project-scoped installation committed in the repository satisfies this after clone; a global installation must be verified on every worker host.
 
-Use this minimal prompt shape and adapt tracker terminology and allowed mutations to repository policy:
+Use this minimal prompt shape and adapt tracker terminology and allowed mutations to the
+consuming repository's policy. Do not copy state names from this example into a target
+repository: tracker-native names must come from that repository's configured board.
 
 ```markdown
 You are working on assigned work item `{{ issue.identifier }}` in this repository.
@@ -36,7 +38,7 @@ Description:
 No description provided.
 {% endif %}
 
-This run authorizes implementation, verification, commits, branch push, pull-request creation or update, required CI follow-up, and configured issue-state transitions through the repository's human-review handoff boundary. Continue from the existing workspace and pull request on later attempts. Do not merge or deploy unless `AGENTS.md` explicitly assigns that action for the current state.
+This run authorizes implementation, verification, commits, branch push, pull-request creation or update, required CI follow-up, and configured issue-state transitions through the repository's review handoff boundary. Continue from the existing workspace and pull request on later attempts. Do not merge or deploy unless `AGENTS.md` explicitly assigns that action for the current state.
 ```
 
 Keep additional prompt instructions only when they express a repository-specific fact or a real unattended-runtime constraint. Do not duplicate the implementation, testing, review, or delivery procedure already owned by `$agent-execution-policy` and `$implement`.
@@ -47,5 +49,7 @@ Before writing, check these invariants:
 - active states keep intended continuation attempts running and exclude human-wait states;
 - terminal states cannot be redispatched;
 - the prompt's authorized state transitions match the tracker configuration and `AGENTS.md` delivery condition;
+- the review handoff state is a non-terminal human-owned boundary and is excluded from
+  `active_states` when Symphony should stop there;
 - `AGENTS.md` identifies this file as the Symphony runtime entrypoint without treating its unattended prompt as a rule for ordinary interactive sessions;
 - the resulting YAML parses and contains no unresolved placeholder in a required runtime field.

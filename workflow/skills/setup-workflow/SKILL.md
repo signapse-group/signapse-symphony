@@ -19,6 +19,10 @@ Inspect the target repository before proposing any configuration:
 - repository-specific delivery conventions and human acceptance ownership when documented;
 - for Symphony, its tracker adapter and scope, dispatch/active/terminal states, workspace bootstrap, worker environment, and how project-scoped skills remain available after the repository is cloned.
 
+Treat the shared policy's `In progress`, `Blocked`, `In review`, and `Done` labels as semantic
+roles, not tracker configuration values. Read the exact provider-native names from the target
+board and map each role explicitly. Never substitute familiar Linear or GitHub state names.
+
 Use evidence from the repository. Do not invent repository names, issue URLs, Project IDs, commands, CI requirements, delivery conditions, or owners. Mark a setting as `To confirm` when the repository does not establish it.
 
 ## Configuration boundary
@@ -58,6 +62,10 @@ At the start of each new session, read `$agent-execution-policy` before workflow
 ```
 
 When Symphony is being configured, read [references/symphony-workflow.md](references/symphony-workflow.md) and also show the complete proposed `WORKFLOW.md`. Its prompt must load `$agent-execution-policy`, invoke `$implement` for the assigned work item, and state the granted lifecycle actions and handoff boundary. Keep credentials in environment variables or an existing external credential helper.
+
+Before showing the `WORKFLOW.md`, summarize the proposed mapping as `dispatch`, `active`,
+`review handoff`, and `terminal`. The review handoff must be non-terminal and excluded from
+`active_states` when Symphony should stop while a human owns the next action.
 
 Ask the user to accept or edit both drafts before writing. Do not infer acceptance from silence. If a material setting remains unknown, ask only about that setting and keep independently verified settings in the draft. Do not write a `WORKFLOW.md` with placeholders that would make Symphony invalid or dispatch the wrong work.
 

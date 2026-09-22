@@ -27,7 +27,7 @@ Linear serves `linear_graphql`, GitHub Issues serves `github_api`, Jira Cloud se
 tools with configured host-side auth and removes declared tracker-token environment variables from
 the Codex child, so the agent does not need a second tracker login.
 
-If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
+If a claimed issue moves to a configured terminal state,
 Symphony stops the active agent for that issue and cleans up matching workspaces.
 
 If Codex reports that operator input, approval, or MCP elicitation is required, Symphony keeps the
@@ -39,18 +39,15 @@ tracker issue can become a dispatch candidate again after restart.
 
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
-2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and
-   set it as the `LINEAR_API_KEY` environment variable.
+2. Provide a GitHub token with access to the configured repository and Projects v2 board through
+   the `GITHUB_TOKEN` environment variable.
 3. Copy this directory's `WORKFLOW.md` to your repo.
-4. Optionally copy the `commit`, `push`, `pull`, `land`, and `linear` skills to your repo.
-   - The `linear` skill expects Symphony's `linear_graphql` app-server tool for raw Linear GraphQL
-     operations such as comment editing or upload flows.
+4. Install or copy the Agent Workflow skills into the repository so cloned workspaces can discover
+   `$agent-execution-policy` and `$implement`.
 5. Customize the copied `WORKFLOW.md` file for your project.
-   - To get your project's slug, right-click the project and copy its URL. The slug is part of the
-     URL.
-   - When creating a workflow based on this repo, note that it depends on non-standard Linear
-     issue statuses: "Rework", "Human Review", and "Merging". You can customize them in
-     Team Settings → Workflow in Linear.
+   - Set `repo`, `project_owner`, `project_number`, and `issue_types` to the target GitHub Project.
+   - Map the board's exact status names into `dispatch_states`, `active_states`, and
+     `terminal_states`; do not copy state names from another tracker.
 6. Follow the instructions below to install the required runtime dependencies and start the service.
 
 ## Prerequisites
@@ -126,9 +123,15 @@ Minimal example:
 ```md
 ---
 tracker:
-  kind: linear
+  kind: github
   provider:
-    project_slug: "..."
+    repo: your-org/your-repo
+    project_owner: your-org
+    project_number: 1
+    issue_types: [Task, Bug]
+  dispatch_states: [Todo]
+  active_states: [Todo, In Progress]
+  terminal_states: [Done]
 workspace:
   root: ~/code/workspaces
 hooks:
