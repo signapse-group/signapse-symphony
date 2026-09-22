@@ -71,11 +71,13 @@ defmodule SymphonyElixir.GitHub.Project do
 
   def fetch(settings, request_fun, selection) do
     with :ok <- validate_config(settings),
-         {:ok, issues} <- pages(settings, request_fun, nil, MapSet.new(), []) do
+         {:ok, issues} <- pages(settings, request_fun, nil, [], []) do
       {:ok, select(issues, selection)}
     end
   end
 
+  @spec pages(map(), function(), String.t() | nil, [String.t()], [[Issue.t()]]) ::
+          {:ok, [Issue.t()]} | {:error, term()}
   defp pages(settings, request_fun, cursor, seen, acc) do
     provider = settings.provider
     body = %{"query" => @query, "variables" => %{"owner" => provider["project_owner"], "number" => provider["project_number"], "after" => cursor}}
@@ -92,16 +94,18 @@ defmodule SymphonyElixir.GitHub.Project do
     end
   end
 
+  @spec continue_pages(map(), map(), function(), [String.t()], [[Issue.t()]]) ::
+          {:ok, [Issue.t()]} | {:error, term()}
   defp continue_pages(%{"hasNextPage" => false}, _settings, _request_fun, _seen, acc) do
     {:ok, acc |> Enum.reverse() |> List.flatten()}
   end
 
   defp continue_pages(%{"hasNextPage" => true, "endCursor" => cursor}, settings, request_fun, seen, acc)
        when is_binary(cursor) and cursor != "" do
-    if MapSet.member?(seen, cursor) do
+    if cursor in seen do
       {:error, :github_project_repeated_cursor}
     else
-      pages(settings, request_fun, cursor, MapSet.put(seen, cursor), acc)
+      pages(settings, request_fun, cursor, [cursor | seen], acc)
     end
   end
 

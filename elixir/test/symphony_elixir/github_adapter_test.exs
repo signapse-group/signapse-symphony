@@ -4,6 +4,7 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
   alias SymphonyElixir.GitHub.Adapter, as: GitHubAdapter
   alias SymphonyElixir.GitHub.AgentTool, as: GitHubAgentTool
   alias SymphonyElixir.GitHub.Client, as: GitHubClient
+  alias SymphonyElixir.GitHub.Project, as: GitHubProject
 
   defmodule FakeGitHubClient do
     def fetch_issues_by_states(states) do
@@ -273,6 +274,141 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
                      }, %{repo: "signapse-group/signapse"}}
   end
 
+  test "project mode validates configuration and skips empty selections" do
+    settings = project_tracker_settings()
+
+    refute GitHubProject.configured?(%{})
+
+    assert {:ok, []} =
+             GitHubProject.fetch(settings, fn _, _, _, _, _ -> flunk("unexpected request") end, {:states, []})
+
+    assert {:error, :missing_github_project_owner} =
+             GitHubProject.validate_config(put_in(settings, [:provider, "project_owner"], " "))
+
+    assert {:error, :invalid_github_project_number} =
+             GitHubProject.validate_config(put_in(settings, [:provider, "project_number"], 0))
+
+    assert {:error, :invalid_github_issue_types} =
+             GitHubProject.validate_config(put_in(settings, [:provider, "issue_types"], []))
+
+    assert {:error, :invalid_github_dispatch_states} =
+             GitHubProject.validate_config(%{settings | dispatch_states: nil})
+
+    assert {:error, :invalid_github_active_states} =
+             GitHubProject.validate_config(%{settings | active_states: [42]})
+
+    assert {:error, :invalid_github_terminal_states} =
+             GitHubProject.validate_config(%{settings | terminal_states: [""]})
+  end
+
+  test "project mode paginates and normalizes supported issue items" do
+    settings = project_tracker_settings()
+
+    closed =
+      project_item(4, "Task", "Done")
+      |> put_in(["content", "state"], "CLOSED")
+      |> put_in(["content", "createdAt"], "invalid")
+      |> put_in(["content", "updatedAt"], nil)
+
+    archived = Map.put(project_item(5, "Task", "Ready"), "isArchived", true)
+    other_repo = put_in(project_item(6, "Task", "Ready"), ["content", "repository", "nameWithOwner"], "other/repo")
+    draft = %{"content" => %{"__typename" => "DraftIssue"}}
+
+    request_fun = fn "POST", "/graphql", %{}, body, _request_settings ->
+      case get_in(body, ["variables", "after"]) do
+        nil ->
+          response =
+            project_response()
+            |> put_in(["data", "organization", "projectV2", "items", "nodes"], [archived, other_repo, draft])
+            |> put_in(["data", "organization", "projectV2", "items", "pageInfo"], %{
+              "hasNextPage" => true,
+              "endCursor" => "next"
+            })
+
+          {:ok, %{status: 200, body: response}}
+
+        "next" ->
+          response =
+            project_response()
+            |> put_in(["data", "organization", "projectV2", "items", "nodes"], [closed])
+
+          {:ok, %{status: 200, body: response}}
+      end
+    end
+
+    assert {:ok, [issue]} = GitHubProject.fetch(settings, request_fun, {:ids, ["4", "missing", "4"]})
+    assert issue.id == "4"
+    refute issue.dispatchable
+    assert issue.created_at == nil
+    assert issue.updated_at == nil
+  end
+
+  test "project mode reports API, payload, status, item, and pagination failures" do
+    settings = project_tracker_settings()
+    request = fn response -> fn _, _, _, _, _ -> response end end
+
+    assert {:error, :request_failed} =
+             GitHubProject.fetch(settings, request.({:error, :request_failed}), {:states, ["Ready"]})
+
+    assert {:error, {:github_graphql_errors, [%{"message" => "bad query"}]}} =
+             GitHubProject.fetch(
+               settings,
+               request.({:ok, %{status: 200, body: %{"errors" => [%{"message" => "bad query"}]}}}),
+               {:states, ["Ready"]}
+             )
+
+    assert {:error, {:github_api_status, 500}} =
+             GitHubProject.fetch(settings, request.({:ok, %{status: 500, body: %{}}}), {:states, ["Ready"]})
+
+    assert {:error, :github_project_unavailable} =
+             GitHubProject.fetch(settings, request.({:ok, %{status: 200, body: %{}}}), {:states, ["Ready"]})
+
+    assert_project_error(settings, :github_project_missing_status_field, fn response ->
+      put_in(response, ["data", "organization", "projectV2", "field"], nil)
+    end)
+
+    assert_project_error(%{settings | dispatch_states: ["Unknown"]}, :github_project_unknown_status, & &1)
+
+    assert_project_error(settings, :github_project_unknown_status, fn response ->
+      put_in(response, ["data", "organization", "projectV2", "field", "options"], [%{}])
+    end)
+
+    assert_project_error(settings, :github_project_unknown_payload, fn response ->
+      put_in(response, ["data", "organization", "projectV2", "items"], %{})
+    end)
+
+    assert_project_error(settings, :github_project_unknown_payload, fn response ->
+      put_in(response, ["data", "organization", "projectV2", "items", "nodes"], [%{}])
+    end)
+
+    assert_project_error(settings, :github_project_unknown_payload, fn response ->
+      invalid = put_in(project_item(7, "Task", "Ready"), ["content", "title"], "")
+      put_in(response, ["data", "organization", "projectV2", "items", "nodes"], [invalid])
+    end)
+
+    assert_project_error(settings, :github_project_invalid_pagination, fn response ->
+      put_in(response, ["data", "organization", "projectV2", "items", "pageInfo"], %{
+        "hasNextPage" => true,
+        "endCursor" => nil
+      })
+    end)
+
+    repeated_cursor_request = fn _, _, _, _, _ ->
+      response =
+        project_response()
+        |> put_in(["data", "organization", "projectV2", "items", "nodes"], [])
+        |> put_in(["data", "organization", "projectV2", "items", "pageInfo"], %{
+          "hasNextPage" => true,
+          "endCursor" => "same"
+        })
+
+      {:ok, %{status: 200, body: response}}
+    end
+
+    assert {:error, :github_project_repeated_cursor} =
+             GitHubProject.fetch(settings, repeated_cursor_request, {:states, ["Ready"]})
+  end
+
   test "github_api preserves REST status and body while rejecting unsafe arguments" do
     test_pid = self()
     tracker_settings = tracker_settings()
@@ -513,6 +649,12 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
         "issueType" => %{"name" => type}
       }
     }
+  end
+
+  defp assert_project_error(settings, error, update_response) do
+    response = update_response.(project_response())
+    request_fun = fn _, _, _, _, _ -> {:ok, %{status: 200, body: response}} end
+    assert {:error, ^error} = GitHubProject.fetch(settings, request_fun, {:states, ["Ready"]})
   end
 
   defp raw_issue(number) do

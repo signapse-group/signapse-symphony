@@ -1,0 +1,49 @@
+# Shared execution workflow
+
+This policy applies only in repositories that explicitly adopt these skills in their root `AGENTS.md`, or when the user explicitly applies it to the current scope. Installation alone does not activate repository lifecycle behavior.
+
+## Authority and flow
+
+Assigned Task/Bug or accepted local contract → implementation and verification → independent review → findings resolved → PR and required CI ready → human review and the repository delivery condition.
+
+Implementation requires an explicit assignment or accepted local contract. Read the current contract and its relevant references and dependencies; do not create, decompose, publish, or silently broaden product requirements. The user's request and repository policy determine authorization for status changes, branches, pushes, and PR creation or updates. Human owners retain the contract, material decisions, merge, deployment, and acceptance unless explicitly delegated.
+
+## Execution and completion
+
+Use one branch/worktree and one PR per assigned deliverable. Resume the same deliverable on the same branch and PR.
+
+1. Read the current contract, relevant references and dependencies, this policy, and the repository `AGENTS.md`.
+2. Inspect the checkout and ownership of dirty files. State the implementation scope, verification seam, and material risks.
+3. Implement the smallest accepted change. Run focused checks while iterating and the repository's completion checks before handoff.
+4. Have one independent reviewer inspect the complete relevant working state and report Requirement adherence separately from Correctness & Standards.
+5. Resolve blocking findings, reverify affected behavior, and re-review affected parts.
+6. Create or update the PR. Record contract coverage, commands/results, both review axes, nonblocking findings, and the verified revision. Resolve required CI for that revision.
+
+Work is ready for human review when required checks, independent review, and required CI pass for the delivered revision. Missing required evidence, access, or review is not a pass. Manual owner acceptance is not unfinished agent work unless explicitly assigned.
+
+## Execution status
+
+| Status | Meaning | Owner |
+| --- | --- | --- |
+| In progress | Assigned execution, verification, review fixes, or CI work is active. | Agent |
+| Blocked | Execution started, material input/access is required, and no meaningful independent work remains. | Agent |
+| In review | Current PR revision has required checks, independent review, and required CI. | Agent |
+| Done | Contract and repository delivery condition are satisfied. | Repository delivery policy |
+
+Feedback requiring changes returns work to In progress. A hard task or failing implementation test is not itself Blocked. Cancellation and replacement follow human decisions and remain distinct from Done.
+
+Each repository declares its delivery condition and issue-linking rule in `AGENTS.md`. Merge may be sufficient for one repository while another requires deployment or handoff confirmation. Do not infer one repository's condition from another.
+
+## Contract changes during execution
+
+Investigate discoverable facts before treating uncertainty as a contract gap. Routine implementation choices remain with the implementer under repository standards. For an unresolved material decision, use [decision-gate.md](decision-gate.md).
+
+An accepted change within the same deliverable updates the execution plan and invalidates affected checks or review. A different deliverable or boundary requires a human replacement or cancellation decision. Do not absorb new requirements into active or completed work.
+
+## Evidence and adoption
+
+The consuming repository decides the language for agent responses, PR bodies, and generated artifacts. Read that setting from the repository's `AGENTS.md`; these English skill files are not an output-language requirement.
+
+Evidence lives in the working session, PR, and configured tracker; no parallel snapshot or fingerprint is required. Re-read live contracts when resuming and before handoff. Code, contract, dependency, or base changes invalidate only affected evidence.
+
+At each new session, an adopting repository must load `$workflow` and read project-specific facts before workflow-dependent action. If the skill is unavailable or required project-specific configuration is missing, report the blocked portion and continue valid independent work. Routine skill updates do not require changes to the repository's adoption declaration. In a repository without adoption, individual skills may serve a user request, but they must not apply this lifecycle or edit `AGENTS.md` to opt in.
