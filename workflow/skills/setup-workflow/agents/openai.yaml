@@ -1,6 +1,6 @@
 interface:
   display_name: "Setup Workflow"
-  short_description: "Configure repository workflow adoption"
-  default_prompt: "Use $setup-workflow to inspect this repository and draft its Agent Workflow configuration."
+  short_description: "Configure workflow and Symphony adoption"
+  default_prompt: "Use $setup-workflow to inspect this repository and draft its Agent Workflow and Symphony configuration."
 policy:
   allow_implicit_invocation: false

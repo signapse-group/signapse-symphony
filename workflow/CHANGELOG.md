@@ -2,7 +2,7 @@
 
 ## 0.4.0 - Unreleased
 
-- Add the explicit-only `setup-workflow` skill to bootstrap repository-specific execution configuration in `AGENTS.md`.
+- Add the explicit-only `setup-workflow` skill to bootstrap repository-specific execution configuration in `AGENTS.md` and the Symphony entrypoint in `WORKFLOW.md`.
 - Convert the package from a Codex plugin to an execution skill collection.
 - Move discovery, requirement definition, issue publication, domain documentation, research, prototyping, and bug intake out of this repository's distributed skills.
 - Narrow the shared workflow to assigned implementation, verification, independent review, PR/CI handoff, implementation decisions, and API delivery evidence.

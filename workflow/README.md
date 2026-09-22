@@ -5,7 +5,7 @@ This repository contains reusable Codex skills for implementing an assigned cont
 ## Included skills
 
 - `workflow`: shared execution and delivery policy for adopting repositories.
-- `setup-workflow`: inspect a repository and configure its project-specific workflow adoption context.
+- `setup-workflow`: inspect a repository and configure its project-specific workflow adoption and Symphony entrypoint.
 - `implement`: deliver assigned work through checks, independent review, PR, and required CI.
 - `tdd`: verify changed behavior at stable public seams.
 - `code-review`: review requirement adherence and technical correctness.
@@ -15,33 +15,37 @@ This repository contains reusable Codex skills for implementing an assigned cont
 
 ## Install
 
-From the target repository, install the complete collection for Codex with the Skills CLI:
+The source repository is `signapse-group/signapse-symphony`. The reusable skills are stored under `workflow/skills`; the Elixir Symphony runtime and the repository's internal `.codex/skills` are separate and are not part of this collection.
+
+From the root of the consuming repository, install the complete collection into the project scope:
 
 ```powershell
-npx skills@latest add signapse-group/signapse-workflow `
+npx skills@latest add https://github.com/signapse-group/signapse-symphony/tree/main/workflow/skills `
   --agent codex `
   --skill "*" `
   --copy `
   --yes
 ```
 
-The command installs all eight skills, including `setup-workflow`, into the project scope. `--copy` keeps the installed files independent of symlink support. For a personal global installation, add `--global`; for a smaller install, repeat `--skill <name>` for the skills you need.
+The URL points directly to `workflow/skills`, so the wildcard selects its eight valid `SKILL.md` files, including `setup-workflow`. `--copy` makes the project installation independent of symlink support. Do not run this command from the Symphony source repository when setting up another project; run it from the target repository so the skills are installed into that project's scope.
 
-After installation, start a new conversation so the agent reloads the skill catalog. Then run `$setup-workflow` from the target repository.
+For a personal installation shared across repositories, add `--global`. For a smaller project installation, replace `--skill "*"` with the required skill names, such as `--skill setup-workflow --skill workflow --skill implement`.
 
-To inspect the collection before installing it:
+After installation, start a new Codex conversation so it reloads the skill catalog. From the target repository, invoke `$setup-workflow`; it will inspect the repository and draft the `AGENTS.md` adoption block and, when Symphony is used, the root `WORKFLOW.md`.
+
+To preview the repository's discovered skills before installing them:
 
 ```powershell
-npx skills@latest add signapse-group/signapse-workflow --list
+npx skills@latest add https://github.com/signapse-group/signapse-symphony/tree/main/workflow/skills --list
 ```
 
-To update project-scoped skills later, use `npx skills update -p`; review the resulting diff when the installed files are committed to the repository.
+Update a project-scoped installation with `npx skills update -p`. Review the resulting files when the installation is committed to the consuming repository. Symphony workers must receive the same project-scoped installation after cloning, or use a verified equivalent provisioning step on every worker host.
 
 ## Adopt the execution workflow
 
-Installing the skills does not activate repository lifecycle behavior. A consuming repository that wants the shared execution workflow should add project-specific configuration to its root `AGENTS.md`:
+Installing the skills does not activate repository lifecycle behavior. Run `$setup-workflow` to draft the project-specific adoption block in root `AGENTS.md` and, when Symphony is used, create or update its root `WORKFLOW.md`.
 
-Run `$setup-workflow` to inspect the repository and draft this block interactively. It is explicit-only because it can update `AGENTS.md`; the skill shows the full draft and waits for acceptance before writing.
+The skill is explicit-only because it can update repository instruction and orchestration files. It shows the complete drafts and waits for acceptance before writing. The generated Symphony prompt loads `$workflow` and invokes `$implement`; shared execution policy stays in the installed skills rather than being copied into each repository.
 
 ```markdown
 ## Agent Workflow
@@ -58,6 +62,8 @@ At the start of each new session, read `$workflow` before workflow-dependent act
 - Output language: ...
 ```
 
+For Symphony workspaces, ensure the project-scoped skills are committed with the repository or otherwise provisioned and verified on every worker host. Keep tracker credentials outside `WORKFLOW.md`.
+
 Planning repositories remain responsible for producing and publishing Task/Bug contracts. An explicitly accepted local contract is also valid input when the user assigns it directly.
 
 ## Validate
@@ -65,8 +71,8 @@ Planning repositories remain responsible for producing and publishing Task/Bug c
 Validate every changed skill, then validate the collection:
 
 ```powershell
-python <skill-creator>/scripts/quick_validate.py skills/<skill-name>
-python tests/validate_package.py
+python <skill-creator>/scripts/quick_validate.py workflow/skills/<skill-name>
+python workflow/tests/validate_package.py
 ```
 
 The collection validator checks the expected skill set, local links, encoding, line endings, and forbidden project-specific coupling.
