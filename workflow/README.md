@@ -21,18 +21,14 @@ The source repository is `signapse-group/signapse-symphony`. The reusable skills
 From the root of the consuming repository, install the complete collection into the project scope:
 
 ```powershell
-npx skills@latest add https://github.com/signapse-group/signapse-symphony/tree/main/workflow/skills `
-  --agent codex `
-  --skill "*" `
-  --copy `
-  --yes
+npx skills@latest add https://github.com/signapse-group/signapse-symphony/tree/main/workflow/skills
 ```
 
 The URL points directly to `workflow/skills`, so the wildcard selects its nine valid `SKILL.md` files, including `technical-design`. `--copy` makes the project installation independent of symlink support. Do not run this command from the Symphony source repository when setting up another project; run it from the target repository so the skills are installed into that project's scope.
 
 For a personal installation shared across repositories, add `--global`. For a smaller project installation, replace `--skill "*"` with the required skill names, such as `--skill agent-execution-policy --skill technical-design --skill codebase-design` for design work.
 
-After installation, start a new Codex conversation so it reloads the skill catalog. From the target repository, invoke `$setup-workflow`; it will inspect the repository and draft the `AGENTS.md` adoption block and, when Symphony is used, the root `WORKFLOW.md`.
+After installation, start a new Codex conversation so it reloads the skill catalog. From the target repository, invoke `$setup-workflow`; it will inspect the repository and draft the `AGENTS.md` adoption block and root `WORKFLOW.md` for Symphony execution.
 
 To preview the repository's discovered skills before installing them:
 
@@ -44,9 +40,9 @@ Update a project-scoped installation with `npx skills update -p`. Review the res
 
 ## Adopt the execution workflow
 
-Installing the skills does not activate repository lifecycle behavior. Run `$setup-workflow` to draft the project-specific adoption block in root `AGENTS.md` and, when Symphony is used, create or update its root `WORKFLOW.md`.
+Installing the skills does not activate repository lifecycle behavior. Run `$setup-workflow` to draft the project-specific adoption block in root `AGENTS.md` and create or update its root `WORKFLOW.md` for Symphony execution.
 
-The skill is explicit-only because it can update repository instruction and orchestration files. It shows the complete drafts and waits for acceptance before writing. The generated Symphony prompt loads `$agent-execution-policy` and invokes `$implement`; shared execution policy stays in the installed skills rather than being copied into each repository.
+The skill is explicit-only because it can update repository instruction and orchestration files. It shows the complete drafts and waits for acceptance before writing. The generated Symphony prompt loads `$agent-execution-policy` and invokes `$implement`; shared execution policy stays in the installed skills rather than being copied into each repository. Repository onboarding owns tracker scope, bootstrap, checks, and handoff policy; workspace paths, polling, concurrency, Codex settings, credentials, and sandbox policy come from the deployed Symphony profile.
 
 ```markdown
 ## Agent Workflow

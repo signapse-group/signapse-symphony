@@ -1,18 +1,41 @@
 # Symphony workflow configuration
 
-Use this reference only when the consuming repository will be run by Symphony.
+Use this reference whenever `$setup-workflow` configures a consuming repository. Invocation of that
+skill already establishes that the repository will be run by Symphony.
 
-`WORKFLOW.md` has YAML front matter for Symphony runtime configuration and a Markdown/Liquid body used as the agent prompt. Derive every value from the target repository, its tracker, and its deployed Symphony environment. Consult the installed Symphony version's documentation or existing valid configuration for supported fields; do not assume one provider's schema applies to another.
+`WORKFLOW.md` has YAML front matter for Symphony runtime configuration and a Markdown/Liquid body
+used as the agent prompt. Derive repository-owned values from the target repository and tracker;
+inherit deployment-owned values from the deployed Symphony profile. Consult the installed Symphony
+version's documentation or existing valid configuration for supported fields; do not assume one
+provider's schema applies to another.
 
-The front matter must establish:
+The repository onboarding must establish:
 
 - tracker kind, provider scope, required labels when used, and dispatch/active/terminal states;
-- polling interval and workspace root;
 - clone/bootstrap hooks needed to produce a usable repository workspace;
-- concurrency and turn limits;
-- Codex command, approval policy, and sandbox/network settings supported by the deployed app-server.
+- the prompt and repository lifecycle boundary.
+
+The deployed Symphony profile establishes workspace root, polling, concurrency and turn limits,
+Codex command and model, approval policy, sandbox/network settings, credentials, and available host
+tools. Copy or preserve these values when the workflow format requires them; do not make them new
+repository onboarding decisions.
 
 Keep tokens and secrets in environment variables or an existing external credential helper. The clone/bootstrap path must also make the installed workflow skills available to Codex. A project-scoped installation committed in the repository satisfies this after clone; a global installation must be verified on every worker host.
+
+Treat `workspace.root` as a deployment-level location for per-issue workspaces. Inspect the
+Symphony service environment or deployment configuration for its established value. Prefer an
+environment-backed reference such as `$SYMPHONY_WORKSPACE_ROOT` in the workflow, and preserve that
+reference when it already exists; do not replace it with a machine-specific absolute path or ask
+the repository user to provide the resolved path again. Apply the same inheritance rule to polling,
+concurrency, turn limits, Codex command/model, approval, and sandbox settings. When no deployed
+profile is accessible, omit absent optional settings so the installed runtime uses its supported
+defaults, and report that deployment compatibility remains unverified.
+
+Derive ordinary bootstrap commands from the repository. For example, a committed `pnpm-lock.yaml`
+supports `pnpm install --frozen-lockfile` without a separate permission question. Ask only when the
+bootstrap would require credentials, destructive host changes, or a material choice the repository
+does not settle. Repository requirements such as Node, pnpm, browser binaries, or system libraries
+are inputs to the deployment; host installation remains outside `$setup-workflow`.
 
 For the standard GitHub Projects v2 Agent Workflow profile, use these verified roles:
 
