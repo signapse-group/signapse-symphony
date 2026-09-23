@@ -1,6 +1,6 @@
 # Agent Workflow Skills
 
-This repository contains reusable Codex skills for implementing an assigned contract through verification, independent review, and delivery handoff. Product discovery, requirement definition, issue decomposition, and issue publication belong to the planning repository or another upstream process.
+This repository contains reusable Codex skills for human-led technical design and for implementing an assigned contract through verification, independent review, and delivery handoff. Product discovery, requirement definition, issue decomposition, and issue publication belong to the planning repository or another upstream process.
 
 ## Included skills
 
@@ -12,6 +12,7 @@ This repository contains reusable Codex skills for implementing an assigned cont
 - `diagnosing-bugs`: build a tight reproduction loop and identify root cause.
 - `resolving-merge-conflicts`: resolve an active merge or rebase while preserving intent.
 - `codebase-design`: design deep modules, interfaces, and test seams.
+- `technical-design`: inspect related issues and implementation repositories with a human technical owner, then propose a design before autonomous execution.
 
 ## Install
 
@@ -27,9 +28,9 @@ npx skills@latest add https://github.com/signapse-group/signapse-symphony/tree/m
   --yes
 ```
 
-The URL points directly to `workflow/skills`, so the wildcard selects its eight valid `SKILL.md` files, including `setup-workflow`. `--copy` makes the project installation independent of symlink support. Do not run this command from the Symphony source repository when setting up another project; run it from the target repository so the skills are installed into that project's scope.
+The URL points directly to `workflow/skills`, so the wildcard selects its nine valid `SKILL.md` files, including `technical-design`. `--copy` makes the project installation independent of symlink support. Do not run this command from the Symphony source repository when setting up another project; run it from the target repository so the skills are installed into that project's scope.
 
-For a personal installation shared across repositories, add `--global`. For a smaller project installation, replace `--skill "*"` with the required skill names, such as `--skill setup-workflow --skill workflow --skill implement`.
+For a personal installation shared across repositories, add `--global`. For a smaller project installation, replace `--skill "*"` with the required skill names, such as `--skill agent-execution-policy --skill technical-design --skill codebase-design` for design work.
 
 After installation, start a new Codex conversation so it reloads the skill catalog. From the target repository, invoke `$setup-workflow`; it will inspect the repository and draft the `AGENTS.md` adoption block and, when Symphony is used, the root `WORKFLOW.md`.
 
@@ -65,6 +66,8 @@ At the start of each new session, read `$agent-execution-policy` before workflow
 For Symphony workspaces, ensure the project-scoped skills are committed with the repository or otherwise provisioned and verified on every worker host. Keep tracker credentials outside `WORKFLOW.md`.
 
 Planning repositories remain responsible for producing and publishing Task/Bug contracts. An explicitly accepted local contract is also valid input when the user assigns it directly.
+
+After planning has divided a feature into implementation issues, a human technical owner may invoke `$technical-design` to inspect the relevant repositories and agree on a codebase-grounded design. The skill does not run inside Symphony's unattended implementation loop or move issues to `Ready`; the owning repository defines readiness and the human accepts material design decisions.
 
 ## Validate
 

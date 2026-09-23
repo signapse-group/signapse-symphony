@@ -1,0 +1,6 @@
+interface:
+  display_name: "Technical Design"
+  short_description: "Design assigned BE/FE work with a human owner"
+  default_prompt: "Use $technical-design to examine these related issues and repositories, then propose a technical design for my review."
+policy:
+  allow_implicit_invocation: false

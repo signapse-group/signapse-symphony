@@ -2,6 +2,7 @@
 
 ## 0.4.0 - Unreleased
 
+- Add the explicit-only `technical-design` skill for human-led design from already divided implementation issues and verified repository code.
 - Add the explicit-only `setup-workflow` skill to bootstrap repository-specific execution configuration in `AGENTS.md` and the Symphony entrypoint in `WORKFLOW.md`.
 - Add the GitHub Projects v2 setup profile: `Ready` dispatches work, `In progress` remains active, `In review` hands off to humans, and `Done` terminates work.
 - Rename the shared `workflow` skill to `agent-execution-policy` to distinguish it from Symphony's `WORKFLOW.md` runtime file.
