@@ -13,6 +13,12 @@ implementation, planning, or issue publication.
 
 ## Explore first
 
+Load [agent-execution-policy](../agent-execution-policy/SKILL.md) and read its shared policy before
+drafting or refreshing the repository's workflow. Compare existing adoption rules with that policy;
+an old repository rule is not an exception merely because it is already written. When the user has
+accepted a shared policy change, replace conflicting legacy text and preserve only explicit current
+repository exceptions. If a material exception is unclear, ask about that exception.
+
 Inspect the target repository before proposing any configuration:
 
 - `AGENTS.md`, `CLAUDE.md`, `WORKFLOW.md`, and any existing Agent Workflow, Symphony, or agent-skills sections;
@@ -102,7 +108,7 @@ deployment profile cannot be inspected, retain existing references and values; f
 fields, rely on supported runtime defaults and report the deployment verification gap. Do not invent
 host-specific values merely to make the draft look complete.
 
-The generic execution policy remains in `$agent-execution-policy` and its bundled references. Keep `AGENTS.md` and the Symphony prompt short and store only facts specific to the consuming repository. Do not copy the shared policy into either file.
+The generic execution policy remains in `$agent-execution-policy` and its bundled references. Keep `AGENTS.md` and the Symphony prompt short and store only facts specific to the consuming repository. Do not copy the shared policy into either file. When an existing configuration already expresses the same policy and repository facts, leave it unchanged rather than restating the shared rule.
 
 ## Draft before writing
 
