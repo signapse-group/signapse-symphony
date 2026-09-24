@@ -38,6 +38,26 @@ Feedback requiring changes returns work to In progress. A hard task or failing i
 
 Each repository declares its delivery condition and any tracker-specific exceptions in `AGENTS.md`. Merge may complete an implementation issue in one repository while another requires deployment or handoff confirmation. Do not infer one repository's condition from another.
 
+### Blocker comments and resume
+
+For assigned GitHub issue work, investigate the blocker and identify the human action needed before stopping. Once the Blocked conditions above hold, read the issue's current status and comments. Create a blocker comment on that issue, or update this agent's existing comment for the same blocker; never edit another author's comment. Read back the saved comment before changing In progress to Blocked, then verify the status before ending the run. Retry from current remote state to avoid duplicate comments or repeated transitions.
+
+Use this concise template in the repository's output language, replacing the resume state with the repository workflow's dispatch state:
+
+```markdown
+**Blocked**
+- Reason: <What prevents progress.>
+- Checked: <What was tried and the result; evidence link if useful.>
+- Needed: <Specific action or decision required from a human.>
+- Resume: <Condition to proceed>; reply here, then move to <dispatch state>.
+```
+
+Keep each item to about one sentence and link evidence instead of pasting long logs. Include a short recommendation in Needed when a decision requires choosing an option. The issue comment is the notification; no mention or separate notification channel is required.
+
+If writing or verifying the comment fails, report the failure in the working session and do not change the status to Blocked. If changing or verifying the status fails, preserve the comment and report the unconfirmed transition; do not claim it succeeded.
+
+After resolving the blocker, the human records the resolution on the issue and moves it to the repository's dispatch state. On resume, reread the issue and comments, verify the required input is available and the blocker is resolved, then continue the same branch/PR. A status change alone does not resolve a blocker.
+
 ## Contract changes during execution
 
 Investigate discoverable facts before treating uncertainty as a contract gap. Routine implementation choices remain with the implementer under repository standards. For an unresolved material decision, use [decision-gate.md](decision-gate.md).

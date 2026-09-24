@@ -77,8 +77,17 @@ Use this tracker lifecycle:
 - `Done`: terminal; do nothing and stop.
 
 This run authorizes implementation, verification, commits, branch push, pull-request creation or
-update, required CI follow-up, and GitHub Project state transitions from `Ready` to `In progress`
-and from `In progress` to `In review` after the policy's handoff requirements are met.
+update, required CI follow-up, and creating or updating this agent's blocker comments on the assigned
+issue. Authorized GitHub Project state transitions are `Ready` to `In progress`, `In progress` to
+`Blocked` after the policy's blocker comment requirements are met, and `In progress` to `In review`
+after the policy's handoff requirements are met.
+
+For blockers, follow the shared policy's comment-before-status sequence and use `Ready` as the
+resume state in its comment template. After resolving the blocker, the human records the resolution
+on the issue and moves it from `Blocked` to `Ready`. On resume, reread the issue and comments and
+verify the blocker is resolved before continuing the same branch/PR.
+If the issue returns to `Ready` without the required input, move it to `In progress`, update and
+verify the existing blocker comment, then move it back to `Blocked` under the same policy.
 
 Do not merge, deploy, mark the item `Done`, change product requirements, or create additional work
 items unless the root `AGENTS.md` explicitly assigns that action. Stop only at the `In review`

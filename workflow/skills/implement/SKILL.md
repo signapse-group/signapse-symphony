@@ -27,7 +27,7 @@ Run the completion checks required by repository policy for the affected work. P
 
 Follow the repository's decision policy. Investigate discoverable facts first. Raise a material unresolved decision promptly; pause its dependent work while continuing meaningful independent work. Resolve human identities from explicit configuration or user context, never guess whom to mention. If a required durable update is unavailable or not authorized, present the decision in chat and report the missing update.
 
-For assigned issue execution, maintain In progress; use Blocked only when the documented conditions hold. Do not alter parent lifecycle or silently broaden the work contract.
+For assigned issue execution, maintain In progress; use Blocked only when the documented conditions hold. For GitHub issues, follow [blocker comments and resume](../agent-execution-policy/references/execution-policy.md#blocker-comments-and-resume) before changing status and when resuming. Do not alter parent lifecycle or silently broaden the work contract.
 
 Reread the issue on resume and before handoff. Evidence-only updates do not stop work. Accepted requirement changes within the same deliverable update the plan and invalidate affected checks/review. An unaccepted change or different deliverable requires a decision before dependent work continues. Keep the same branch/PR for review fixes within the original boundary.
 
