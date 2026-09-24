@@ -2,6 +2,7 @@
 
 ## 0.4.0 - Unreleased
 
+- Standardize issue-backed PR titles, empty bodies, native issue closing links, and issue comment handoff evidence across the shared workflow.
 - Add the explicit-only `technical-design` skill for human-led design from already divided implementation issues and verified repository code.
 - Add the explicit-only `setup-workflow` skill to bootstrap repository-specific execution configuration in `AGENTS.md` and the Symphony entrypoint in `WORKFLOW.md`.
 - Make Symphony execution intrinsic to `setup-workflow` and separate repository-owned workflow facts from deployment-owned runtime settings so onboarding reuses the deployed profile instead of asking users to configure the host again.

@@ -17,11 +17,13 @@ Use one branch/worktree and one PR per assigned deliverable. Resume the same del
 3. Implement the smallest accepted change. Run focused checks while iterating and the repository's completion checks before handoff.
 4. Have one independent reviewer inspect the complete relevant working state and report Requirement adherence separately from Correctness & Standards.
 5. Resolve blocking findings, reverify affected behavior, and re-review affected parts.
-6. Create or update the PR. Record contract coverage, commands/results, both review axes, nonblocking findings, and the verified revision. Resolve required CI for that revision.
+6. Create or update the PR. Record contract coverage, commands/results, both review axes, nonblocking findings, and the verified revision in the issue handoff comment for GitHub issue work, or in the PR for an accepted local contract. Resolve required CI for that revision.
 
 Work is ready for human review when required checks, independent review, and required CI pass for the delivered revision. Missing required evidence, access, or review is not a pass. Manual owner acceptance is not unfinished agent work unless explicitly assigned.
 
-For assigned GitHub Projects implementation issues, target the repository's default branch and put `Closes <owner>/<repo>#<issue-number>` for the exact assigned issue in the PR description. Before moving the issue to the review handoff state, verify that GitHub recognizes it in the PR's Development section or `closingIssuesReferences`; a plain URL or `Refs` is insufficient. Do not use closing keywords for parent or dependency issues mentioned only for context. The agent stops at the review handoff: a maintainer reviews and merges, GitHub closes the linked issue, and the Project's enabled `Item closed` workflow moves it to `Done`. The agent must not merge, close the issue, or move it to `Done`. Confirm that this Project workflow is enabled; do not assume it from the status names alone.
+For a PR implementing an assigned GitHub issue, set the title to `[#<issue-number>] <current issue title>` for an issue in the PR's repository, or `[<owner>/<repo>#<issue-number>] <current issue title>` for an issue in another repository. Leave the PR body completely empty. Link only the exact assigned issue as a native closing reference, and verify it through `closingIssuesReferences` before handoff; a title, URL, or `Refs` alone does not create this link. Record the PR URL, verified implementation commit, acceptance evidence, commands/results including required CI, both independent-review axes, and remaining nonblocking findings in one agent-owned handoff comment on that issue. The comment must describe the delivered revision. If repository-required CI or instructions conflict with an empty PR body, report the conflict rather than weakening those requirements or claiming readiness.
+
+For assigned GitHub Projects implementation issues, target the repository's default branch. The agent stops at the review handoff: a maintainer reviews and merges, GitHub closes the linked issue, and the Project's enabled `Item closed` workflow moves it to `Done`. The agent must not merge, close the issue, or move it to `Done`. Confirm that this Project workflow is enabled; do not assume it from the status names alone.
 
 ## Execution status
 
@@ -44,7 +46,7 @@ An accepted change within the same deliverable updates the execution plan and in
 
 ## Evidence and adoption
 
-The consuming repository decides the language for agent responses, PR bodies, and generated artifacts. Read that setting from the repository's `AGENTS.md`; these English skill files are not an output-language requirement.
+The consuming repository decides the language for agent responses, issue handoff comments, PR bodies where applicable, and generated artifacts. Read that setting from the repository's `AGENTS.md`; these English skill files are not an output-language requirement.
 
 Evidence lives in the working session, PR, and configured tracker; no parallel snapshot or fingerprint is required. Re-read live contracts when resuming and before handoff. Code, contract, dependency, or base changes invalidate only affected evidence.
 
