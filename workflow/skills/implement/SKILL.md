@@ -41,7 +41,7 @@ Resolve blocking findings, rerun affected checks, and have the reviewer reassess
 
 Commit only scoped, reviewed work, push the Task branch and create/update its one PR. Read existing remote state before retrying a mutation to avoid duplicate PRs/comments. Include the source issue/contract, concise acceptance-to-evidence summary, commands/results, both review axes, remaining nonblocking findings, and the verified implementation commit. A later PR-body edit does not create a new code revision.
 
-Follow the repository's issue-linking, contract handoff, merge and lifecycle rules. Do not claim a human-owned acceptance or deployment transition.
+For assigned GitHub Projects implementation issues, verify the exact issue's recognized closing link and default-branch target as required by the shared policy before handoff. Follow the repository's delivery and lifecycle rules. Do not claim a human-owned acceptance or deployment transition.
 
 Wait for required CI for the current PR revision. Fix in-scope failures on the same branch/PR, rerun affected checks and review, and update evidence after pushing. Do not use a green run from an earlier revision. External failures or missing access must be reported without claiming readiness or relaxing required checks.
 

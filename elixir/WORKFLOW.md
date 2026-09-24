@@ -72,15 +72,13 @@ Use this tracker lifecycle:
 - `Open`: not ready for autonomous work; do not dispatch it.
 - `Ready`: ready for autonomous work. Move it to `In progress` before implementation.
 - `In progress`: implementation, verification, review fixes, and required CI are agent-owned.
-- `In review`: the current pull-request revision is ready for human review. Do not modify code or
-  merge while the item remains in this state. Human-requested changes return it to `In progress`.
+- `In review`: human handoff; do not modify code while the item remains in this state. Human-requested changes return it to `In progress`.
 - `Blocked`: use only when material input or access is required and no meaningful independent work remains.
 - `Done`: terminal; do nothing and stop.
 
 This run authorizes implementation, verification, commits, branch push, pull-request creation or
 update, required CI follow-up, and GitHub Project state transitions from `Ready` to `In progress`
-and from `In progress` to `In review`. Move to `In review` only after `$implement`'s checks,
-independent review, pull-request evidence, and required CI are satisfied for the delivered revision.
+and from `In progress` to `In review` after the policy's handoff requirements are met.
 
 Do not merge, deploy, mark the item `Done`, change product requirements, or create additional work
 items unless the root `AGENTS.md` explicitly assigns that action. Stop only at the `In review`

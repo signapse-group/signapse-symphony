@@ -21,6 +21,8 @@ Use one branch/worktree and one PR per assigned deliverable. Resume the same del
 
 Work is ready for human review when required checks, independent review, and required CI pass for the delivered revision. Missing required evidence, access, or review is not a pass. Manual owner acceptance is not unfinished agent work unless explicitly assigned.
 
+For assigned GitHub Projects implementation issues, target the repository's default branch and put `Closes <owner>/<repo>#<issue-number>` for the exact assigned issue in the PR description. Before moving the issue to the review handoff state, verify that GitHub recognizes it in the PR's Development section or `closingIssuesReferences`; a plain URL or `Refs` is insufficient. Do not use closing keywords for parent or dependency issues mentioned only for context. The agent stops at the review handoff: a maintainer reviews and merges, GitHub closes the linked issue, and the Project's enabled `Item closed` workflow moves it to `Done`. The agent must not merge, close the issue, or move it to `Done`. Confirm that this Project workflow is enabled; do not assume it from the status names alone.
+
 ## Execution status
 
 | Status | Meaning | Owner |
@@ -32,7 +34,7 @@ Work is ready for human review when required checks, independent review, and req
 
 Feedback requiring changes returns work to In progress. A hard task or failing implementation test is not itself Blocked. Cancellation and replacement follow human decisions and remain distinct from Done.
 
-Each repository declares its delivery condition and issue-linking rule in `AGENTS.md`. Merge may be sufficient for one repository while another requires deployment or handoff confirmation. Do not infer one repository's condition from another.
+Each repository declares its delivery condition and any tracker-specific exceptions in `AGENTS.md`. Merge may complete an implementation issue in one repository while another requires deployment or handoff confirmation. Do not infer one repository's condition from another.
 
 ## Contract changes during execution
 

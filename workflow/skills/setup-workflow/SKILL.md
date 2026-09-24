@@ -63,6 +63,10 @@ check. Repository source code is not evidence for the target board's live option
 Verify issue types with the Project GraphQL item query used by the GitHub adapter and collect every
 `Issue.issueType.name` across all pages. The check passes only when both `Task` and `Bug` are present.
 
+For GitHub Projects, verify that the Project's `Item closed` workflow is enabled before describing
+issue closure as an automatic transition to `Done`. Report an unverified or disabled workflow as a
+delivery configuration gap; do not present the status mapping alone as proof of automation.
+
 Use evidence from the repository, tracker, and deployed Symphony profile. Do not invent repository
 names, issue URLs, Project IDs, commands, CI requirements, delivery conditions, or named owners.
 Infer routine bootstrap from committed package-manager and lock files, and use role-based ownership
@@ -77,7 +81,7 @@ Configure only the project-specific adoption context needed by the execution ski
 - repository role and contract source;
 - focused and completion checks;
 - required CI;
-- delivery condition and issue-linking rule;
+- delivery condition and any exceptions to the shared issue-linking rule;
 - human acceptance owner;
 - relevant architecture, API-contract, and domain-context locations;
 - output language.
@@ -114,7 +118,7 @@ At the start of each new session, read `$agent-execution-policy` before workflow
 - Repository role and contract source: ...
 - Focused and completion checks: ...
 - Required CI: ...
-- Delivery condition and issue-linking rule: ...
+- Delivery condition and issue-linking exceptions: ...
 - Human acceptance owner: ...
 - Relevant architecture and contract locations: ...
 - Output language: ...
