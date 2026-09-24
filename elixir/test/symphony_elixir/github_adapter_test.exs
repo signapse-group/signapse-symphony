@@ -300,6 +300,11 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
     assert {:error, :invalid_github_review_state} =
              GitHubProject.validate_config(%{settings | review_state: " "})
 
+    assert :ok = GitHubProject.validate_config(%{settings | review_state: nil})
+
+    assert {:error, :invalid_github_review_state} =
+             GitHubProject.validate_config(%{settings | review_state: 123})
+
     assert {:error, :invalid_github_terminal_states} =
              GitHubProject.validate_config(%{settings | terminal_states: [""]})
   end

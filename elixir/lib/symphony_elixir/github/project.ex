@@ -134,7 +134,9 @@ defmodule SymphonyElixir.GitHub.Project do
     names = Enum.map(options, &normalize(&1["name"]))
 
     configured_states =
-      settings.dispatch_states ++ settings.active_states ++ settings.terminal_states ++
+      settings.dispatch_states ++
+        settings.active_states ++
+        settings.terminal_states ++
         List.wrap(Map.get(settings, :review_state))
 
     if Enum.all?(configured_states, &(normalize(&1) in names)) do
