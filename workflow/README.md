@@ -4,8 +4,8 @@ This repository contains reusable Codex skills for human-led technical design an
 
 ## Included skills
 
-- `agent-execution-policy`: shared execution and delivery policy for adopting repositories.
-- `setup-workflow`: inspect a repository and configure its project-specific workflow adoption and Symphony entrypoint.
+- `agent-execution-policy`: shared execution and delivery policy for explicitly assigned workflow runs.
+- `setup-workflow`: inspect a repository and configure its Symphony entrypoint in `WORKFLOW.md`.
 - `implement`: deliver assigned work through checks, independent review, PR, and required CI.
 - `tdd`: verify changed behavior at stable public seams.
 - `code-review`: review requirement adherence and technical correctness.
@@ -28,7 +28,7 @@ The URL points directly to `workflow/skills`, so the wildcard selects its nine v
 
 For a personal installation shared across repositories, add `--global`. For a smaller project installation, replace `--skill "*"` with the required skill names, such as `--skill agent-execution-policy --skill technical-design --skill codebase-design` for design work.
 
-After installation, start a new Codex conversation so it reloads the skill catalog. From the target repository, invoke `$setup-workflow`; it will inspect the repository and draft the `AGENTS.md` adoption block and root `WORKFLOW.md` for Symphony execution.
+After installation, start a new Codex conversation so it reloads the skill catalog. From the target repository, invoke `$setup-workflow`; it will inspect the repository and draft the root `WORKFLOW.md` for Symphony execution.
 
 To preview the repository's discovered skills before installing them:
 
@@ -38,26 +38,15 @@ npx skills@latest add https://github.com/signapse-group/signapse-symphony/tree/m
 
 Update a project-scoped installation with `npx skills update -p`. Review the resulting files when the installation is committed to the consuming repository. Symphony workers must receive the same project-scoped installation after cloning, or use a verified equivalent provisioning step on every worker host.
 
-## Adopt the execution workflow
+## Configure Symphony execution
 
-Installing the skills does not activate repository lifecycle behavior. Run `$setup-workflow` to draft the project-specific adoption block in root `AGENTS.md` and create or update its root `WORKFLOW.md` for Symphony execution.
+Installing the skills does not activate repository lifecycle behavior. Run `$setup-workflow` to create or update the root `WORKFLOW.md` for Symphony execution. The skill may read existing `AGENTS.md` for repository facts but never creates or edits it.
 
-The skill is explicit-only because it can update repository instruction and orchestration files. It shows the complete drafts and waits for acceptance before writing. The generated Symphony prompt loads `$agent-execution-policy` and invokes `$implement`; shared execution policy stays in the installed skills rather than being copied into each repository. Repository onboarding owns tracker scope, bootstrap, checks, and handoff policy; workspace paths, polling, concurrency, Codex settings, credentials, and sandbox policy come from the deployed Symphony profile.
+The skill is explicit-only because it updates the orchestration file. It shows the complete draft and waits for acceptance before writing. The generated Symphony prompt loads `$agent-execution-policy` and invokes `$implement`; shared execution policy stays in the installed skills rather than being copied into each repository. Repository onboarding owns tracker scope, bootstrap, checks, and handoff policy; workspace paths, polling, concurrency, Codex settings, credentials, and sandbox policy come from the deployed Symphony profile.
 
-```markdown
-## Agent Workflow
-
-This repository adopts the Agent Workflow execution skills.
-At the start of each new session, read `$agent-execution-policy` before workflow-dependent action.
-
-- Repository role and contract source: ...
-- Focused and completion checks: ...
-- Required CI: ...
-- Delivery condition and issue-linking exceptions: ...
-- Human acceptance owner: ...
-- Relevant architecture and contract locations: ...
-- Output language: ...
-```
+The prompt in `WORKFLOW.md` is the activation point for unattended issue work. A human can also
+explicitly request the shared workflow for an accepted local contract. Ordinary use of individual
+skills does not activate the issue lifecycle.
 
 For Symphony workspaces, ensure the project-scoped skills are committed with the repository or otherwise provisioned and verified on every worker host. Keep tracker credentials outside `WORKFLOW.md`.
 

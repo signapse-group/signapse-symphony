@@ -1,27 +1,28 @@
 ---
 name: setup-workflow
-description: Configure a repository to adopt the Agent Workflow execution skills and run assigned work through Symphony by updating AGENTS.md and WORKFLOW.md from verified repository and deployment facts.
+description: Configure Symphony execution for assigned work by creating or updating WORKFLOW.md from verified repository, tracker, and deployment facts.
 ---
 
 # Setup Workflow
 
-Run this skill explicitly once when a repository is adopting the Agent Workflow execution skills
-for Symphony, or when that configuration needs refreshing. Invoking `$setup-workflow` establishes
-that the repository will run assigned work through Symphony; do not ask the user to confirm that
-choice again. This is a repository onboarding workflow, not Symphony host installation,
-implementation, planning, or issue publication.
+Run this skill explicitly when configuring or refreshing Symphony execution for a repository.
+Invoking `$setup-workflow` establishes that the repository will run assigned work through Symphony;
+do not ask the user to confirm that choice again. This is a repository onboarding workflow, not
+Symphony host installation, implementation, planning, or issue publication. Read existing
+`AGENTS.md` for context if present, but do not create or edit it. The only file this skill writes is
+`WORKFLOW.md`.
 
 ## Explore first
 
-Load [agent-execution-policy](../agent-execution-policy/SKILL.md) and read its shared policy before
-drafting or refreshing the repository's workflow. Compare existing adoption rules with that policy;
-an old repository rule is not an exception merely because it is already written. When the user has
-accepted a shared policy change, replace conflicting legacy text and preserve only explicit current
-repository exceptions. If a material exception is unclear, ask about that exception.
+Read [agent-execution-policy](../agent-execution-policy/SKILL.md) and its shared policy before
+drafting or refreshing the Symphony prompt. Reading the policy for configuration does not start an
+implementation run. Compare existing instructions with the policy; an old repository rule is not
+an exception merely because it is already written. Preserve only explicit current repository
+exceptions in `WORKFLOW.md`. If a material exception is unclear, ask about that exception.
 
 Inspect the target repository before proposing any configuration:
 
-- `AGENTS.md`, `CLAUDE.md`, `WORKFLOW.md`, and any existing Agent Workflow, Symphony, or agent-skills sections;
+- `AGENTS.md`, `CLAUDE.md`, `WORKFLOW.md`, and any existing Agent Workflow, Symphony, or agent-skills sections, as read-only sources except for `WORKFLOW.md`;
 - `git remote -v` and `.git/config` for repository identity and hosting;
 - package/build configuration and existing scripts for focused checks and completion checks;
 - CI workflow files for required CI;
@@ -82,7 +83,7 @@ and would change dispatch or delivery behavior.
 
 ## Configuration boundary
 
-Configure only the project-specific adoption context needed by the execution skills and their Symphony entrypoint:
+Configure only the project-specific execution context needed by the Symphony entrypoint:
 
 - repository role and contract source;
 - focused and completion checks;
@@ -108,30 +109,17 @@ deployment profile cannot be inspected, retain existing references and values; f
 fields, rely on supported runtime defaults and report the deployment verification gap. Do not invent
 host-specific values merely to make the draft look complete.
 
-The generic execution policy remains in `$agent-execution-policy` and its bundled references. Keep `AGENTS.md` and the Symphony prompt short and store only facts specific to the consuming repository. Do not copy the shared policy into either file. When an existing configuration already expresses the same policy and repository facts, leave it unchanged rather than restating the shared rule.
+The generic execution policy remains in `$agent-execution-policy` and its bundled references. Keep
+the Symphony prompt short and store only facts specific to the consuming repository. Do not copy
+the shared policy into `WORKFLOW.md`. Put the project-specific execution facts collected above in
+its prompt, or point to stable repository sources for them; do not rely on an `AGENTS.md` adoption
+block. Do not require `AGENTS.md` to run assigned work.
 
 ## Draft before writing
 
-Summarize what was found, what is missing, and any assumptions. Then show the complete proposed `AGENTS.md` block before changing a file:
-
-```markdown
-## Agent Workflow
-
-This repository adopts the Agent Workflow execution skills.
-At the start of each new session, read `$agent-execution-policy` before workflow-dependent action.
-`WORKFLOW.md` is the Symphony runtime entrypoint for assigned work; repository instructions remain here.
-
-- Repository role and contract source: ...
-- Focused and completion checks: ...
-- Required CI: ...
-- Delivery condition and issue-linking exceptions: ...
-- Human acceptance owner: ...
-- Relevant architecture and contract locations: ...
-- Output language: ...
-```
-
-Read [references/symphony-workflow.md](references/symphony-workflow.md) and also show the complete
-proposed `WORKFLOW.md`. Its prompt must load `$agent-execution-policy`, invoke `$implement` for the
+Summarize what was found, what is missing, and any assumptions. Read
+[references/symphony-workflow.md](references/symphony-workflow.md) and show the complete proposed
+`WORKFLOW.md`. Its prompt must load `$agent-execution-policy`, invoke `$implement` for the
 assigned work item, and state the granted lifecycle actions and handoff boundary. Keep credentials
 in environment variables or an existing external credential helper.
 
@@ -139,7 +127,7 @@ Before showing the `WORKFLOW.md`, summarize the proposed mapping as `dispatch`, 
 `review handoff`, and `terminal`. The review handoff must be non-terminal and excluded from
 `active_states` when Symphony should stop while a human owns the next action.
 
-Ask the user to accept or edit both drafts before writing. Do not infer acceptance from silence.
+Ask the user to accept or edit the `WORKFLOW.md` draft before writing. Do not infer acceptance from silence.
 Do not ask whether Symphony is used, whether ordinary lockfile-based dependency installation is
 allowed, or which deployment defaults to use. If a material repository or tracker setting remains
 unknown, ask only about that setting and keep independently verified settings in the draft. Do not
@@ -149,17 +137,12 @@ write a `WORKFLOW.md` with placeholders that would make Symphony invalid or disp
 
 After explicit acceptance:
 
-1. Prefer the repository's existing `AGENTS.md` as the instruction source.
-2. If `AGENTS.md` does not exist, report that the workflow requires a root adoption file and ask whether to create it. Do not silently choose `CLAUDE.md` or create both files.
-3. If an `## Agent Workflow` block exists, update that block in place and preserve surrounding user content.
-4. Otherwise, append the accepted block with the repository's existing line-ending and language conventions.
-5. Create or update the root `WORKFLOW.md`. Preserve valid provider-specific and deployment-owned
+1. Create or update the root `WORKFLOW.md`. Preserve valid provider-specific and deployment-owned
    settings and unrelated prompt instructions unless they conflict with the accepted execution
    boundary. Never copy credentials into it.
-6. Confirm that the cloned Symphony workspace can discover `$agent-execution-policy`, `$implement`, and their required companion skills. Prefer project-scoped installed skills committed with the repository; otherwise record the verified worker provisioning mechanism.
-7. Do not overwrite unrelated edits, replace the whole `AGENTS.md`, or create duplicate adoption blocks.
+2. Confirm that the cloned Symphony workspace can discover `$agent-execution-policy`, `$implement`, and their required companion skills. Prefer project-scoped installed skills committed with the repository; otherwise record the verified worker provisioning mechanism.
+3. Do not overwrite unrelated edits or create or change `AGENTS.md`.
 
-Re-read both resulting files and report their exact paths, the settings written, unresolved items,
-and any repository or deployment evidence gap. Validate the `WORKFLOW.md` YAML. `AGENTS.md` adopts
-the shared workflow; the accepted `WORKFLOW.md` prompt grants only the unattended actions it states.
-Neither file implicitly authorizes merge or deployment.
+Re-read the resulting `WORKFLOW.md` and report its exact path, the settings written, unresolved items,
+and any repository or deployment evidence gap. Validate its YAML. The accepted `WORKFLOW.md` prompt
+grants only the unattended actions it states; it does not implicitly authorize merge or deployment.

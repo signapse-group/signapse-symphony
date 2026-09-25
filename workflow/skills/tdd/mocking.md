@@ -13,7 +13,7 @@ Don't mock:
 - Internal collaborators
 - Anything you control
 
-Keep application-owned repositories and persistence real, using a test database when the seam includes persistence. Database failures or fixture inconvenience do not justify mocking away the behavior under test. Follow the adopted workflow and repository `AGENTS.md` for seam and verification requirements.
+Keep application-owned repositories and persistence real, using a test database when the seam includes persistence. Database failures or fixture inconvenience do not justify mocking away the behavior under test. Follow the active workflow, if any, and repository instructions for seam and verification requirements.
 
 ## Designing for Mockability
 

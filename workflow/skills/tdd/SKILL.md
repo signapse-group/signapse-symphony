@@ -5,7 +5,7 @@ description: Verify changed behavior with regression and acceptance tests at sta
 
 # Behavior-Focused Testing
 
-Require repository adoption and follow [agent-execution-policy](../agent-execution-policy/SKILL.md) plus the repository-root `AGENTS.md`. Read contract references or architecture decisions only when they affect the behavior under test.
+Use the repository's instructions and the assigned contract when testing. Follow [agent-execution-policy](../agent-execution-policy/SKILL.md) when testing is part of an explicitly assigned workflow run; a standalone test request does not activate the issue lifecycle. Read contract references or architecture decisions only when they affect the behavior under test.
 
 ## Select the Seam
 
@@ -17,7 +17,7 @@ Keep participating application-owned controllers, services, repositories and per
 
 - Bugs and non-trivial runtime changes require regression evidence at the appropriate public seam. For a reproducible bug, run a failing regression before the fix and confirm it fails for the reported behavior.
 - New features/behavior need evidence for important acceptance criteria.
-- Documentation-only, formatting and demonstrably behavior-neutral internal changes do not require new tests merely for coverage. Run the checks required by AGENTS.md for the changed file types.
+- Documentation-only, formatting and demonstrably behavior-neutral internal changes do not require new tests merely for coverage. Run checks required by repository instructions for the changed file types.
 - If a bug cannot be reproduced or no suitable seam exists, report attempts and the exact evidence gap. Do not write a tautological test, mark mandatory evidence satisfied, or waive a required regression merely by listing it as a PR risk. Resolve the gap or obtain an explicit decision under the workflow.
 
 ## Work in Vertical Slices

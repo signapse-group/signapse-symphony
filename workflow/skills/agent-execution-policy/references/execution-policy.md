@@ -1,6 +1,6 @@
 # Shared execution workflow
 
-This policy applies only in repositories that explicitly adopt these skills in their root `AGENTS.md`, or when the user explicitly applies it to the current scope. Installation alone does not activate repository lifecycle behavior.
+This policy applies when a Symphony prompt assigns work and loads it, or when the user explicitly requests it for the current scope. Installation and repository instructions alone do not activate issue lifecycle behavior.
 
 ## Authority and flow
 
@@ -12,7 +12,7 @@ Implementation requires an explicit assignment or accepted local contract. Read 
 
 Use one branch/worktree and one PR per assigned deliverable. Resume the same deliverable on the same branch and PR.
 
-1. Read the current contract, relevant references and dependencies, this policy, and the repository `AGENTS.md`.
+1. Read the current contract, relevant references and dependencies, this policy, and repository instructions if present.
 2. Inspect the checkout and ownership of dirty files. State the implementation scope, verification seam, and material risks.
 3. Implement the smallest accepted change. Run focused checks while iterating and the repository's completion checks before handoff.
 4. Have one independent reviewer inspect the complete relevant working state and report Requirement adherence separately from Correctness & Standards.
@@ -36,7 +36,7 @@ For assigned GitHub Projects implementation issues, target the repository's defa
 
 Feedback requiring changes returns work to In progress. A hard task or failing implementation test is not itself Blocked. Cancellation and replacement follow human decisions and remain distinct from Done.
 
-Each repository declares its delivery condition and any tracker-specific exceptions in `AGENTS.md`. Merge may complete an implementation issue in one repository while another requires deployment or handoff confirmation. Do not infer one repository's condition from another.
+Determine the repository's delivery condition and any tracker-specific exceptions from the assigned prompt and repository sources. Merge may complete an implementation issue in one repository while another requires deployment or handoff confirmation. Do not infer one repository's condition from another.
 
 ### Blocker comments and resume
 
@@ -64,10 +64,10 @@ Investigate discoverable facts before treating uncertainty as a contract gap. Ro
 
 An accepted change within the same deliverable updates the execution plan and invalidates affected checks or review. A different deliverable or boundary requires a human replacement or cancellation decision. Do not absorb new requirements into active or completed work.
 
-## Evidence and adoption
+## Evidence and activation
 
-The consuming repository decides the language for agent responses, issue handoff comments, PR bodies where applicable, and generated artifacts. Read that setting from the repository's `AGENTS.md`; these English skill files are not an output-language requirement.
+The consuming repository decides the language for agent responses, issue handoff comments, PR bodies where applicable, and generated artifacts. Read that setting from the assigned prompt or repository instructions; these English skill files are not an output-language requirement.
 
 Evidence lives in the working session, PR, and configured tracker; no parallel snapshot or fingerprint is required. Re-read live contracts when resuming and before handoff. Code, contract, dependency, or base changes invalidate only affected evidence.
 
-At each new session, an adopting repository must load `$agent-execution-policy` and read project-specific facts before workflow-dependent action. If the skill is unavailable or required project-specific configuration is missing, report the blocked portion and continue valid independent work. Routine skill updates do not require changes to the repository's adoption declaration. In a repository without adoption, individual skills may serve a user request, but they must not apply this lifecycle or edit `AGENTS.md` to opt in.
+For each assigned workflow run, load `$agent-execution-policy` and read project-specific facts before workflow-dependent action. If the skill is unavailable or required project-specific configuration is missing, report the blocked portion and continue valid independent work. Individual skills may serve ordinary user requests without applying this lifecycle. Do not edit `AGENTS.md` to activate it.

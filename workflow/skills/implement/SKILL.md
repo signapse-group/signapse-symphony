@@ -5,9 +5,9 @@ description: Execute assigned work from its issue or accepted contract through i
 
 # Implement
 
-Require repository adoption and load the shared policy through [agent-execution-policy](../agent-execution-policy/SKILL.md), then use the repository-root `AGENTS.md` for project facts. Read the [decision gate](../agent-execution-policy/references/decision-gate.md) or [API handoff](../agent-execution-policy/references/api-handoff.md) only when the work needs them. Reuse current context instead of rereading unchanged sources.
+Use this skill for implementation requested by a human or assigned by Symphony. The issue lifecycle below applies only when a Symphony prompt or the human explicitly requests the shared workflow. For those runs, load [agent-execution-policy](../agent-execution-policy/SKILL.md) and gather project facts from the prompt and repository sources, including `AGENTS.md` if present. For a standalone human request, implement and verify its scope without imposing issue status, independent review, PR, or CI handoff steps unless requested. Read the [decision gate](../agent-execution-policy/references/decision-gate.md) or [API handoff](../agent-execution-policy/references/api-handoff.md) only when the active workflow needs them. Reuse current context instead of rereading unchanged sources.
 
-Completion means the delivered PR revision satisfies required checks, independent review on both axes and required CI, with only the specified human acceptance remaining. Continue through fixes to that boundary. Authorization comes from the user's request and repository policy. A request only to diagnose or review does not authorize implementation. Do not select unassigned work merely because it is available.
+For an activated workflow run, completion means the delivered PR revision satisfies required checks, independent review on both axes and required CI, with only the specified human acceptance remaining. Continue through fixes to that boundary. Authorization comes from the user's request and repository policy. A request only to diagnose or review does not authorize implementation. Do not select unassigned work merely because it is available.
 
 ## Ground and Plan
 

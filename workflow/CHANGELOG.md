@@ -4,7 +4,8 @@
 
 - Standardize issue-backed PR titles, empty bodies, native issue closing links, and issue comment handoff evidence across the shared workflow.
 - Add the explicit-only `technical-design` skill for human-led design from already divided implementation issues and verified repository code.
-- Add the explicit-only `setup-workflow` skill to bootstrap repository-specific execution configuration in `AGENTS.md` and the Symphony entrypoint in `WORKFLOW.md`.
+- Add the explicit-only `setup-workflow` skill to configure the Symphony entrypoint in `WORKFLOW.md` without changing repository instructions.
+- Activate the shared execution policy through an assigned Symphony prompt or explicit human request rather than an `AGENTS.md` adoption block.
 - Make Symphony execution intrinsic to `setup-workflow` and separate repository-owned workflow facts from deployment-owned runtime settings so onboarding reuses the deployed profile instead of asking users to configure the host again.
 - Add the GitHub Projects v2 setup profile: `Ready` dispatches work, `In progress` remains active, `In review` hands off to humans, and `Done` terminates work.
 - Rename the shared `workflow` skill to `agent-execution-policy` to distinguish it from Symphony's `WORKFLOW.md` runtime file.

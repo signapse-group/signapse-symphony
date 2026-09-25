@@ -5,7 +5,7 @@ description: Collaborate with a human technical owner to design an implementatio
 
 # Technical Design
 
-Run this skill with the human technical owner after upstream planning has produced the related implementation issues. The outcome is a codebase-grounded design and an issue handoff the human can accept. This is a human-led activity outside Symphony's unattended implementation loop. In an adopting repository, load [agent-execution-policy](../agent-execution-policy/SKILL.md) and the repository-root `AGENTS.md` for applicable authority and project facts; this skill does not invoke [implement](../implement/SKILL.md).
+Run this skill with the human technical owner after upstream planning has produced the related implementation issues. The outcome is a codebase-grounded design and an issue handoff the human can accept. This is a human-led activity outside Symphony's unattended implementation loop. Read repository instructions if present; load [agent-execution-policy](../agent-execution-policy/SKILL.md) only when the human explicitly requests that workflow for this scope. This skill does not invoke [implement](../implement/SKILL.md).
 
 ## Build the design context
 

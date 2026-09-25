@@ -5,7 +5,7 @@ description: Review issue adherence and technical correctness with one independe
 
 # Code Review
 
-Require repository adoption as defined by [agent-execution-policy](../agent-execution-policy/SKILL.md), then use its shared policy and the repository-root `AGENTS.md`, reusing them if already in context. Read linked policies only for the reviewed scope. Return two separate axes in one review: **Requirement adherence** and **Correctness & Standards**. This skill reviews work; it does not edit code, publish remote feedback, commit, or create a PR unless the user explicitly requests those actions.
+Use [agent-execution-policy](../agent-execution-policy/SKILL.md) when reviewing an explicitly assigned workflow run; a standalone review does not activate the issue lifecycle. Read repository instructions if present, reusing them if already in context. Read linked policies only for the reviewed scope. Return two separate axes in one review: **Requirement adherence** and **Correctness & Standards**. This skill reviews work; it does not edit code, publish remote feedback, commit, or create a PR unless the user explicitly requests those actions.
 
 ## Establish Sources and Scope
 

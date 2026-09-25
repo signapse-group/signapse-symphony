@@ -66,7 +66,7 @@ repository: tracker-native names must come from that repository's configured boa
 ```markdown
 You are working on assigned work item `{{ issue.identifier }}` in this repository.
 
-Read the root `AGENTS.md`, load `$agent-execution-policy`, and invoke `$implement` for this work item. The work item is the accepted implementation contract for this unattended run.
+Read repository instructions if present, load `$agent-execution-policy`, and invoke `$implement` for this work item. The work item is the accepted implementation contract for this unattended run.
 
 Issue context:
 
@@ -83,7 +83,7 @@ Description:
 No description provided.
 {% endif %}
 
-This run authorizes implementation, verification, commits, branch push, pull-request creation or update, required CI follow-up, and configured issue-state transitions through the repository's review handoff boundary. Continue from the existing workspace and pull request on later attempts. Do not merge or deploy unless `AGENTS.md` explicitly assigns that action for the current state.
+This run authorizes implementation, verification, commits, branch push, pull-request creation or update, required CI follow-up, and configured issue-state transitions through the repository's review handoff boundary. Continue from the existing workspace and pull request on later attempts. Do not merge or deploy unless the assigned prompt explicitly authorizes that action for the current state.
 ```
 
 Keep additional prompt instructions only when they express a repository-specific fact or a real unattended-runtime constraint. Do not duplicate the implementation, testing, review, or delivery procedure already owned by `$agent-execution-policy` and `$implement`.
@@ -93,8 +93,8 @@ Before writing, check these invariants:
 - dispatch states select only work that is ready for autonomous implementation;
 - active states keep intended continuation attempts running and exclude human-wait states;
 - terminal states cannot be redispatched;
-- the prompt's authorized state transitions match the tracker configuration and `AGENTS.md` delivery condition;
+- the prompt's authorized state transitions match the tracker configuration and verified repository delivery condition;
 - the review handoff state is a non-terminal human-owned boundary and is excluded from
   `active_states` when Symphony should stop there;
-- `AGENTS.md` identifies this file as the Symphony runtime entrypoint without treating its unattended prompt as a rule for ordinary interactive sessions;
+- the prompt states the repository facts required for unattended execution or points to stable repository sources for them, without requiring `AGENTS.md` or an adoption block;
 - the resulting YAML parses and contains no unresolved placeholder in a required runtime field.
