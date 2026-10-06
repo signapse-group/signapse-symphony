@@ -34,6 +34,12 @@ help with the setup:
 > Set up Symphony for my repository based on
 > https://github.com/openai/symphony/blob/main/elixir/README.md
 
+Each target repository owns its `WORKFLOW.md` configuration and agent prompt, including its
+implementation, verification, and PR handoff rules. Symphony loads that file; optional agent skills
+are maintained by the target repository independently of Symphony releases.
+
+For Jira Subtask workers, see the [Jira configuration and execution example](elixir/README.md#routed-jira-subtask-workflows).
+
 ---
 
 ## License

@@ -526,6 +526,145 @@ defmodule SymphonyElixir.Jira.AdapterTest do
     assert :ok = Config.validate!()
   end
 
+  test "routed Jira configuration cannot silently widen to project-wide work" do
+    assert :ok = JiraAdapter.validate_config(routed_settings())
+
+    for key <- ["issue_types", "routing_labels"], value <- [[], nil, [42], [" "]] do
+      settings = put_in(routed_settings(), [:provider, key], value)
+      assert {:error, _reason} = JiraAdapter.validate_config(settings)
+    end
+
+    for labels <- [[], ["route-unknown"], ["route-backend", "route-frontend"]] do
+      settings = %{routed_settings() | required_labels: labels}
+      assert {:error, :invalid_jira_routing_config} = JiraAdapter.validate_config(settings)
+    end
+
+    assert {:error, :invalid_jira_routing_config} =
+             JiraAdapter.validate_config(update_in(routed_settings(), [:provider], &Map.delete(&1, "issue_types")))
+
+    write_jira_workflow!(Workflow.workflow_file_path(), "test-token", true)
+    assert :ok = Config.validate!()
+    assert Tracker.bind_agent_tools().tracker_settings.provider["issue_types"] == ["Subtask"]
+  end
+
+  test "routed candidate and terminal searches exclude parents and conflicting or missing routes" do
+    settings = routed_settings()
+    good = raw_subtask("10001", "SYM-1")
+
+    excluded = [
+      put_in(good, ["fields", "issuetype"], %{"id" => "task", "name" => "Task", "subtask" => false}),
+      put_in(good, ["fields", "issuetype", "subtask"], false),
+      update_in(good, ["fields"], &Map.delete(&1, "parent")),
+      update_in(good, ["fields"], &Map.delete(&1, "issuetype")),
+      put_in(good, ["fields", "labels"], []),
+      put_in(good, ["fields", "labels"], ["route-frontend"]),
+      put_in(good, ["fields", "labels"], ["route-backend", "route-frontend"])
+    ]
+
+    for status <- ["Ready", "Done"] do
+      request_fun = fn "POST", "/rest/api/3/search/jql", %{}, body, _settings ->
+        project_states = ~s|project = "SYM" AND status IN ("#{status}")|
+        assert body["jql"] == project_states <> ~s| AND issuetype IN ("Subtask") AND labels = "route-backend"|
+        assert "issuetype" in body["fields"]
+        assert "parent" in body["fields"]
+        issues = Enum.map([good | excluded], &put_in(&1, ["fields", "status", "name"], status))
+        {:ok, %{status: 200, body: %{"issues" => issues, "isLast" => true}}}
+      end
+
+      assert {:ok, [issue]} = JiraClient.fetch_issues_by_states_for_test([status], settings, request_fun)
+      assert %Issue{id: "10001", state: ^status} = issue
+      assert issue.labels == ["route-backend", "platform"]
+      assert issue.native_ref.parent == %{id: "parent-1", key: "SYM-100"}
+      assert issue.native_ref.issue_type == %{id: "subtask", name: "Subtask", subtask: true}
+    end
+  end
+
+  test "by-ID refresh exposes changed Jira ownership as ineligible without losing the record" do
+    type = %{"id" => "task", "name" => "Task", "subtask" => false}
+    changed_type = put_in(raw_subtask("10001", "SYM-1"), ["fields", "issuetype"], type)
+    changed_route = put_in(raw_subtask("10001", "SYM-1"), ["fields", "labels"], ["route-frontend"])
+
+    for changed <- [changed_route, changed_type] do
+      request_fun = fn "POST", "/rest/api/3/issue/bulkfetch", %{}, _body, _settings ->
+        {:ok, %{status: 200, body: %{"issues" => [changed]}}}
+      end
+
+      assert {:ok, [issue]} = JiraClient.fetch_issues_by_ids_for_test(["10001"], routed_settings(), request_fun)
+      assert %Issue{id: "10001", dispatchable: false} = issue
+      refute Issue.routable?(issue, ["route-backend"])
+    end
+  end
+
+  test "Jira dependencies gate Ready and Progress admission without interrupting ongoing work" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_dispatch_states: ["Ready", "Progress"],
+      tracker_active_states: ["Ready", "Progress"],
+      tracker_terminal_states: ["Done"],
+      tracker_required_labels: ["route-backend"]
+    )
+
+    outcomes = [{"Closed", "done", true}, {"Resolved", "indeterminate", false}, {"Unknown", nil, false}]
+    state = %Orchestrator.State{max_concurrent_agents: 1}
+
+    for status <- ["Ready", "Progress"], {blocker_status, category, admitted?} <- outcomes do
+      blocker = linked_issue("20001", "OTHER-1", blocker_status) |> put_in(["fields", "status", "statusCategory"], %{"key" => category})
+
+      issue =
+        raw_subtask("10001", "SYM-1", status)
+        |> put_in(["fields", "issuelinks"], [%{"type" => %{"name" => "Blocks"}, "inwardIssue" => blocker}])
+        |> JiraClient.normalize_issue_for_test(routed_settings())
+
+      assert Issue.routable?(issue, ["route-backend"])
+      assert issue.admission_ready == admitted?
+      assert Orchestrator.should_dispatch_issue_for_test(issue, state) == admitted?
+
+      fetcher = fn ["10001"] -> {:ok, [issue]} end
+      assert {:continue, ^issue} = AgentRunner.continue_with_issue_for_test(issue, fetcher)
+
+      if admitted? do
+        assert {:ok, ^issue} = Orchestrator.revalidate_issue_for_dispatch_for_test(issue, fetcher)
+      else
+        assert {:skip, ^issue} = Orchestrator.revalidate_issue_for_dispatch_for_test(issue, fetcher)
+        state = %Orchestrator.State{claimed: MapSet.new([issue.id])}
+        updated = Orchestrator.handle_retry_issue_lookup_for_test(issue, state, issue.id, 1, %{})
+        refute MapSet.member?(updated.claimed, issue.id)
+      end
+    end
+
+    malformed = put_in(raw_subtask("10001", "SYM-1"), ["fields", "issuelinks"], nil)
+    refute JiraClient.normalize_issue_for_test(malformed, routed_settings()).admission_ready
+
+    empty_link = %{"type" => %{"name" => "Blocks"}}
+
+    for link <- [false, Map.put(empty_link, "inwardIssue", nil), empty_link] do
+      malformed = put_in(raw_subtask("10001", "SYM-1"), ["fields", "issuelinks"], [link])
+      refute JiraClient.normalize_issue_for_test(malformed, routed_settings()).admission_ready
+    end
+  end
+
+  test "Jira prompt context retains parent identifiers and reference URLs" do
+    reference = %{"type" => "text", "text" => "Contract", "marks" => [%{"type" => "link", "attrs" => %{"href" => "https://example.test/contract"}}]}
+    raw = put_in(raw_subtask("10001", "SYM-1"), ["fields", "description", "content"], [%{"type" => "paragraph", "content" => [reference]}])
+    issue = JiraClient.normalize_issue_for_test(raw, routed_settings())
+
+    write_workflow_file!(Workflow.workflow_file_path(), prompt: "{{ issue.native_ref.parent.key }} {{ issue.native_ref.issue_type.name }} {{ issue.description }}")
+
+    assert PromptBuilder.build_prompt(issue) == "SYM-100 Subtask Contract (https://example.test/contract)"
+  end
+
+  defp routed_settings do
+    tracker_settings(%{"issue_types" => ["Subtask"], "routing_labels" => ["route-backend", "route-frontend"]})
+    |> Map.put(:required_labels, ["route-backend"])
+  end
+
+  defp raw_subtask(id, key, status \\ "Ready") do
+    raw_issue(id, key, status)
+    |> put_in(["fields", "issuetype"], %{"id" => "subtask", "name" => "Subtask", "subtask" => true})
+    |> put_in(["fields", "parent"], %{"id" => "parent-1", "key" => "SYM-100"})
+    |> put_in(["fields", "labels"], [" Route-Backend ", "platform"])
+    |> put_in(["fields", "issuelinks"], [])
+  end
+
   defp tracker_settings(provider_overrides \\ %{}) do
     %{
       kind: "jira",
@@ -582,7 +721,7 @@ defmodule SymphonyElixir.Jira.AdapterTest do
     }
   end
 
-  defp write_jira_workflow!(path, token) do
+  defp write_jira_workflow!(path, token, routed \\ false) do
     File.write!(
       path,
       """
@@ -594,6 +733,7 @@ defmodule SymphonyElixir.Jira.AdapterTest do
           email: "agent@example.test"
           api_token: #{Jason.encode!(token)}
           project_key: "SYM"
+      #{if routed, do: "    issue_types: [Subtask]\n    routing_labels: [route-backend, route-frontend]\n  required_labels: [route-backend]", else: ""}
         active_states: ["To Do"]
         terminal_states: ["Done"]
       ---

@@ -7,6 +7,9 @@ defmodule SymphonyElixir.Tracker.Issue do
   board or project entry. `native_ref` carries non-secret provider identifiers
   needed by provider-native agent tools. `identifier` remains the human-readable
   value used to derive the workspace key and must be unique within that scope.
+
+  `admission_ready` is an optional adapter gate for starting or retrying a worker.
+  It defaults to true and does not affect routing or an already-running worker.
   """
 
   defstruct [
@@ -23,6 +26,7 @@ defmodule SymphonyElixir.Tracker.Issue do
     blocked_by: [],
     labels: [],
     dispatchable: false,
+    admission_ready: true,
     created_at: nil,
     updated_at: nil
   ]
@@ -41,6 +45,7 @@ defmodule SymphonyElixir.Tracker.Issue do
           labels: [String.t()],
           blocked_by: [map()],
           dispatchable: boolean(),
+          admission_ready: boolean(),
           created_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }

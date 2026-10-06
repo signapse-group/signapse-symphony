@@ -126,7 +126,6 @@ defmodule SymphonyElixir.CoreTest do
     hooks = Map.get(config, "hooks", %{})
     assert is_map(hooks)
     assert Map.get(hooks, "after_create") =~ "git clone --depth 1 https://github.com/signapse-group/signapse-symphony ."
-    assert Map.get(hooks, "after_create") =~ "cp -R workflow/skills/* .codex/skills/"
     assert Map.get(hooks, "after_create") =~ "cd elixir && mise trust"
     assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
     assert Map.get(hooks, "before_remove") =~ "cd elixir && mise exec -- mix workspace.before_remove"
@@ -352,7 +351,7 @@ defmodule SymphonyElixir.CoreTest do
     assert Process.alive?(runtime_pid)
   end
 
-  test "restarting the orchestrator does not overlap redispatched work" do
+  test "Progress recovery after restart and review or blocker resume reuses one workspace" do
     issue_suffix = System.unique_integer([:positive])
 
     test_root =
@@ -363,6 +362,7 @@ defmodule SymphonyElixir.CoreTest do
 
     hook_marker = Path.join(test_root, "before-run-started")
     hook_fifo = Path.join(test_root, "before-run-blocker")
+    create_marker = Path.join(test_root, "workspace-created")
     runtime_supervisor_name = Module.concat(__MODULE__, "AgentRuntimeSupervisor#{issue_suffix}")
     task_supervisor_name = Module.concat(__MODULE__, "TaskSupervisor#{issue_suffix}")
     orchestrator_name = Module.concat(__MODULE__, "RestartOrchestrator#{issue_suffix}")
@@ -374,9 +374,9 @@ defmodule SymphonyElixir.CoreTest do
       identifier: "MT-#{issue_suffix}",
       title: "Restart an in-flight worker",
       description: "Keep one worker active while the orchestrator restarts",
-      state: "In Progress",
+      state: "Progress",
       url: "https://example.org/issues/MT-#{issue_suffix}",
-      labels: [],
+      labels: ["route-backend"],
       dispatchable: true
     }
 
@@ -400,8 +400,13 @@ defmodule SymphonyElixir.CoreTest do
 
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
+      tracker_dispatch_states: ["Ready", "Progress"],
+      tracker_active_states: ["Ready", "Progress"],
+      tracker_terminal_states: ["Done"],
+      tracker_required_labels: ["route-backend"],
       workspace_root: test_root,
       poll_interval_ms: 10,
+      hook_after_create: "printf x >> \"#{create_marker}\"",
       hook_before_run: "mkfifo \"#{hook_fifo}\"; : > \"#{hook_marker}\"; read _ < \"#{hook_fifo}\"",
       hook_timeout_ms: 60_000
     )
@@ -473,6 +478,19 @@ defmodule SymphonyElixir.CoreTest do
 
     assert is_pid(second_worker_pid)
     assert Process.alive?(second_worker_pid)
+
+    for inactive_status <- ["In Review", "Blocked"] do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue | state: inactive_status}])
+      assert eventually_value(fn -> if Task.Supervisor.children(task_supervisor_name) == [], do: true end)
+      assert File.read!(create_marker) == "x"
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      assert eventually_value(fn -> if length(Task.Supervisor.children(task_supervisor_name)) == 1, do: true end)
+    end
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue | state: "In Review"}])
+    assert eventually_value(fn -> if Task.Supervisor.children(task_supervisor_name) == [], do: true end)
+    assert File.read!(create_marker) == "x"
   end
 
   test "linear issue state reconciliation fetch with no running issues is a no-op" do
@@ -604,6 +622,7 @@ defmodule SymphonyElixir.CoreTest do
         state: "Closed",
         title: "Done",
         description: "Completed",
+        dispatchable: true,
         labels: []
       }
 
@@ -674,6 +693,7 @@ defmodule SymphonyElixir.CoreTest do
         state: "Closed",
         title: "Done",
         description: "Completed",
+        dispatchable: true,
         labels: []
       }
 
@@ -684,6 +704,73 @@ defmodule SymphonyElixir.CoreTest do
     after
       File.rm_rf(test_root)
     end
+  end
+
+  test "terminal cleanup preserves workspaces after route or type ownership changes" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-terminal-scope-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf(test_root) end)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_dispatch_states: ["Ready", "Progress"],
+      tracker_active_states: ["Ready", "Progress"],
+      tracker_terminal_states: ["Done"],
+      tracker_required_labels: ["route-backend"],
+      workspace_root: test_root
+    )
+
+    owned = %Issue{
+      id: "terminal-owned",
+      identifier: "SYM-1",
+      title: "Owned",
+      state: "Done",
+      labels: ["route-backend"],
+      dispatchable: true,
+      admission_ready: false
+    }
+
+    changed_route = %{owned | id: "terminal-foreign", identifier: "SYM-2", labels: ["route-frontend"]}
+    changed_type = %{owned | id: "terminal-parent", identifier: "SYM-3", dispatchable: false}
+
+    {:ok, owned_workspace} = Workspace.create_for_issue(owned)
+    {:ok, protected_workspace} = Workspace.create_for_issue(changed_route)
+    {:ok, type_workspace} = Workspace.create_for_issue(changed_type)
+
+    task_supervisor = start_supervised!(Task.Supervisor)
+    {:ok, worker} = Task.Supervisor.start_child(task_supervisor, fn -> receive do: (:stop -> :ok) end)
+
+    entry = %{
+      pid: worker,
+      ref: nil,
+      identifier: changed_route.identifier,
+      issue: %{changed_route | state: "Progress", labels: ["route-backend"]},
+      workspace_path: protected_workspace,
+      started_at: DateTime.utc_now()
+    }
+
+    state = %Orchestrator.State{task_supervisor: task_supervisor, running: %{changed_route.id => entry}, claimed: MapSet.new([changed_route.id]), codex_totals: %{}}
+
+    reconciled = Orchestrator.reconcile_issue_states_for_test([changed_route], state)
+    refute Process.alive?(worker)
+    refute Map.has_key?(reconciled.running, changed_route.id)
+    assert File.dir?(protected_workspace)
+
+    blocked = %Orchestrator.State{blocked: %{changed_route.id => entry}, claimed: state.claimed}
+    refute Map.has_key?(Orchestrator.reconcile_blocked_issue_states_for_test([changed_route], blocked).blocked, changed_route.id)
+
+    for issue <- [changed_route, changed_type] do
+      retried = Orchestrator.handle_retry_issue_lookup_for_test(issue, %Orchestrator.State{claimed: MapSet.new([issue.id])}, issue.id, 1, %{workspace_path: protected_workspace})
+      refute MapSet.member?(retried.claimed, issue.id)
+      assert File.dir?(protected_workspace)
+      assert File.dir?(type_workspace)
+    end
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [owned, changed_route, changed_type])
+    orchestrator = start_supervised!({Orchestrator, name: Module.concat(__MODULE__, :ScopeCleanup)})
+    assert %{running: []} = GenServer.call(orchestrator, :snapshot)
+    refute File.dir?(owned_workspace)
+    assert File.dir?(protected_workspace)
+    assert File.dir?(type_workspace)
   end
 
   test "missing running issues stop active agents without cleaning the workspace" do
@@ -1030,6 +1117,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "normal worker exit schedules active-state continuation retry" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
     issue_id = "issue-resume"
     ref = make_ref()
     orchestrator_name = Module.concat(__MODULE__, :ContinuationOrchestrator)
@@ -1070,6 +1158,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "abnormal worker exit increments retry attempt progressively" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
     issue_id = "issue-crash"
     ref = make_ref()
     orchestrator_name = Module.concat(__MODULE__, :CrashRetryOrchestrator)
@@ -1110,6 +1199,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "first abnormal worker exit waits before retrying" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
     issue_id = "issue-crash-initial"
     ref = make_ref()
     orchestrator_name = Module.concat(__MODULE__, :InitialCrashRetryOrchestrator)
@@ -1519,7 +1609,9 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "State: In progress"
     assert prompt =~ "https://github.com/signapse-group/signapse-symphony/issues/616"
     assert prompt =~ "This is follow-up attempt #2"
-    assert prompt =~ "Move to `In review` only after `$implement`'s checks"
+    assert prompt =~ "Move to `In review` only after required checks, review, and CI pass"
+    assert prompt =~ "make -C elixir all"
+    assert prompt =~ ".github/pull_request_template.md"
     assert prompt =~ "Do not merge, deploy, mark the item `Done`"
   end
 

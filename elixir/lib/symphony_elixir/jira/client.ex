@@ -17,6 +17,8 @@ defmodule SymphonyElixir.Jira.Client do
     "created",
     "updated",
     "project",
+    "issuetype",
+    "parent",
     "issuelinks"
   ]
 
@@ -92,7 +94,7 @@ defmodule SymphonyElixir.Jira.Client do
   defp fetch_state_pages(states, settings, next_page_token, request_fun, pages) do
     body =
       %{
-        "jql" => state_jql(settings.project_key, states),
+        "jql" => state_jql(settings, states),
         "fields" => @issue_fields,
         "maxResults" => @page_size
       }
@@ -180,7 +182,10 @@ defmodule SymphonyElixir.Jira.Client do
 
     issues
     |> Enum.reject(&is_nil/1)
-    |> Enum.filter(&MapSet.member?(requested_states, normalize_state(&1.state)))
+    |> Enum.filter(fn issue ->
+      MapSet.member?(requested_states, normalize_state(issue.state)) and
+        (settings.issue_types == [] or Issue.routable?(issue, settings.required_labels))
+    end)
   end
 
   defp normalize_requested_issues(raw_issues, requested_ids, settings) do
@@ -231,16 +236,21 @@ defmodule SymphonyElixir.Jira.Client do
   defp normalize_issue(%{"id" => id, "key" => key, "fields" => fields}, settings)
        when is_binary(id) and is_binary(key) and is_map(fields) do
     title = fields["summary"]
-    state = get_in(fields, ["status", "name"])
-    status_category = get_in(fields, ["status", "statusCategory", "key"])
+    state = issue_status(fields)["name"]
+    status_category = status_category(issue_status(fields))
     blockers = extract_blockers(fields["issuelinks"])
+    native_ref = native_ref(fields)
+    labels = extract_labels(fields["labels"])
+    selection_error = selection_error(native_ref, labels, settings)
 
     if same_project_key?(issue_project_key(%{"fields" => fields}), settings.project_key) and
          present_string?(id) and
          present_string?(key) and present_string?(title) and present_string?(state) do
+      log_selection_error(selection_error, id, key)
+
       %Issue{
         id: id,
-        native_ref: nil,
+        native_ref: native_ref,
         identifier: key,
         title: title,
         description: description_text(fields["description"]),
@@ -249,9 +259,10 @@ defmodule SymphonyElixir.Jira.Client do
         branch_name: nil,
         url: "#{settings.base_url}/browse/#{URI.encode(key, &URI.char_unreserved?/1)}",
         assignee_id: get_in(fields, ["assignee", "accountId"]),
-        labels: extract_labels(fields["labels"]),
+        labels: labels,
         blocked_by: blockers,
-        dispatchable: dispatchable?(state, status_category, blockers, settings.terminal_states),
+        dispatchable: is_nil(selection_error) and dispatchable?(state, status_category, blockers, settings),
+        admission_ready: dependencies_ready?(fields["issuelinks"], blockers, settings),
         created_at: parse_datetime(fields["created"]),
         updated_at: parse_datetime(fields["updated"])
       }
@@ -259,6 +270,68 @@ defmodule SymphonyElixir.Jira.Client do
   end
 
   defp normalize_issue(_issue, _settings), do: nil
+
+  defp log_selection_error(nil, _id, _key), do: :ok
+
+  defp log_selection_error(reason, id, key) do
+    Logger.warning("Skipping Jira issue outside worker scope: issue_id=#{id} issue_identifier=#{key} reason=#{reason}")
+  end
+
+  defp native_ref(fields) do
+    type = fields["issuetype"]
+    parent = fields["parent"]
+
+    if is_map(type) or is_map(parent) do
+      %{
+        issue_type: issue_type_ref(type),
+        parent: parent_ref(parent)
+      }
+    end
+  end
+
+  defp issue_type_ref(%{"id" => id, "name" => name, "subtask" => subtask})
+       when is_binary(id) and is_binary(name) and is_boolean(subtask) do
+    if present_string?(id) and present_string?(name), do: %{id: id, name: name, subtask: subtask}
+  end
+
+  defp issue_type_ref(_type), do: nil
+
+  defp parent_ref(%{"id" => id, "key" => key}) when is_binary(id) and is_binary(key) do
+    if present_string?(id) and present_string?(key), do: %{id: id, key: key}
+  end
+
+  defp parent_ref(_parent), do: nil
+
+  defp selection_error(native_ref, labels, settings) do
+    type = if is_map(native_ref), do: native_ref.issue_type
+
+    cond do
+      settings.issue_types != [] and not selected_type?(type, settings.issue_types) -> :issue_type
+      settings.routing_labels != [] and not valid_subtask?(native_ref) -> :subtask_parent
+      settings.routing_labels != [] and Enum.filter(labels, &(&1 in settings.routing_labels)) != settings.worker_routes -> :routing_labels
+      true -> nil
+    end
+  end
+
+  defp valid_subtask?(%{issue_type: %{subtask: true}, parent: parent}) when is_map(parent), do: true
+  defp valid_subtask?(_native_ref), do: false
+
+  defp dependencies_ready?(_links, _blockers, %{routing_labels: []}), do: true
+
+  defp dependencies_ready?(links, blockers, _settings) when is_list(links) do
+    Enum.all?(links, fn
+      %{"type" => %{"name" => name}} -> present_string?(name)
+      _ -> false
+    end) and Enum.all?(blockers, &(present_string?(&1.id) and present_string?(&1.identifier) and &1[:status_category] == "done"))
+  end
+
+  defp dependencies_ready?(_links, _blockers, _settings), do: false
+
+  defp selected_type?(%{id: id, name: name}, types) do
+    Enum.any?(types, &(normalize_state(&1) in [normalize_state(id), normalize_state(name)]))
+  end
+
+  defp selected_type?(_type, _types), do: false
 
   defp description_text(nil), do: nil
 
@@ -275,6 +348,12 @@ defmodule SymphonyElixir.Jira.Client do
   defp description_text(_value), do: nil
 
   defp adf_text(%{"type" => "hardBreak"}), do: "\n"
+
+  defp adf_text(%{"text" => text, "marks" => marks}) when is_binary(text) and is_list(marks) do
+    urls = for %{"type" => "link", "attrs" => %{"href" => url}} <- marks, is_binary(url) and url != text, do: url
+    Enum.reduce(Enum.uniq(urls), text, fn url, acc -> acc <> " (#{url})" end)
+  end
+
   defp adf_text(%{"text" => text}) when is_binary(text), do: text
 
   defp adf_text(%{"type" => type, "content" => content})
@@ -316,7 +395,7 @@ defmodule SymphonyElixir.Jira.Client do
   defp extract_blockers(_links), do: []
 
   defp extract_blocker(%{"type" => %{"name" => type_name}, "inwardIssue" => blocker_issue})
-       when is_binary(type_name) and is_map(blocker_issue) do
+       when is_binary(type_name) do
     if normalize_state(type_name) == "blocks" do
       [blocker_ref(blocker_issue)]
     else
@@ -324,17 +403,34 @@ defmodule SymphonyElixir.Jira.Client do
     end
   end
 
+  defp extract_blocker(%{"type" => %{"name" => type_name}} = link) when is_binary(type_name) do
+    if normalize_state(type_name) == "blocks" and not is_map(link["outwardIssue"]), do: [blocker_ref(nil)], else: []
+  end
+
   defp extract_blocker(_link), do: []
 
-  defp blocker_ref(blocker_issue) do
+  defp blocker_ref(blocker_issue) when is_map(blocker_issue) do
+    status = issue_status(blocker_issue["fields"])
+
     %{
       id: optional_string(blocker_issue["id"]),
       identifier: optional_string(blocker_issue["key"]),
-      state: optional_string(get_in(blocker_issue, ["fields", "status", "name"]))
+      state: optional_string(status["name"])
     }
+    |> maybe_put(:status_category, status_category(status))
   end
 
-  defp dispatchable?(state, status_category, blockers, terminal_states) do
+  defp blocker_ref(_blocker), do: %{id: nil, identifier: nil, state: nil}
+
+  defp issue_status(%{"status" => status}) when is_map(status), do: status
+  defp issue_status(_fields), do: %{}
+
+  defp status_category(%{"statusCategory" => %{"key" => key}}), do: optional_string(key)
+  defp status_category(_status), do: nil
+
+  defp dispatchable?(_state, _status_category, _blockers, %{routing_labels: [_ | _]}), do: true
+
+  defp dispatchable?(state, status_category, blockers, %{terminal_states: terminal_states}) do
     not blocks_gate_dispatch?(state, status_category) or
       Enum.all?(blockers, &terminal_blocker?(&1, terminal_states))
   end
@@ -431,16 +527,44 @@ defmodule SymphonyElixir.Jira.Client do
         {:error, :missing_jira_project_key}
 
       true ->
-        {:ok,
-         %{
-           base_url: String.trim_trailing(base_url, "/"),
-           email: email,
-           api_token: api_token,
-           project_key: project_key,
-           terminal_states: terminal_states(tracker_settings)
-         }}
+        with {:ok, types} <- configured_names(provider, "issue_types", :invalid_jira_issue_types),
+             {:ok, routes} <- configured_names(provider, "routing_labels", :invalid_jira_routing_labels),
+             routes = routes |> Enum.map(&normalize_state/1) |> Enum.uniq(),
+             required_labels = extract_labels(Map.get(tracker_settings, :required_labels, [])),
+             worker_routes = Enum.filter(required_labels, &(&1 in routes)),
+             :ok <- validate_routing(types, routes, worker_routes) do
+          {:ok,
+           %{
+             base_url: String.trim_trailing(base_url, "/"),
+             email: email,
+             api_token: api_token,
+             project_key: project_key,
+             issue_types: types,
+             routing_labels: routes,
+             worker_routes: worker_routes,
+             required_labels: required_labels,
+             terminal_states: terminal_states(tracker_settings)
+           }}
+        end
     end
   end
+
+  defp configured_names(provider, key, error) do
+    case Map.fetch(provider, key) do
+      :error ->
+        {:ok, []}
+
+      {:ok, values} when is_list(values) and values != [] ->
+        if Enum.all?(values, &present_string?/1), do: {:ok, values |> Enum.map(&String.trim/1) |> Enum.uniq()}, else: {:error, error}
+
+      _ ->
+        {:error, error}
+    end
+  end
+
+  defp validate_routing(_types, [], _worker_routes), do: :ok
+  defp validate_routing([_ | _], [_ | _], [_]), do: :ok
+  defp validate_routing(_types, _routes, _worker_routes), do: {:error, :invalid_jira_routing_config}
 
   defp provider_settings(%{provider: provider}) when is_map(provider), do: provider
   defp provider_settings(_tracker_settings), do: %{}
@@ -505,9 +629,11 @@ defmodule SymphonyElixir.Jira.Client do
     ]
   end
 
-  defp state_jql(project_key, states) do
+  defp state_jql(settings, states) do
     quoted_states = Enum.map_join(states, ", ", &jql_string/1)
-    "project = #{jql_string(project_key)} AND status IN (#{quoted_states})"
+    type_clause = if settings.issue_types == [], do: "", else: " AND issuetype IN (#{Enum.map_join(settings.issue_types, ", ", &jql_string/1)})"
+    label_clauses = Enum.map_join(settings.required_labels, "", &(" AND labels = " <> jql_string(&1)))
+    "project = #{jql_string(settings.project_key)} AND status IN (#{quoted_states})" <> type_clause <> label_clauses
   end
 
   defp jql_string(value) do

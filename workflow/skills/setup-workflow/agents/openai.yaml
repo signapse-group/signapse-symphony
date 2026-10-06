@@ -1,6 +1,0 @@
-interface:
-  display_name: "Setup Workflow"
-  short_description: "Configure Symphony in WORKFLOW.md"
-  default_prompt: "Use $setup-workflow to inspect this repository and draft its Symphony WORKFLOW.md."
-policy:
-  allow_implicit_invocation: false

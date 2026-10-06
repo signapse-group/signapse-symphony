@@ -193,6 +193,9 @@ Fields:
   - REQUIRED adapter-derived eligibility for provider-specific rules that the generic scheduler
     cannot infer safely, such as assignment, board membership, or blocker semantics.
   - The orchestrator still applies configured state, label, claim, retry, and concurrency rules.
+- `admission_ready` (boolean, default `true`)
+  - OPTIONAL adapter-derived gate for starting or retrying a worker, separate from ongoing routing.
+  - A false value prevents admission/re-admission but MUST NOT by itself stop a running worker.
 - `created_at` (timestamp or null)
 - `updated_at` (timestamp or null)
 
@@ -406,6 +409,21 @@ Fields:
 - `terminal_states` (list of strings)
   - REQUIRED unless the selected adapter profile documents a default.
   - Values are provider-native state names compared case-insensitively by the scheduler.
+
+Jira routed-Subtask extension:
+
+- `provider.issue_types` optionally selects a nonempty list of type names or IDs.
+- `provider.routing_labels` optionally supplies the complete set of repository routes. When set,
+  it requires `issue_types` and exactly one matching route in `required_labels`. Invalid/empty/null
+  filter values MUST fail validation. Issues must have a native Subtask type, a valid native parent,
+  and exactly that one recognized route; unrelated labels may coexist.
+- Candidate queries and returned payloads apply the selection contract, including terminal sweeps.
+  ID refresh preserves readable changed-ownership records with `dispatchable=false`.
+- Routed Subtasks use Jira blocker identity and status category `done` for `admission_ready`, in
+  both initial and resumed execution. Missing/invalid dependency metadata is unsatisfied. This is
+  separate from ongoing routing; existing unprofiled Jira behavior remains supported.
+- Parent/type identifiers belong in `native_ref`; agent-owned reads and transitions use the existing
+  native tool. The runtime does not implement parent acceptance or operation-specific delivery gates.
 
 #### 5.3.2 `polling` (object)
 
@@ -768,6 +786,7 @@ An issue is dispatch-eligible only if all are true:
 - It has `id`, `identifier`, `title`, and `state`.
 - Its state is in `dispatch_states` and not in `terminal_states`.
 - Its adapter-provided `dispatchable` value is `true`.
+- Its adapter-provided `admission_ready` value is `true` (defaults to true for existing adapters).
 - It contains every label in `tracker.required_labels`.
 - It is not already in `running`.
 - It is not already in `claimed`.
@@ -778,6 +797,9 @@ For refresh and continuation checks, `issue_routable(issue)` means only that ada
 `dispatchable` is true and all `tracker.required_labels` match. State, claims, and concurrency are
 checked separately by the surrounding algorithm. Running and retrying workers use `active_states`,
 so an agent-owned state transition can leave `dispatch_states` without stopping the current work.
+Retries additionally require `admission_ready`; running reconciliation and in-session continuation
+do not. Terminal cleanup MUST check current routing before removing a workspace, including when
+ownership and terminal status change in the same refresh.
 
 Sorting order (stable intent):
 
@@ -815,11 +837,12 @@ Retry handling behavior:
 
 1. Refresh the specific issue with `fetch_issues_by_ids([issue_id])`.
 2. If not found, release claim.
-3. If found in a terminal state, clean its workspace and release claim.
-4. If found and still active and routable:
+3. If no longer routable, release claim without cleaning its workspace, even in a terminal state.
+4. If found in a terminal state and still routable, clean its workspace and release claim.
+5. If found and still active, routable and admission-ready:
    - Dispatch if slots are available.
    - Otherwise requeue with error `no available orchestrator slots`.
-5. If found but no longer active or routable, release claim without dispatch.
+6. Otherwise release claim without dispatch.
 
 Note:
 
@@ -843,9 +866,9 @@ Part B: Tracker state refresh
 
 - Fetch current issue states for all running issue IDs.
 - For each running issue:
-  - If tracker state is terminal: terminate worker and clean workspace.
+  - If no longer routable: terminate worker without workspace cleanup, even in a terminal state.
+  - If tracker state is terminal and still routable: terminate worker and clean workspace.
   - If tracker state is still active and routable: update the in-memory issue snapshot.
-  - If tracker state is active but no longer routable: terminate worker without workspace cleanup.
   - If tracker state is neither active nor terminal: terminate worker without workspace cleanup.
 - If state refresh fails, keep workers running and try again on the next tick.
 
@@ -854,7 +877,7 @@ Part B: Tracker state refresh
 When the service starts:
 
 1. Query tracker for issues in terminal states.
-2. For each returned issue identifier, remove the corresponding workspace directory.
+2. For each returned issue still routable to this worker, remove the corresponding workspace directory.
 3. If the terminal-issues fetch fails, log a warning and continue startup.
 
 This prevents stale terminal workspaces from accumulating after restarts.
@@ -1887,7 +1910,9 @@ function reconcile_running_issues(state):
     return state
 
   for issue in refreshed:
-    if issue.state in terminal_states:
+    if not issue_routable(issue):
+      state = terminate_running_issue(state, issue.id, cleanup_workspace=false)
+    else if issue.state in terminal_states:
       state = terminate_running_issue(state, issue.id, cleanup_workspace=true)
     else if issue.state in active_states and issue_routable(issue):
       state.running[issue.id].issue = issue

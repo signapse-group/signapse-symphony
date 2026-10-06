@@ -39,17 +39,22 @@ tracker issue can become a dispatch candidate again after restart.
 
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
-2. Provide a GitHub token with access to the configured repository and Projects v2 board through
-   the `GITHUB_TOKEN` environment variable.
-3. Copy this directory's `WORKFLOW.md` to your repo.
-4. Install or copy the Agent Workflow skills into the repository so cloned workspaces can discover
-   `$agent-execution-policy` and `$implement`.
-5. Customize the copied `WORKFLOW.md` file for your project.
-   - Set `repo`, `project_owner`, and `project_number` to the target GitHub Project. The default
-     `issue_types` filter is `[Task, Bug]`; verify both types occur in the Project before using it.
+2. Provide the host-side credentials required by your selected tracker adapter, plus separate
+   code-host access for cloning and PRs when applicable. See the adapter sections below.
+3. Create a `WORKFLOW.md` in the root of your repo, using this directory's file as an example.
+4. Customize the `WORKFLOW.md` configuration and agent prompt for your project.
+   - Choose `tracker.kind` and its provider scope. For GitHub Projects, set `repo`, `project_owner`,
+     and `project_number`; its default `issue_types` filter is `[Task, Bug]`. For Jira, follow the
+     [routed Subtask example](#routed-jira-subtask-workflows) when that is your execution contract.
    - Map the board's exact status names into `dispatch_states`, `active_states`, and
      `terminal_states`; do not copy state names from another tracker.
-6. Follow the instructions below to install the required runtime dependencies and start the service.
+   - Set workspace hooks to clone and bootstrap your repository.
+   - Define implementation, verification, PR requirements, permissions, and handoff rules in the
+     prompt, referring to your repository's `AGENTS.md` and optional installed skills as needed.
+5. Follow the instructions below to install the required runtime dependencies and start the service.
+
+Symphony does not require a shared workflow skills package. Each repository maintains its workflow
+and optional skills independently of the Symphony runtime.
 
 ## Prerequisites
 
@@ -284,12 +289,104 @@ codex:
 - Config: use `tracker.kind: jira` with provider `base_url`, `email`, `api_token`, and required
   `project_key`; the first three default to `JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_API_TOKEN`
   and accept `$VAR`. Set explicit Jira-native `active_states` and `terminal_states`.
-- Issues and reads: candidate reads and ID refreshes stay scoped to the configured project and
-  requested statuses; `issue.id` is Jira's immutable ID and `issue.identifier` is the issue key.
-- Blockers: inward `Blocks` links populate `blocked_by`; issues in Jira's `new` status category
-  wait until blockers reach configured terminal states, while in-progress categories keep running.
+- Issues and reads: candidates stay scoped to the configured project and requested statuses.
+  ID refreshes read the current state within the project, including ownership changes;
+  `issue.id` is Jira's immutable ID and `issue.identifier` is the issue key. `native_ref.issue_type`
+  and `native_ref.parent` expose type/parent identifiers when Jira supplies them. ADF hyperlink
+  destinations are retained in description text; use the native tool for full live rich text/comments.
+- Filters: optional provider `issue_types` is a nonempty list of Jira type names or IDs. Optional
+  `routing_labels` is the full set of repository routes and enables the routed Subtask profile:
+  it requires `issue_types`, a native Subtask with a valid parent, and exactly one route in
+  `required_labels`. Each issue must have exactly that one recognized route. Other business labels
+  may coexist. Empty, null or malformed filter options fail configuration validation.
+- Blockers: inward `Blocks` links populate `blocked_by`. Without routing labels, existing Jira
+  behavior gates issues in the `new` category using configured terminal state names. The routed
+  profile instead checks blocker identity and Jira `done` category before starting/retrying work
+  in either Ready or Progress; unknown/malformed blockers stay unsatisfied. This `admission_ready`
+  gate does not interrupt an already-running worker. Done/Closed dependencies can pass; Resolved
+  in the In Progress category cannot. A parent relationship does not implicitly create a dependency.
+- Cleanup: searches and terminal cleanup respect the worker's type/route/required-label boundary.
+  A changed type or route stops further work while preserving its workspace, including when the
+  same refresh also observes Done. API errors are distinct from confirmed missing/changed issues.
 - Tool: `jira_rest` sends relative `/rest/api/3/` requests host-side with configured Basic auth,
   strips token environment variables from Codex, and can reach whatever the Jira credential can.
+
+#### Routed Jira Subtask workflows
+
+Each repository owns its `WORKFLOW.md` and instructions; no shared execution skills are required.
+Use one orchestrator per repository route, a matching clone hook and a distinct workspace root.
+The following front matter illustrates a backend worker; supply the full routing set from your
+coordinator, the actual project/type names, the repository clone/bootstrap hooks and Codex settings.
+
+```yaml
+tracker:
+  kind: jira
+  provider:
+    base_url: $JIRA_BASE_URL
+    email: $JIRA_EMAIL
+    api_token: $JIRA_API_TOKEN
+    project_key: SIGN
+    issue_types: [Subtask]
+    routing_labels:
+      - route-backend
+      - route-frontend
+      - route-quality-assurance
+      - route-mdg
+      - route-landing
+  required_labels: [route-backend]
+  dispatch_states: [Ready, Progress]
+  active_states: [Ready, Progress]
+  review_state: In Review
+  terminal_states: [Done]
+workspace:
+  root: $SYMPHONY_WORKSPACE_ROOT
+```
+
+Ready queues initial work after the coordinator's approval. Progress polling recovers previously
+authorized work after restart, review feedback or native Blocked resume. Reuse its existing
+workspace/output; In Review and Blocked are outside active execution. The runtime's in-memory
+operator-input suspension is separate from Jira Blocked and is cleared on restart. Avoid overlapping
+instances for one route; in-memory claims do not provide a distributed lock.
+
+Put the following execution rules in the consuming repository's prompt, alongside its actual
+verification, review, deployment and permissions instructions:
+
+```markdown
+You are executing the assigned Jira Subtask {{ issue.identifier }} in this repository.
+Read AGENTS.md and the applicable directory instructions. Use jira_rest to reread the Subtask,
+its native parent, relevant comments and linked requirements at start, resume and handoff.
+Check that its Deliverable agrees with this repository. Preserve the defined operation/scope;
+raise missing required context or material contract decisions instead of inventing requirements.
+
+Ready is coordinator approval: recheck route/dependencies and transition to Progress before
+implementation. Resolve transitions from the current issue by destination status, not guessed IDs.
+Progress resumes the same workspace, branch/PR or case/run output. Stop at In Review or Blocked.
+Review feedback returns to Progress. Reread remote state after an ambiguous write before retrying.
+
+When external input prevents meaningful progress, update this agent's blocker comment with reason,
+checks, the needed human action and the pre-Blocked status. Read it back before entering Blocked.
+The coordinator records resolution and resumes to exactly the previous status through Jira's rule.
+Verify the resolution on resume; a status change alone does not prove it was resolved.
+
+Implement and verify under this repository's checks/review policy. Create a PR only when the
+deliverable/repository requires it, using its PR template and the Subtask key in the PR title.
+Maintain one agent-owned Jira delivery handoff comment with repository, revision/output,
+review/check results, deployment or Not applicable, durable evidence and remaining gaps.
+Read the saved comment back. Transition to In Review only when the applicable handoff is ready.
+The coordinator owns Done and parent acceptance; a merge does not complete a Jira issue.
+```
+
+Include the usual issue title/body/URL/labels and `native_ref.parent` context in your prompt.
+Define the exact operation's completion boundary: implementation, cases or a QA run have different
+outputs. A reviewed QA run may report product Fail; required unexecuted scope remains Blocked.
+Deployment applies only when the deliverable requires it. GitHub PR creation/linking needs separate
+code-host authentication; `jira_rest` does not supply GitHub operations. Verify Development-panel
+linking and actual account permissions before production cutover.
+
+The example is guidance; Symphony enforces structural routing/admission, not human approval,
+delivery evidence or coordinator ownership of mutations. This repository's own `WORKFLOW.md`
+continues to describe its separate GitHub self-execution contract. Updating these files does not
+switch installed workers or execute a Jira canary.
 
 ### Asana adapter
 
