@@ -363,15 +363,18 @@ implementation. Resolve transitions from the current issue by destination status
 Progress resumes the same workspace, branch/PR or case/run output. Stop at In Review or Blocked.
 Review feedback returns to Progress. Reread remote state after an ambiguous write before retrying.
 
-When external input prevents meaningful progress, update this agent's blocker comment with reason,
-checks, the needed human action and the pre-Blocked status. Read it back before entering Blocked.
-The coordinator records resolution and resumes to exactly the previous status through Jira's rule.
+When external input prevents meaningful progress, keep the blocker separate from delivery handoff;
+update its existing agent-owned comment with affected output, needed owner/action, short checks and
+evidence, resume condition and pre-Blocked status. Read it back before entering Blocked.
+The coordinator links a concise resolution and resumes to the previous status through Jira's rule.
 Verify the resolution on resume; a status change alone does not prove it was resolved.
 
 Implement and verify under this repository's checks/review policy. Create a PR only when the
 deliverable/repository requires it, using its PR template and the Subtask key in the PR title.
-Maintain one agent-owned Jira delivery handoff comment with repository, revision/output,
-review/check results, deployment or Not applicable, durable evidence and remaining gaps.
+Follow the consumer's handoff policy: current outcome, repository/output/revision, short review/check
+verdict, next owner/action, material gaps and evidence/history links. Aim for 4–6 content lines;
+omit inapplicable fields and keep detailed verification in the linked PR/report. Update the same
+owned record on resume, preserving prior evidence through links; distinct QA runs keep records.
 Read the saved comment back. Transition to In Review only when the applicable handoff is ready.
 The coordinator owns Done and parent acceptance; a merge does not complete a Jira issue.
 ```
@@ -387,6 +390,12 @@ The example is guidance; Symphony enforces structural routing/admission, not hum
 delivery evidence or coordinator ownership of mutations. This repository's own `WORKFLOW.md`
 continues to describe its separate GitHub self-execution contract. Updating these files does not
 switch installed workers or execute a Jira canary.
+
+For consumer instruction updates, verify the approved repository revision, the workflow file actually
+loaded by the service, and the policy/skills in each reused workspace. Workflow reload does not refresh
+an old checkout; continuation turns retain earlier context. Verify that an authorized start/resume
+reads the new instructions before reporting adoption. Preserve dirty workspace/output and use the
+consumer's rollout procedure; do not reset tracker states or restart other routes to force an update.
 
 ### Asana adapter
 
