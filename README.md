@@ -37,6 +37,8 @@ help with the setup:
 Each target repository owns its `WORKFLOW.md` configuration and agent prompt, including its
 implementation, verification, and PR handoff rules. Symphony loads that file; optional agent skills
 are maintained by the target repository independently of Symphony releases.
+Workflows with an active review task receive a fresh session and prompt when an agent crosses
+the configured review boundary, while retaining the issue workspace.
 
 For Jira Subtask workers, see the [Jira configuration and execution example](elixir/README.md#routed-jira-subtask-workflows).
 

@@ -400,8 +400,10 @@ Fields:
   - Values are provider-native states in which an already claimed worker may continue.
   - Compared case-insensitively by the scheduler.
 - `review_state` (string, optional)
-  - Names the provider-native non-terminal state used as the human review handoff boundary.
-  - The tracker adapter MAY validate that the state exists; the scheduler does not treat it as active.
+  - Names the provider-native non-terminal review handoff boundary.
+  - The tracker adapter MAY validate that the state exists; this key alone does not make it active.
+  - When included in active/dispatch states, entering or leaving it ends the current task session
+    after its normal turn completes. The next worker renders a fresh prompt in the same workspace.
 - `dispatch_states` (list of strings)
   - Default: the effective `active_states` value.
   - Values are provider-native states eligible for new worker dispatch.
@@ -692,8 +694,12 @@ Important nuance:
 - A successful worker exit does not mean the issue is done forever.
 - The worker MAY continue through multiple back-to-back coding-agent turns before it exits.
 - After each normal turn completion, the worker re-checks the tracker issue state.
-- If the issue is still in an active state, the worker SHOULD start another turn on the same live
+- If the issue is still in an active state and has not crossed the configured review boundary,
+  the worker SHOULD start another turn on the same live
   coding-agent thread in the same workspace, up to `agent.max_turns`.
+- On an active review-boundary transition, finish the current turn and close its session before
+  the normal continuation retry starts a new worker. Preserve the workspace and the single owner claim
+  until the old worker exits; reconciliation does not interrupt an in-flight turn for this transition.
 - The first turn SHOULD use the full rendered task prompt.
 - Continuation turns SHOULD send only continuation guidance to the existing thread, not resend the
   original task prompt that is already present in thread history.

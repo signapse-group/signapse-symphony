@@ -348,6 +348,14 @@ workspace/output; In Review and Blocked are outside active execution. The runtim
 operator-input suspension is separate from Jira Blocked and is cleared on restart. Avoid overlapping
 instances for one route; in-memory claims do not provide a distributed lock.
 
+A consuming workflow may include `review_state` in both dispatch and active states for a separate
+delivery task. After a normal turn completes, entering or leaving that state closes the old session;
+the scheduler rereads live state and renders the next task's full prompt in the same workspace.
+Ready → Progress continues the existing session. The old worker keeps its claim until it exits,
+so an external phase change waits for the current turn to finish rather than interrupting its tools.
+Drain/restart the affected service before redefining its review boundary or task profile;
+workflow reload does not replace the instructions of a running Codex session.
+
 Put the following execution rules in the consuming repository's prompt, alongside its actual
 verification, review, deployment and permissions instructions:
 
