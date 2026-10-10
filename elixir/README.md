@@ -386,6 +386,15 @@ Deployment applies only when the deliverable requires it. GitHub PR creation/lin
 code-host authentication; `jira_rest` does not supply GitHub operations. Verify Development-panel
 linking and actual account permissions before production cutover.
 
+For QA consumers, route the assigned Generate or Execute/Retest operation to the repository-owned
+skill and its approved case/version, readiness and run/report boundary; do not inherit a dev-only
+implementation/PR operation. Retest uses the [planning outcome rules](https://github.com/signapse-group/signapse-planing/blob/main/workflow/project-execution-workflow.md#qa-retest-outcomes)
+and [PASS/FAIL templates](https://github.com/signapse-group/signapse-planing/blob/main/workflow/issue-tracker.md#qa-retest-handoff).
+The coordinator reviews QA completion and Bug Closed/Reopened; keep required blocked scope and
+different regression deviations explicit. Connect the deployed build to the delivered fix before
+reporting it retested. Direct QA requests can use repository skills without an unattended consumer
+workflow; add that workflow during authorized QA onboarding.
+
 The example is guidance; Symphony enforces structural routing/admission, not human approval,
 delivery evidence or coordinator ownership of mutations. This repository's own `WORKFLOW.md`
 continues to describe its separate GitHub self-execution contract. Updating these files does not
