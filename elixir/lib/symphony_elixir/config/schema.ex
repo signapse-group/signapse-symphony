@@ -59,6 +59,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:dispatch_states, {:array, :string})
       field(:active_states, {:array, :string})
       field(:review_state, :string)
+      field(:session_boundary_states, {:array, :string}, default: [])
       field(:terminal_states, {:array, :string})
     end
 
@@ -78,6 +79,7 @@ defmodule SymphonyElixir.Config.Schema do
           :dispatch_states,
           :active_states,
           :review_state,
+          :session_boundary_states,
           :terminal_states
         ],
         empty_values: []
@@ -86,6 +88,13 @@ defmodule SymphonyElixir.Config.Schema do
         labels
         |> Enum.map(&(String.trim(&1) |> String.downcase()))
         |> Enum.uniq()
+      end)
+      |> validate_change(:session_boundary_states, fn field, states ->
+        if Enum.any?(states, &(not is_binary(&1) or String.trim(&1) == "")) do
+          [{field, "must contain nonblank state names"}]
+        else
+          []
+        end
       end)
     end
   end

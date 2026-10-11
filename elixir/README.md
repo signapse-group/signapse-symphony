@@ -170,6 +170,10 @@ Notes:
   claimed worker continues after tracker refreshes and agent turns.
 - `tracker.review_state` optionally names the non-terminal human handoff state. GitHub Projects v2
   validates that the option exists but does not keep the worker active in that state.
+- `tracker.session_boundary_states` optionally lists additional states that each isolate a task
+  session when entered or left. It defaults to `[]`; entries must be nonblank strings. Comparisons
+  ignore case and surrounding whitespace. It supplements `review_state` without changing admission
+  or dispatch eligibility; the consuming workflow owns the prompt and permissions for each phase.
 - Safer Codex defaults are used when policy fields are omitted:
   - `codex.approval_policy` defaults to `{"reject":{"sandbox_approval":true,"rules":true,"mcp_elicitations":true}}`
   - `codex.thread_sandbox` defaults to `workspace-write`
@@ -351,7 +355,25 @@ instances for one route; in-memory claims do not provide a distributed lock.
 A consuming workflow may include `review_state` in both dispatch and active states for a separate
 delivery task. After a normal turn completes, entering or leaving that state closes the old session;
 the scheduler rereads live state and renders the next task's full prompt in the same workspace.
-Ready → Progress continues the existing session. The old worker keeps its claim until it exits,
+Ready → Progress continues the existing session unless Ready is an additional session boundary.
+For a separate BE survey followed by implementation and review/delivery, use the consumer's three
+phase prompts with:
+
+```yaml
+tracker:
+  dispatch_states: [Ready, Progress, In Review]
+  active_states: [Ready, Progress, In Review]
+  review_state: In Review
+  session_boundary_states: [Ready]
+  terminal_states: [Done]
+```
+
+Ready → Progress now closes the survey session; Progress → In Review and In Review → Progress still
+close their previous sessions. Each next worker renders the full prompt for live state in the same
+workspace. A state listed in `session_boundary_states` is its own boundary, so moving between two
+different listed states also ends the session. Same-state work continues, and an empty list retains
+the previous behavior. Polling/retry/startup use the existing ownership and workspace handling.
+The old worker keeps its claim until it exits,
 so an external phase change waits for the current turn to finish rather than interrupting its tools.
 Drain/restart the affected service before redefining its review boundary or task profile;
 workflow reload does not replace the instructions of a running Codex session.

@@ -408,6 +408,14 @@ Fields:
   - Default: the effective `active_states` value.
   - Values are provider-native states eligible for new worker dispatch.
   - Compared case-insensitively by the scheduler.
+- `session_boundary_states` (list of nonblank strings, optional)
+  - Default: `[]`; existing workflows retain their continuation behavior.
+  - Entering or leaving each named state ends the current task session after its normal turn
+    completes; moving between two different named states also ends the session.
+  - Remaining in the same state continues; comparison ignores case and surrounding whitespace.
+  - These boundaries supplement `review_state` and do not make a state active or dispatchable.
+  - The existing worker retains ownership until exit; the next worker rereads live state and renders
+    a fresh prompt in the same workspace. Retry/restart preserves existing workspace output.
 - `terminal_states` (list of strings)
   - REQUIRED unless the selected adapter profile documents a default.
   - Values are provider-native state names compared case-insensitively by the scheduler.
@@ -642,6 +650,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `tracker.dispatch_states`: list of provider-native state names, default `active_states`
 - `tracker.active_states`: list of provider-native state names, adapter-defined default
 - `tracker.review_state`: optional provider-native human review handoff state
+- `tracker.session_boundary_states`: optional nonblank provider-native task boundaries, default `[]`
 - `tracker.terminal_states`: list of provider-native state names, adapter-defined default
 - `polling.interval_ms`: integer, default `30000`
 - `workspace.root`: path resolved to absolute, default `<system-temp>/symphony_workspaces`

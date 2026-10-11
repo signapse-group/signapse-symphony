@@ -100,6 +100,7 @@ defmodule SymphonyElixir.TestSupport do
           tracker_dispatch_states: nil,
           tracker_active_states: ["Todo", "In Progress"],
           tracker_review_state: nil,
+          tracker_session_boundary_states: [],
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
           poll_interval_ms: 30_000,
           workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
@@ -140,6 +141,7 @@ defmodule SymphonyElixir.TestSupport do
     tracker_dispatch_states = Keyword.get(config, :tracker_dispatch_states)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_review_state = Keyword.get(config, :tracker_review_state)
+    tracker_session_boundary_states = Keyword.get(config, :tracker_session_boundary_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
     workspace_root = Keyword.get(config, :workspace_root)
@@ -181,6 +183,7 @@ defmodule SymphonyElixir.TestSupport do
         "  dispatch_states: #{yaml_value(tracker_dispatch_states)}",
         "  active_states: #{yaml_value(tracker_active_states)}",
         "  review_state: #{yaml_value(tracker_review_state)}",
+        "  session_boundary_states: #{yaml_value(tracker_session_boundary_states)}",
         "  terminal_states: #{yaml_value(tracker_terminal_states)}",
         "polling:",
         "  interval_ms: #{yaml_value(poll_interval_ms)}",

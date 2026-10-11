@@ -173,16 +173,16 @@ defmodule SymphonyElixir.AgentRunner do
   defp continue_with_issue?(issue, _issue_state_fetcher), do: {:done, issue}
 
   defp same_agent_task?(issue, refreshed_issue) do
-    case Config.settings!().tracker.review_state do
-      review_state when is_binary(review_state) ->
-        review_state = normalize_issue_state(review_state)
+    tracker = Config.settings!().tracker
 
-        (is_binary(issue.state) and normalize_issue_state(issue.state) == review_state) ==
-          (is_binary(refreshed_issue.state) and normalize_issue_state(refreshed_issue.state) == review_state)
+    [tracker.review_state | tracker.session_boundary_states]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.all?(fn state ->
+      boundary_state = normalize_issue_state(state)
 
-      _ ->
-        true
-    end
+      (is_binary(issue.state) and normalize_issue_state(issue.state) == boundary_state) ==
+        (is_binary(refreshed_issue.state) and normalize_issue_state(refreshed_issue.state) == boundary_state)
+    end)
   end
 
   defp active_issue_state?(state_name) when is_binary(state_name) do

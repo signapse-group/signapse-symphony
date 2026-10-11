@@ -39,6 +39,8 @@ implementation, verification, and PR handoff rules. Symphony loads that file; op
 are maintained by the target repository independently of Symphony releases.
 Workflows with an active review task receive a fresh session and prompt when an agent crosses
 the configured review boundary, while retaining the issue workspace.
+Additional task phases, such as a Ready survey before implementation, can opt into
+`tracker.session_boundary_states` without changing continuation for other workflows.
 
 For Jira Subtask workers, see the [Jira configuration and execution example](elixir/README.md#routed-jira-subtask-workflows).
 

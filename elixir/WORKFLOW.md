@@ -15,6 +15,7 @@ tracker:
     - Ready
     - In progress
   review_state: In review
+  session_boundary_states: []
   terminal_states:
     - Done
 polling:
