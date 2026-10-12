@@ -5,7 +5,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.{Config, PromptBuilder, Tracker, Workspace}
+  alias SymphonyElixir.{Config, PromptBuilder, RuntimeControl, Tracker, Workspace}
   alias SymphonyElixir.Tracker.Issue
 
   @type worker_host :: String.t() | nil
@@ -31,8 +31,22 @@ defmodule SymphonyElixir.AgentRunner do
 
       {:error, reason} ->
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
+
+        if quota_limit_error?(reason) do
+          RuntimeControl.pause("Codex usage limit exceeded", "quota")
+        end
+
         raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
     end
+  end
+
+  defp quota_limit_error?(reason) do
+    message = inspect(reason, limit: :infinity, printable_limit: 4_000) |> String.downcase()
+
+    Enum.any?(
+      ["usage_limit_exceeded", "usagelimitexceeded", "usage limit exceeded", "usage limit reached"],
+      &String.contains?(message, &1)
+    )
   end
 
   defp run_on_worker_host(issue, codex_update_recipient, opts, worker_host) do

@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.AppServerTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.RuntimeControl
+
   test "app server rejects the workspace root and paths outside workspace root" do
     test_root =
       Path.join(
@@ -37,6 +39,216 @@ defmodule SymphonyElixir.AppServerTest do
     after
       File.rm_rf(test_root)
     end
+  end
+
+  test "failed turn statuses pause on usage exhaustion but not generic HTTP 429" do
+    for {error_code, error_message, expected_mode} <- [
+          {"UsageLimitExceeded", "Usage limit exceeded", :paused},
+          {"RateLimitExceeded", "HTTP 429: too many requests", :running}
+        ] do
+      test_root = Path.join(System.tmp_dir!(), "symphony-elixir-app-server-failed-turn-#{System.unique_integer([:positive])}")
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "MT-QUOTA")
+        codex_binary = Path.join(test_root, "fake-codex")
+        File.mkdir_p!(workspace)
+
+        control_dir = Path.join(System.tmp_dir!(), "symphony-quota-control-#{System.unique_integer([:positive])}")
+        control_name = Module.concat(__MODULE__, "QuotaControl#{System.unique_integer([:positive])}")
+        File.mkdir_p!(control_dir)
+        start_supervised!({RuntimeControl, name: control_name, path: Path.join(control_dir, "state.sqlite3"), runtime_id: "quota-test"}, id: control_name)
+        assert {:ok, %{version: version}} = RuntimeControl.begin_resume(control_name)
+
+        assert {:ok, %{mode: :running}} =
+                 RuntimeControl.complete_resume(version, {:ok, %{available?: true, summary: "test quota"}}, control_name)
+
+        on_exit(fn ->
+          File.rm_rf(control_dir)
+        end)
+
+        completion =
+          Jason.encode!(%{
+            "method" => "turn/completed",
+            "params" => %{
+              "turn" => %{
+                "id" => "turn-quota",
+                "status" => "failed",
+                "error" => %{"codexErrorInfo" => error_code, "message" => error_message}
+              }
+            }
+          })
+
+        File.write!(codex_binary, """
+        #!/bin/sh
+        while IFS= read -r line; do
+          case "$line" in
+            *'"id":1'*) printf '%s\\n' '{"id":1,"result":{}}' ;;
+            *'"id":2'*) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-quota"}}}' ;;
+            *'"id":3'*)
+              printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-quota"}}}'
+              printf '%s\\n' '#{completion}'
+              exit 0
+              ;;
+          esac
+        done
+        """)
+
+        File.chmod!(codex_binary, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          codex_command: "#{codex_binary} app-server"
+        )
+
+        issue = %Issue{
+          id: "issue-failed-turn-quota",
+          identifier: "MT-QUOTA",
+          title: "Quota failure",
+          description: "Return failed turn statuses as errors",
+          state: "In Progress",
+          url: "https://example.org/issues/MT-QUOTA",
+          labels: ["backend"]
+        }
+
+        assert {:error, {:turn_failed, %{"codexErrorInfo" => ^error_code}}} =
+                 AppServer.run(workspace, "test failed turn handling", issue, runtime_control: control_name)
+
+        assert {:ok, %{mode: ^expected_mode}} = RuntimeControl.status(control_name)
+      after
+        File.rm_rf(test_root)
+      end
+    end
+  end
+
+  test "Codex rate limit reads distinguish exhausted quota" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-app-server-rate-limits-#{System.unique_integer([:positive])}")
+
+    try do
+      codex_binary = Path.join(test_root, "fake-codex")
+      File.mkdir_p!(test_root)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      while IFS= read -r line; do
+        case "$line" in
+          *'"id":1'*) printf '%s\\n' '{"id":1,"result":{}}' ;;
+          *'account/rateLimits/read'*) printf '%s\\n' '{"id":4,"result":{"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":100,"resetsAt":1790000000}}}}}' ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+      write_workflow_file!(Workflow.workflow_file_path(), codex_command: "#{codex_binary} app-server")
+
+      assert {:ok, %{available?: false, summary: summary}} = AppServer.read_rate_limits()
+      assert summary =~ "codex: 100%"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "quota checks reject malformed secondary windows even when primary has capacity" do
+    for used <- [nil, "20", -1, 101] do
+      result = %{
+        "rateLimitsByLimitId" => %{
+          "codex" => %{
+            "primary" => %{"usedPercent" => 20},
+            "secondary" => %{"usedPercent" => used}
+          }
+        }
+      }
+
+      with_rate_limit_server(result, fn ->
+        assert {:error, {:codex_quota_window_invalid, "codex", "secondary"}} = AppServer.read_rate_limits()
+      end)
+    end
+  end
+
+  test "quota checks validate every bucket and require an observed quota window" do
+    with_rate_limit_server(%{"rateLimitsByLimitId" => %{"codex" => nil}}, fn ->
+      assert {:error, {:codex_quota_usage_unavailable, "codex"}} = AppServer.read_rate_limits()
+    end)
+
+    with_rate_limit_server(%{"rateLimits" => %{"primary" => nil, "secondary" => nil}}, fn ->
+      assert {:error, {:codex_quota_usage_unavailable, "codex"}} = AppServer.read_rate_limits()
+    end)
+
+    with_rate_limit_server(%{"rateLimits" => %{"primary" => %{"usedPercent" => 0}, "secondary" => []}}, fn ->
+      assert {:error, {:codex_quota_window_invalid, "codex", "secondary"}} = AppServer.read_rate_limits()
+    end)
+
+    with_rate_limit_server(
+      %{"rateLimitsByLimitId" => %{"codex" => %{"primary" => %{"usedPercent" => 0}}, "other" => nil}},
+      fn -> assert {:error, {:codex_quota_usage_unavailable, "other"}} = AppServer.read_rate_limits() end
+    )
+
+    with_rate_limit_server(
+      %{"rateLimitsByLimitId" => [], "rateLimits" => %{"primary" => %{"usedPercent" => 0}}},
+      fn -> assert {:error, :codex_rate_limits_missing} = AppServer.read_rate_limits() end
+    )
+  end
+
+  test "quota checks allow absent optional windows and preserve exhaustion in either window" do
+    with_rate_limit_server(%{"rateLimits" => %{"primary" => %{"usedPercent" => 0}, "secondary" => nil}}, fn ->
+      assert {:ok, %{available?: true}} = AppServer.read_rate_limits()
+    end)
+
+    with_rate_limit_server(
+      %{"rateLimits" => %{"primary" => %{"usedPercent" => 20}, "secondary" => %{"usedPercent" => 100}}},
+      fn -> assert {:ok, %{available?: false}} = AppServer.read_rate_limits() end
+    )
+  end
+
+  test "quota reads have a deadline even when unrelated notifications keep arriving" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-quota-deadline-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(test_root)
+    codex_binary = Path.join(test_root, "fake-codex")
+
+    try do
+      File.write!(codex_binary, """
+      #!/bin/sh
+      while IFS= read -r line; do
+        case "$line" in
+          *'"id":1'*) printf '%s\\n' '{"id":1,"result":{}}' ;;
+          *'account/rateLimits/read'*)
+            count=0
+            while [ "$count" -lt 40 ]; do
+              printf '%s\\n' '{"method":"account/updated","params":{}}'
+              sleep 0.05
+              count=$((count + 1))
+            done
+            exit 0
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        codex_command: "#{codex_binary} app-server",
+        codex_read_timeout_ms: 300
+      )
+
+      started_at = System.monotonic_time(:millisecond)
+      assert {:error, :response_timeout} = AppServer.read_rate_limits()
+      assert System.monotonic_time(:millisecond) - started_at < 1_500
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "quota read deadline includes initialization as well as the quota request" do
+    result = %{"rateLimits" => %{"primary" => %{"usedPercent" => 10}}}
+
+    with_rate_limit_server(
+      result,
+      fn -> assert {:error, :response_timeout} = AppServer.read_rate_limits() end,
+      initialize_delay: 0.2,
+      response_delay: 0.2,
+      read_timeout_ms: 300
+    )
   end
 
   test "app server rejects symlink escape cwd paths under the workspace root" do
@@ -1624,6 +1836,36 @@ defmodule SymphonyElixir.AppServerTest do
                  false
                end
              end)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  defp with_rate_limit_server(result, test, opts \\ []) do
+    test_root = Path.join(System.tmp_dir!(), "symphony-quota-payload-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(test_root)
+    codex_binary = Path.join(test_root, "fake-codex")
+    response = Jason.encode!(%{"id" => 4, "result" => result})
+
+    try do
+      File.write!(codex_binary, """
+      #!/bin/sh
+      while IFS= read -r line; do
+        case "$line" in
+          *'"id":1'*) sleep #{Keyword.get(opts, :initialize_delay, 0)}; printf '%s\\n' '{"id":1,"result":{}}' ;;
+          *'account/rateLimits/read'*) sleep #{Keyword.get(opts, :response_delay, 0)}; printf '%s\\n' '#{response}' ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        codex_command: "#{codex_binary} app-server",
+        codex_read_timeout_ms: Keyword.get(opts, :read_timeout_ms, 5_000)
+      )
+
+      test.()
     after
       File.rm_rf(test_root)
     end

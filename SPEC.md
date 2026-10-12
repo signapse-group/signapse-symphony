@@ -1542,6 +1542,28 @@ Enablement (extension):
 - It is up to the implementation whether this is server-generated HTML or a client-side app that
   consumes the JSON API below.
 
+An implementation MAY expose runtime execution controls. If it does:
+
+- A manual pause MUST block new task dispatch, retries, and agent turns.
+- Agent turns already in progress MAY finish; no subsequent turn may start while paused.
+- A classified provider usage-limit failure MAY trigger an automatic runtime pause.
+- Resume SHOULD require an explicit operator action and a successful check that provider capacity
+  is available. Unknown, unavailable, or malformed quota information MUST leave the runtime paused.
+- Pause state MUST survive a service restart when durable runtime controls are enabled.
+- Runtime pause state SHOULD be visible in the dashboard and synchronous state snapshot.
+- Runtime pause controls MUST NOT change tracker issue states.
+- When multiple service instances share one provider quota, pause and resume state MUST be shared
+  across those instances.
+- Enabling durable controls MUST initialize a new or replaced store in the paused state. Missing
+  or unavailable state MUST block admission rather than silently enabling execution.
+- Restarting a control owner MUST NOT discard tokens for turns that are still running; worker and
+  control recovery MUST preserve the drain boundary.
+- An interrupted or expired quota check MUST return to a paused state. Completing an older check
+  MUST NOT override a newer pause.
+- Configured services SHOULD report liveness separately from shared execution state. Missing or
+  stale service observations MUST be represented as unknown, not as an empty running count.
+- Controls exposed on a web dashboard MUST enforce same-origin requests and CSRF protection.
+
 #### 13.7.2 JSON REST API (`/api/v1/*`)
 
 Provide a JSON REST API under `/api/v1/*` for current runtime state and operational debugging.

@@ -20,6 +20,15 @@ tracker:
     - Done
 polling:
   interval_ms: 5000
+runtime_control:
+  enabled: false
+# For services sharing a Codex account, enable this block in each deployment workflow:
+# path: /var/lib/symphony/runtime-control.sqlite3
+# id: be
+# members: [be, fe, landing]
+# quota_check_timeout_ms: 15000
+# heartbeat_interval_ms: 1000
+# heartbeat_timeout_ms: 10000
 workspace:
   root: ~/code/signapse-symphony-workspaces
 hooks:

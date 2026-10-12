@@ -302,6 +302,91 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule RuntimeControl do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    alias SymphonyElixir.Config.Schema
+
+    @primary_key false
+    embedded_schema do
+      field(:enabled, :boolean, default: false)
+      field(:path, :string)
+      field(:id, :string)
+      field(:members, {:array, :string}, default: [])
+      field(:quota_check_timeout_ms, :integer, default: 15_000)
+      field(:heartbeat_interval_ms, :integer, default: 1_000)
+      field(:heartbeat_timeout_ms, :integer, default: 10_000)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(
+        attrs,
+        [:enabled, :path, :id, :members, :quota_check_timeout_ms, :heartbeat_interval_ms, :heartbeat_timeout_ms],
+        empty_values: []
+      )
+      |> update_change(:path, &Schema.resolve_runtime_control_value/1)
+      |> update_change(:id, &Schema.resolve_runtime_control_value/1)
+      |> validate_number(:quota_check_timeout_ms, greater_than: 0)
+      |> validate_number(:heartbeat_interval_ms, greater_than: 0)
+      |> validate_number(:heartbeat_timeout_ms, greater_than: 0)
+      |> validate_enabled_settings()
+    end
+
+    defp validate_enabled_settings(changeset) do
+      if get_field(changeset, :enabled) do
+        changeset
+        |> validate_required([
+          :path,
+          :id,
+          :members,
+          :quota_check_timeout_ms,
+          :heartbeat_interval_ms,
+          :heartbeat_timeout_ms
+        ])
+        |> validate_change(:path, &validate_absolute_path/2)
+        |> validate_membership()
+        |> validate_heartbeat_timeout()
+      else
+        changeset
+      end
+    end
+
+    defp validate_absolute_path(field, path) do
+      if Path.type(path) == :absolute, do: [], else: [{field, "must be an absolute path"}]
+    end
+
+    defp validate_membership(changeset) do
+      members = get_field(changeset, :members) || []
+      id = get_field(changeset, :id)
+
+      cond do
+        Enum.any?(members, &(not is_binary(&1) or String.trim(&1) == "")) or Enum.uniq(members) != members ->
+          add_error(changeset, :members, "must contain unique, nonblank service IDs")
+
+        id not in members ->
+          add_error(changeset, :id, "must be included in members")
+
+        true ->
+          changeset
+      end
+    end
+
+    defp validate_heartbeat_timeout(changeset) do
+      timeout = get_field(changeset, :heartbeat_timeout_ms)
+      interval = get_field(changeset, :heartbeat_interval_ms)
+
+      if is_integer(timeout) and is_integer(interval) and timeout > interval do
+        changeset
+      else
+        add_error(changeset, :heartbeat_timeout_ms, "must exceed heartbeat_interval_ms")
+      end
+    end
+  end
+
   embedded_schema do
     embeds_one(:tracker, Tracker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:polling, Polling, on_replace: :update, defaults_to_struct: true)
@@ -312,6 +397,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:runtime_control, RuntimeControl, on_replace: :update, defaults_to_struct: true)
   end
 
   @spec parse(map()) :: {:ok, %__MODULE__{}} | {:error, {:invalid_workflow_config, String.t()}}
@@ -366,6 +452,10 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   @doc false
+  @spec resolve_runtime_control_value(String.t()) :: String.t() | nil
+  def resolve_runtime_control_value(value), do: resolve_env_value(value, nil)
+
+  @doc false
   @spec normalize_state_limits(nil | map()) :: map()
   def normalize_state_limits(nil), do: %{}
 
@@ -406,6 +496,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
+    |> cast_embed(:runtime_control, with: &RuntimeControl.changeset/2)
   end
 
   defp finalize_settings(settings) do
