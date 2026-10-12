@@ -42,6 +42,11 @@ the configured review boundary, while retaining the issue workspace.
 Additional task phases, such as a Ready survey before implementation, can opt into
 `tracker.session_boundary_states` without changing continuation for other workflows.
 
+Deployments sharing a Codex account can opt into durable, shared runtime controls. A usage-limit
+failure pauses all participating services, lets current turns finish, and requires an operator to
+Resume after a successful quota check. The dashboard exposes the shared state without changing
+tracker issue states; see [runtime controls](elixir/README.md#shared-runtime-controls) for setup.
+
 For Jira Subtask workers, see the [Jira configuration and execution example](elixir/README.md#routed-jira-subtask-workflows).
 
 ---

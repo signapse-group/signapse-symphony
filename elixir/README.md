@@ -465,6 +465,56 @@ The observability UI now runs on a minimal Phoenix stack:
 - Phoenix dependency static assets for the LiveView client bootstrap
 - Tracker issue identifiers link to the tracker-provided URL when it uses `http` or `https`
 
+### Shared runtime controls
+
+Runtime controls are opt-in through `WORKFLOW.md`, and disabled by default. For BE, FE, and landing
+sharing one Codex account on one host, add this block to each deployment workflow:
+
+```yaml
+runtime_control:
+  enabled: true
+  path: /var/lib/symphony/runtime-control.sqlite3
+  id: be # Use fe and landing in the other services.
+  members: [be, fe, landing]
+  quota_check_timeout_ms: 15000
+  heartbeat_interval_ms: 1000
+  heartbeat_timeout_ms: 10000
+```
+
+Use the same absolute database path and membership list, plus a stable, unique service ID in every
+workflow. The parent directory must be writable by each service account and live outside release
+directories and issue workspaces. `path` and `id` accept `$ENV_VAR` references; an unset reference
+is a configuration error when controls are enabled. These settings are validated by `Config`.
+Changes to runtime identity, database location, membership, or timing require a service restart.
+
+Pause blocks new tasks, retries, and Codex turns across all connected services. Turns already in
+progress finish before the dashboard reports Paused. A detected Codex usage-limit failure pauses
+the shared runtime automatically. Resume is manual and checks Codex rate limits through the
+configured authenticated app-server command; missing or unavailable quota data leaves the runtime
+paused. Service restarts preserve the pause reason and queued issue recovery information. Tracker
+issue states are not changed by runtime controls.
+
+A new database starts Paused. Losing or replacing the database therefore requires an explicit
+Resume and successful quota check before work can begin. Store failures block admission. Runtime
+control and worker lifecycle must recover together so a control-process restart cannot discard
+tokens for turns that are still running. Pending quota checks have a deadline and recover to Paused
+if their owner exits. A newer Pause invalidates an older quota check.
+
+Each dashboard shows the shared reason, change time, source, and service heartbeat status. A missing
+or stale heartbeat is displayed as unknown; it must not be interpreted as zero active turns.
+State transitions produce one log entry, while polling unchanged state remains quiet. HTTP 429
+responses without a classified usage-limit failure follow normal retry behavior.
+
+Keep dashboards behind the deployment's Tailscale access controls. LiveView connections enforce
+same-origin scheme, host, and port checks and the existing CSRF token validation. A reverse proxy
+must preserve or correctly forward the browser-visible scheme and host for same-origin checks.
+
+Before the maintainer-owned rollout, verify the deployed Codex command, authentication, and quota
+payload using the actual service account. Build and smoke-test the Burrito targets because SQLite
+adds a native dependency. Upgrade all participating services together, keep the group Paused
+through the upgrade, and Resume only after all dashboards report the expected members and the
+quota check succeeds. Release and deployment remain maintainer-owned.
+
 ## Project Layout
 
 - `lib/`: application code and Mix tasks

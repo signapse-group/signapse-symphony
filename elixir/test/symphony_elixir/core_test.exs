@@ -1157,6 +1157,216 @@ defmodule SymphonyElixir.CoreTest do
     assert_due_in_range(due_at_ms, 500, 1_100)
   end
 
+  test "retry survives a shared pause during tracker revalidation and dispatches after resume" do
+    alias SymphonyElixir.RuntimeControl
+
+    test_root = Path.join(System.tmp_dir!(), "symphony-retry-pause-race-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(test_root)
+    on_exit(fn -> File.rm_rf(test_root) end)
+
+    :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, RuntimeControl)
+
+    on_exit(fn ->
+      Supervisor.restart_child(SymphonyElixir.Supervisor, RuntimeControl)
+    end)
+
+    start_supervised!({RuntimeControl, path: Path.join(test_root, "control.sqlite3"), runtime_id: "retry-race"})
+    assert {:ok, %{version: version}} = RuntimeControl.begin_resume()
+
+    assert {:ok, %{mode: :running}} =
+             RuntimeControl.complete_resume(version, {:ok, %{available?: true, summary: "codex: 10%"}})
+
+    counter = start_supervised!({Agent, fn -> 0 end})
+    previous_client = Application.get_env(:symphony_elixir, :linear_client_module)
+    Application.put_env(:symphony_elixir, :linear_client_module, __MODULE__.PauseDuringRefreshTracker)
+    Application.put_env(:symphony_elixir, :pause_retry_counter, counter)
+
+    on_exit(fn ->
+      restore_app_env(:linear_client_module, previous_client)
+      Application.delete_env(:symphony_elixir, :pause_retry_counter)
+    end)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "linear",
+      workspace_root: Path.join(test_root, "workspaces"),
+      max_retry_backoff_ms: 0,
+      hook_before_run: "sleep 2; exit 1"
+    )
+
+    task_supervisor = start_supervised!(Task.Supervisor)
+    orchestrator_name = Module.concat(__MODULE__, "PauseRace#{System.unique_integer([:positive])}")
+    orchestrator = start_supervised!({Orchestrator, name: orchestrator_name, task_supervisor: task_supervisor})
+    retry_token = make_ref()
+    issue_id = "pause-race-issue"
+    recorded_workspace = Path.join(test_root, "workspaces/MT-RACE")
+
+    :sys.replace_state(orchestrator, fn state ->
+      %{
+        state
+        | claimed: MapSet.new([issue_id]),
+          retry_attempts: %{
+            issue_id => %{
+              attempt: 2,
+              timer_ref: nil,
+              retry_token: retry_token,
+              due_at_ms: System.monotonic_time(:millisecond),
+              identifier: "MT-RACE",
+              issue_url: "https://example.org/MT-RACE",
+              error: "previous worker error",
+              worker_host: nil,
+              workspace_path: recorded_workspace
+            }
+          }
+      }
+    end)
+
+    send(orchestrator, {:retry_issue, issue_id, retry_token})
+    assert %{retrying: _retries} = GenServer.call(orchestrator, :snapshot)
+    paused_state = :sys.get_state(orchestrator)
+    assert Agent.get(counter, & &1) == 2, inspect(paused_state)
+    assert {:ok, %{mode: :paused}} = RuntimeControl.status()
+    refute Map.has_key?(paused_state.running, issue_id)
+    assert MapSet.member?(paused_state.claimed, issue_id)
+
+    assert %{attempt: 2, timer_ref: nil, retry_token: nil, workspace_path: ^recorded_workspace} =
+             paused_state.retry_attempts[issue_id]
+
+    assert {:ok, %{version: resume_version}} = RuntimeControl.begin_resume()
+
+    assert {:ok, %{mode: :running}} =
+             RuntimeControl.complete_resume(resume_version, {:ok, %{available?: true, summary: "codex: 10%"}})
+
+    GenServer.call(orchestrator, :request_refresh)
+
+    resumed_retry =
+      eventually_value(fn ->
+        case :sys.get_state(orchestrator).retry_attempts[issue_id] do
+          %{retry_token: token} = retry when is_reference(token) -> retry
+          _other -> nil
+        end
+      end)
+
+    assert %{attempt: 2, retry_token: resumed_token, workspace_path: ^recorded_workspace} = resumed_retry
+    send(orchestrator, {:retry_issue, issue_id, resumed_token})
+    assert %{running: [_running_issue]} = GenServer.call(orchestrator, :snapshot)
+
+    persisted =
+      eventually_value(fn ->
+        {:ok, retries} = RuntimeControl.pending_retries("retry-race")
+        Enum.find(retries, &(&1["issue_id"] == issue_id and is_binary(&1["workspace_path"])))
+      end)
+
+    assert %{"attempt" => 2, "workspace_path" => persisted_workspace} = persisted
+    assert :sys.get_state(orchestrator).running[issue_id].workspace_path == persisted_workspace
+  end
+
+  test "orchestrator restores durable retries after runtime database reconnects" do
+    alias SymphonyElixir.RuntimeControl
+
+    test_root = Path.join(System.tmp_dir!(), "symphony-retry-restore-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(test_root)
+    database_path = Path.join(test_root, "runtime-control.sqlite3")
+    saved_database = database_path <> ".saved"
+    runtime_id = RuntimeControl.runtime_id()
+    seed_name = Module.concat(__MODULE__, "RetrySeed#{System.unique_integer([:positive])}")
+
+    seed =
+      start_supervised!(
+        {RuntimeControl, [name: seed_name, path: database_path, runtime_id: runtime_id]},
+        id: seed_name
+      )
+
+    assert :ok =
+             RuntimeControl.persist_retry(
+               runtime_id,
+               %{
+                 issue_id: "in-progress-retry",
+                 identifier: "MT-RESTORE",
+                 issue_url: "https://example.org/MT-RESTORE",
+                 attempt: 3,
+                 error: "worker exited during restart",
+                 workspace_path: Path.join(test_root, "workspaces/MT-RESTORE")
+               },
+               seed
+             )
+
+    stop_supervised!(seed_name)
+    File.rename!(database_path, saved_database)
+    File.mkdir!(database_path)
+
+    :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, RuntimeControl)
+
+    on_exit(fn ->
+      if File.dir?(database_path), do: File.rm_rf!(database_path)
+      Supervisor.restart_child(SymphonyElixir.Supervisor, RuntimeControl)
+      File.rm_rf!(test_root)
+    end)
+
+    runtime_control = start_supervised!({RuntimeControl, [path: database_path, runtime_id: runtime_id]})
+    assert {:error, {:database_unavailable, _reason}} = RuntimeControl.status(runtime_control)
+
+    task_supervisor = start_supervised!(Task.Supervisor)
+    orchestrator_name = Module.concat(__MODULE__, "RetryRestore#{System.unique_integer([:positive])}")
+    orchestrator = start_supervised!({Orchestrator, name: orchestrator_name, task_supervisor: task_supervisor})
+    initial = :sys.get_state(orchestrator)
+    assert initial.retry_restore_pending
+    assert initial.retry_attempts == %{}
+
+    File.rmdir!(database_path)
+    File.rename!(saved_database, database_path)
+    send(runtime_control, :retry_database_open)
+
+    assert {:ok, %{mode: :paused}} =
+             eventually_value(fn ->
+               case RuntimeControl.status(runtime_control) do
+                 {:ok, %{mode: :paused}} = status -> status
+                 _other -> nil
+               end
+             end)
+
+    send(orchestrator, :run_poll_cycle)
+
+    restored =
+      eventually_value(fn ->
+        state = :sys.get_state(orchestrator)
+        if not state.retry_restore_pending and Map.has_key?(state.retry_attempts, "in-progress-retry"), do: state
+      end)
+
+    assert MapSet.member?(restored.claimed, "in-progress-retry")
+
+    assert %{attempt: 3, identifier: "MT-RESTORE", workspace_path: workspace_path} =
+             restored.retry_attempts["in-progress-retry"]
+
+    assert workspace_path == Path.join(test_root, "workspaces/MT-RESTORE")
+    refute Map.has_key?(restored.running, "in-progress-retry")
+  end
+
+  defmodule PauseDuringRefreshTracker do
+    def fetch_issues_by_states(_states), do: {:ok, []}
+
+    def fetch_issues_by_ids(["pause-race-issue"]) do
+      counter = Application.fetch_env!(:symphony_elixir, :pause_retry_counter)
+      request_number = Agent.get_and_update(counter, fn current -> {current + 1, current + 1} end)
+
+      if request_number == 2 do
+        {:ok, _status} = SymphonyElixir.RuntimeControl.pause("Pause during tracker refresh", "manual")
+      end
+
+      {:ok,
+       [
+         %SymphonyElixir.Tracker.Issue{
+           id: "pause-race-issue",
+           identifier: "MT-RACE",
+           title: "Retry pause race",
+           state: "In Progress",
+           url: "https://example.org/MT-RACE",
+           labels: [],
+           dispatchable: true
+         }
+       ]}
+    end
+  end
+
   test "abnormal worker exit increments retry attempt progressively" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
     issue_id = "issue-crash"

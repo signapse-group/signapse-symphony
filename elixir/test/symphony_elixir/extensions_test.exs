@@ -314,8 +314,12 @@ defmodule SymphonyElixir.ExtensionsTest do
                "total_tokens" => 12,
                "seconds_running" => 42.5
              },
+             "runtime_control" => state_payload["runtime_control"],
              "rate_limits" => %{"primary" => %{"remaining" => 11}}
            }
+
+    assert state_payload["runtime_control"]["mode"] in ["running", "pausing", "paused", "checking_quota"]
+    assert is_integer(state_payload["runtime_control"]["version"])
 
     conn = get(build_conn(), "/api/v1/MT-HTTP")
     issue_payload = json_response(conn, 200)
@@ -478,6 +482,60 @@ defmodule SymphonyElixir.ExtensionsTest do
       response(get(build_conn(), "/vendor/phoenix_live_view/phoenix_live_view.js"), 200)
 
     assert live_view_js =~ "var LiveView = (() => {"
+  end
+
+  test "dashboard pause and asynchronous resume expose quota failures and shared service state" do
+    alias SymphonyElixir.RuntimeControl
+    test_pid = self()
+    path = Path.join(System.tmp_dir!(), "dashboard-control-#{System.unique_integer([:positive])}.sqlite3")
+    on_exit(fn -> File.rm(path) end)
+
+    control =
+      start_supervised!(
+        {RuntimeControl,
+         [
+           name: __MODULE__.DashboardControl,
+           path: path,
+           runtime_id: "be",
+           quota_reader: fn ->
+             send(test_pid, {:quota_reader, self()})
+
+             receive do
+               result -> result
+             end
+           end
+         ]}
+      )
+
+    observer =
+      start_supervised!({RuntimeControl, [name: __MODULE__.DashboardObserver, path: path, runtime_id: "fe"]},
+        id: __MODULE__.DashboardObserver
+      )
+
+    snapshot = static_snapshot()
+    start_supervised!({StaticOrchestrator, [name: __MODULE__.ControlOrchestrator, snapshot: snapshot]})
+    start_test_endpoint(orchestrator: __MODULE__.ControlOrchestrator, runtime_control: control)
+
+    {:ok, view, html} = live(build_conn(), "/")
+    assert html =~ "be: Online"
+    assert has_element?(view, "button", "Check quota and resume")
+    render_click(element(view, "button", "Check quota and resume"))
+    assert_receive {:quota_reader, reader}
+    assert render(view) =~ "Checking quota"
+    send(reader, {:error, :missing_quota})
+    assert_eventually(fn -> match?({:ok, %{mode: :paused}}, RuntimeControl.status(control)) end)
+    send(view.pid, :runtime_tick)
+    assert render(view) =~ "Unable to verify Codex quota"
+
+    render_click(element(view, "button", "Check quota and resume"))
+    assert_receive {:quota_reader, next_reader}
+    send(next_reader, {:ok, %{available?: true, summary: "20%"}})
+    assert_eventually(fn -> match?({:ok, %{mode: :running}}, RuntimeControl.status(control)) end)
+    send(view.pid, :runtime_tick)
+    assert has_element?(view, "button", "Pause all")
+    render_click(element(view, "button", "Pause all"))
+    assert {:ok, %{mode: :paused, source: "manual"}} = RuntimeControl.status(observer)
+    assert render(view) =~ "Paused manually"
   end
 
   test "dashboard liveview renders and refreshes over pubsub" do
@@ -703,6 +761,19 @@ defmodule SymphonyElixir.ExtensionsTest do
         }
       ],
       codex_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
+      runtime_control: %{
+        enabled: true,
+        mode: :paused,
+        reason: "Waiting for quota",
+        source: "quota",
+        changed_at: nil,
+        version: 1,
+        active_turns: 0,
+        quota_summary: nil,
+        quota_checked_at: nil,
+        database_error: nil,
+        services: %{}
+      },
       rate_limits: %{"primary" => %{"remaining" => 11}}
     }
   end

@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, RuntimeControl, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Tracker.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -39,6 +39,7 @@ defmodule SymphonyElixir.Orchestrator do
       claimed: MapSet.new(),
       blocked: %{},
       retry_attempts: %{},
+      retry_restore_pending: true,
       codex_totals: nil,
       codex_rate_limits: nil
     ]
@@ -69,6 +70,7 @@ defmodule SymphonyElixir.Orchestrator do
           codex_rate_limits: nil
         }
 
+        state = restore_pending_retries(state)
         run_terminal_workspace_cleanup()
         state = schedule_tick(state, 0)
 
@@ -117,6 +119,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   def handle_info(:run_poll_cycle, state) do
     state = refresh_runtime_config(state)
+    state = restore_pending_retries_if_needed(state)
+    state = resume_deferred_retries(state)
     state = maybe_dispatch(state)
     state = schedule_tick(state, state.poll_interval_ms)
     state = %{state | poll_check_in_progress: false}
@@ -159,6 +163,16 @@ defmodule SymphonyElixir.Orchestrator do
           |> maybe_put_runtime_value(:worker_host, runtime_info[:worker_host])
           |> maybe_put_runtime_value(:workspace_path, runtime_info[:workspace_path])
 
+        persist_retry_state(
+          issue_id,
+          normalize_retry_attempt(updated_running_entry[:retry_attempt]),
+          updated_running_entry.identifier,
+          updated_running_entry.issue.url,
+          "Agent run was interrupted by a service restart",
+          updated_running_entry[:worker_host],
+          updated_running_entry[:workspace_path]
+        )
+
         notify_dashboard()
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
     end
@@ -189,9 +203,13 @@ defmodule SymphonyElixir.Orchestrator do
 
   def handle_info({:retry_issue, issue_id, retry_token}, state) do
     result =
-      case pop_retry_attempt_state(state, issue_id, retry_token) do
-        {:ok, attempt, metadata, state} -> handle_retry_issue(state, issue_id, attempt, metadata)
-        :missing -> {:noreply, state}
+      if dispatch_ready?(state) do
+        case pop_retry_attempt_state(state, issue_id, retry_token) do
+          {:ok, attempt, metadata, state} -> handle_retry_issue(state, issue_id, attempt, metadata)
+          :missing -> {:noreply, state}
+        end
+      else
+        {:noreply, defer_retry(state, issue_id, retry_token)}
       end
 
     notify_dashboard()
@@ -259,7 +277,8 @@ defmodule SymphonyElixir.Orchestrator do
       |> reconcile_running_issues()
       |> reconcile_blocked_issues()
 
-    with :ok <- Config.validate!(),
+    with true <- dispatch_ready?(state),
+         :ok <- Config.validate!(),
          {:ok, issues} <- Tracker.fetch_issues_by_states(Config.settings!().tracker.dispatch_states),
          true <- available_slots(state) > 0 do
       choose_issues(issues, state)
@@ -304,6 +323,108 @@ defmodule SymphonyElixir.Orchestrator do
 
       false ->
         state
+    end
+  end
+
+  defp runtime_dispatch_enabled? do
+    case RuntimeControl.status() do
+      {:ok, %{mode: :running}} ->
+        true
+
+      {:ok, _status} ->
+        false
+
+      {:error, reason} ->
+        Logger.debug("Runtime control unavailable; refusing new Codex work: #{inspect(reason)}")
+        false
+    end
+  end
+
+  defp dispatch_ready?(%State{retry_restore_pending: true}), do: false
+  defp dispatch_ready?(_state), do: runtime_dispatch_enabled?()
+
+  defp restore_pending_retries_if_needed(%State{retry_restore_pending: true} = state),
+    do: restore_pending_retries(state)
+
+  defp restore_pending_retries_if_needed(state), do: state
+
+  defp defer_retry(%State{} = state, issue_id, retry_token) do
+    case Map.get(state.retry_attempts, issue_id) do
+      %{retry_token: ^retry_token} = retry ->
+        deferred = %{
+          retry
+          | timer_ref: nil,
+            retry_token: nil,
+            due_at_ms: System.monotonic_time(:millisecond) + state.poll_interval_ms
+        }
+
+        %{state | retry_attempts: Map.put(state.retry_attempts, issue_id, deferred)}
+
+      _ ->
+        state
+    end
+  end
+
+  defp resume_deferred_retries(%State{} = state) do
+    if dispatch_ready?(state) do
+      state.retry_attempts
+      |> Enum.filter(fn {_issue_id, retry} -> is_nil(retry.timer_ref) and is_nil(retry.retry_token) end)
+      |> Enum.reduce(state, fn {issue_id, retry}, current_state ->
+        schedule_issue_retry(current_state, issue_id, retry.attempt, %{
+          identifier: retry.identifier,
+          issue_url: retry.issue_url,
+          error: retry.error,
+          worker_host: retry.worker_host,
+          workspace_path: retry.workspace_path
+        })
+      end)
+    else
+      state
+    end
+  end
+
+  defp restore_pending_retries(%State{} = state) do
+    case RuntimeControl.pending_retries(RuntimeControl.runtime_id()) do
+      {:ok, retries} ->
+        retries
+        |> Enum.reduce(state, &restore_one_retry/2)
+        |> Map.put(:retry_restore_pending, false)
+
+      {:error, reason} ->
+        Logger.error("Unable to restore pending issue retries: #{inspect(reason)}")
+        %{state | retry_restore_pending: true}
+    end
+  end
+
+  defp restore_one_retry(%{"issue_id" => issue_id} = retry, state) when is_binary(issue_id) do
+    state = %{state | claimed: MapSet.put(state.claimed, issue_id)}
+
+    schedule_issue_retry(state, issue_id, max(retry["attempt"] || 0, 1), %{
+      identifier: retry["identifier"],
+      issue_url: retry["issue_url"],
+      error: retry["error"],
+      worker_host: retry["worker_host"],
+      workspace_path: retry["workspace_path"]
+    })
+  end
+
+  defp restore_one_retry(_retry, state), do: state
+
+  defp persist_retry_state(issue_id, attempt, identifier, issue_url, error, worker_host, workspace_path) do
+    case RuntimeControl.persist_retry(RuntimeControl.runtime_id(), %{
+           issue_id: issue_id,
+           attempt: attempt,
+           identifier: identifier,
+           issue_url: issue_url,
+           error: error,
+           worker_host: worker_host,
+           workspace_path: workspace_path
+         }) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("Unable to persist retry state for issue_id=#{issue_id}: #{inspect(reason)}")
     end
   end
 
@@ -552,6 +673,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp terminate_running_issue(%State{} = state, issue_id, cleanup_workspace) do
+    RuntimeControl.delete_retry(RuntimeControl.runtime_id(), issue_id)
+
     case Map.get(state.running, issue_id) do
       nil ->
         release_issue_claim(state, issue_id)
@@ -636,6 +759,27 @@ defmodule SymphonyElixir.Orchestrator do
     else
       state
     end
+  end
+
+  defp defer_dispatch_retry(state, _issue, nil, _worker_host, _metadata), do: state
+
+  defp defer_dispatch_retry(state, issue, attempt, worker_host, metadata) do
+    state =
+      schedule_issue_retry(
+        state,
+        issue.id,
+        attempt,
+        Map.merge(metadata, %{
+          identifier: issue.identifier,
+          issue_url: issue.url,
+          error: "Runtime paused before retry dispatch",
+          worker_host: worker_host
+        })
+      )
+
+    retry = Map.fetch!(state.retry_attempts, issue.id)
+    Process.cancel_timer(retry.timer_ref)
+    defer_retry(state, issue.id, retry.retry_token)
   end
 
   defp stall_elapsed_ms(running_entry, now) do
@@ -755,6 +899,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp block_issue_from_entry(%State{} = state, issue_id, running_entry, error) do
+    RuntimeControl.delete_retry(RuntimeControl.runtime_id(), issue_id)
+
     blocked_entry = %{
       issue_id: issue_id,
       identifier: Map.get(running_entry, :identifier, issue_id),
@@ -950,20 +1096,45 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp do_dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host) do
-    recipient = self()
+  defp do_dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host, metadata \\ %{}) do
+    if dispatch_ready?(state) do
+      recipient = self()
 
-    case select_worker_host(state, preferred_worker_host) do
-      :no_worker_capacity ->
-        Logger.debug("No SSH worker slots available for #{issue_context(issue)} preferred_worker_host=#{inspect(preferred_worker_host)}")
-        state
+      case select_worker_host(state, preferred_worker_host) do
+        :no_worker_capacity ->
+          Logger.debug("No SSH worker slots available for #{issue_context(issue)} preferred_worker_host=#{inspect(preferred_worker_host)}")
+          state
 
-      worker_host ->
-        spawn_issue_on_worker_host(state, issue, attempt, recipient, worker_host)
+        worker_host ->
+          spawn_issue_on_worker_host(state, issue, attempt, recipient, worker_host)
+      end
+    else
+      defer_dispatch_retry(state, issue, attempt, preferred_worker_host, metadata)
     end
   end
 
   defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host) do
+    recovery = %{
+      issue_id: issue.id,
+      identifier: issue.identifier,
+      issue_url: issue.url,
+      attempt: normalize_retry_attempt(attempt),
+      error: "Agent run was interrupted by a service restart",
+      worker_host: worker_host,
+      workspace_path: nil
+    }
+
+    case RuntimeControl.persist_retry(RuntimeControl.runtime_id(), recovery) do
+      :ok ->
+        start_issue_child(state, issue, attempt, recipient, worker_host)
+
+      {:error, reason} ->
+        Logger.error("Unable to persist active task recovery for #{issue_context(issue)}: #{inspect(reason)}; leaving issue undispatched")
+        state
+    end
+  end
+
+  defp start_issue_child(state, issue, attempt, recipient, worker_host) do
     case Task.Supervisor.start_child(state.task_supervisor, fn ->
            AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
          end) do
@@ -1038,6 +1209,8 @@ defmodule SymphonyElixir.Orchestrator do
     do: {:ok, issue}
 
   defp complete_issue(%State{} = state, issue_id) do
+    RuntimeControl.delete_retry(RuntimeControl.runtime_id(), issue_id)
+
     %{
       state
       | completed: MapSet.put(state.completed, issue_id),
@@ -1069,7 +1242,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     Logger.warning("Retrying issue_id=#{issue_id} issue_identifier=#{identifier} in #{delay_ms}ms (attempt #{next_attempt})#{error_suffix}")
 
-    %{
+    updated_state = %{
       state
       | retry_attempts:
           Map.put(state.retry_attempts, issue_id, %{
@@ -1084,6 +1257,9 @@ defmodule SymphonyElixir.Orchestrator do
             workspace_path: workspace_path
           })
     }
+
+    persist_retry_state(issue_id, next_attempt, identifier, issue_url, error, worker_host, workspace_path)
+    updated_state
   end
 
   defp pop_retry_attempt_state(%State{} = state, issue_id, retry_token) when is_reference(retry_token) do
@@ -1194,7 +1370,7 @@ defmodule SymphonyElixir.Orchestrator do
          worker_slots_available?(state, metadata[:worker_host]) do
       case refresh_issue_for_dispatch(issue, active_state_set()) do
         {:ok, %Issue{} = refreshed_issue} ->
-          {:noreply, do_dispatch_issue(state, refreshed_issue, attempt, metadata[:worker_host])}
+          {:noreply, do_dispatch_issue(state, refreshed_issue, attempt, metadata[:worker_host], metadata)}
 
         {:skip, :missing} ->
           {:noreply, release_issue_claim(state, issue.id)}
@@ -1231,6 +1407,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp release_issue_claim(%State{} = state, issue_id) do
+    RuntimeControl.delete_retry(RuntimeControl.runtime_id(), issue_id)
+
     %{
       state
       | claimed: MapSet.delete(state.claimed, issue_id),
@@ -1479,11 +1657,29 @@ defmodule SymphonyElixir.Orchestrator do
         }
       end)
 
+    runtime_control =
+      case RuntimeControl.status() do
+        {:ok, status} ->
+          status
+
+        {:error, reason} ->
+          %{
+            mode: :unknown,
+            reason: "Runtime control unavailable",
+            source: "system",
+            active_turns: 0,
+            quota_summary: nil,
+            quota_checked_at: nil,
+            database_error: inspect(reason)
+          }
+      end
+
     {:reply,
      %{
        running: running,
        retrying: retrying,
        blocked: blocked,
+       runtime_control: runtime_control,
        codex_totals: state.codex_totals,
        rate_limits: Map.get(state, :codex_rate_limits),
        polling: %{

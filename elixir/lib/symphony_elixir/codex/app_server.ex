@@ -4,11 +4,12 @@ defmodule SymphonyElixir.Codex.AppServer do
   """
 
   require Logger
-  alias SymphonyElixir.{Codex.DynamicTool, Config, PathSafety, SSH}
+  alias SymphonyElixir.{Codex.DynamicTool, Config, PathSafety, RuntimeControl, SSH}
 
   @initialize_id 1
   @thread_start_id 2
   @turn_start_id 3
+  @rate_limits_read_id 4
   @port_line_bytes 1_048_576
   @max_stream_log_bytes 1_000
   @type session :: %{
@@ -68,29 +69,69 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
+  @spec read_rate_limits() :: {:ok, map()} | {:error, term()}
+  def read_rate_limits do
+    dynamic_tool_binding = DynamicTool.bind()
+    deadline = response_deadline()
+
+    with {:ok, port} <- start_port(System.tmp_dir!(), nil, dynamic_tool_binding) do
+      try do
+        with :ok <- send_initialize(port, deadline),
+             :ok <- request_rate_limits(port),
+             {:ok, result} <- await_response(port, @rate_limits_read_id, deadline) do
+          quota_result(result)
+        end
+      after
+        stop_port(port)
+      end
+    end
+  end
+
   @spec run_turn(session(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def run_turn(
-        %{
-          port: port,
-          metadata: metadata,
-          approval_policy: approval_policy,
-          auto_approve_requests: auto_approve_requests,
-          turn_sandbox_policy: turn_sandbox_policy,
-          thread_id: thread_id,
-          workspace: workspace,
-          dynamic_tool_binding: dynamic_tool_binding
-        },
+        %{dynamic_tool_binding: dynamic_tool_binding} = session,
         prompt,
         issue,
         opts \\ []
       ) do
     on_message = Keyword.get(opts, :on_message, &default_on_message/1)
+    runtime_control = Keyword.get(opts, :runtime_control, RuntimeControl)
 
     tool_executor =
       Keyword.get(opts, :tool_executor, fn tool, arguments ->
         DynamicTool.execute(tool, arguments, dynamic_tool_binding, issue: issue)
       end)
 
+    with {:ok, permit} <- RuntimeControl.acquire_turn(runtime_control) do
+      try do
+        result = run_admitted_turn(session, prompt, issue, on_message, tool_executor)
+
+        if quota_limit_error?(result) do
+          RuntimeControl.pause("Codex usage limit exceeded", "quota", runtime_control)
+        end
+
+        result
+      after
+        RuntimeControl.release_turn(permit, runtime_control)
+      end
+    end
+  end
+
+  defp run_admitted_turn(
+         %{
+           port: port,
+           metadata: metadata,
+           approval_policy: approval_policy,
+           auto_approve_requests: auto_approve_requests,
+           turn_sandbox_policy: turn_sandbox_policy,
+           thread_id: thread_id,
+           workspace: workspace
+         },
+         prompt,
+         issue,
+         on_message,
+         tool_executor
+       ) do
     case start_turn(port, thread_id, prompt, issue, workspace, approval_policy, turn_sandbox_policy) do
       {:ok, turn_id} ->
         session_id = "#{thread_id}-#{turn_id}"
@@ -141,6 +182,86 @@ defmodule SymphonyElixir.Codex.AppServer do
         {:error, reason}
     end
   end
+
+  defp request_rate_limits(port) do
+    send_message(port, %{"method" => "account/rateLimits/read", "id" => @rate_limits_read_id})
+    :ok
+  end
+
+  defp quota_result(%{"rateLimitsByLimitId" => limits}) when is_map(limits) and map_size(limits) > 0 do
+    assess_rate_limits(limits)
+  end
+
+  defp quota_result(%{"rateLimitsByLimitId" => limits}) when not is_nil(limits),
+    do: {:error, :codex_rate_limits_missing}
+
+  defp quota_result(%{"rateLimits" => limits}) when is_map(limits), do: assess_rate_limits(%{"codex" => limits})
+  defp quota_result(_result), do: {:error, :codex_rate_limits_missing}
+
+  defp assess_rate_limits(limits) do
+    result =
+      Enum.reduce_while(limits, {:ok, []}, fn {limit_id, limit}, {:ok, observations} ->
+        case quota_bucket(limit_id, limit) do
+          {:ok, windows} -> {:cont, {:ok, observations ++ windows}}
+          {:error, _reason} = error -> {:halt, error}
+        end
+      end)
+
+    with {:ok, observations} <- result do
+      exhausted? = Enum.any?(observations, fn {_id, used, _reset} -> used == 100 end)
+      {:ok, %{available?: not exhausted?, summary: format_quota_summary(observations)}}
+    end
+  end
+
+  defp quota_bucket(limit_id, limit) when is_map(limit) do
+    with {:ok, primary} <- quota_window(limit_id, "primary", Map.get(limit, "primary")),
+         {:ok, secondary} <- quota_window(limit_id, "secondary", Map.get(limit, "secondary")) do
+      observations = primary ++ secondary
+
+      cond do
+        not is_nil(Map.get(limit, "rateLimitReachedType")) ->
+          {:ok, [{limit_id, 100, nil} | observations]}
+
+        observations == [] ->
+          {:error, {:codex_quota_usage_unavailable, limit_id}}
+
+        true ->
+          {:ok, observations}
+      end
+    end
+  end
+
+  defp quota_bucket(limit_id, _limit), do: {:error, {:codex_quota_usage_unavailable, limit_id}}
+
+  # Null windows represent an absent quota window in the app-server protocol.
+  # A present window must have a valid percentage; another window cannot mask it.
+  defp quota_window(_limit_id, _window_name, nil), do: {:ok, []}
+
+  defp quota_window(limit_id, _window_name, %{"usedPercent" => used} = window)
+       when is_number(used) and used >= 0 and used <= 100 do
+    {:ok, [{limit_id, used, Map.get(window, "resetsAt")}]}
+  end
+
+  defp quota_window(limit_id, window_name, _window) do
+    {:error, {:codex_quota_window_invalid, limit_id, window_name}}
+  end
+
+  defp format_quota_summary(observations) do
+    observations
+    |> Enum.map_join(", ", fn {limit_id, used, reset_at} ->
+      reset = format_reset_time(reset_at)
+      "#{limit_id}: #{used}%#{reset}"
+    end)
+  end
+
+  defp format_reset_time(reset_at) when is_integer(reset_at) do
+    case DateTime.from_unix(reset_at) do
+      {:ok, datetime} -> " (resets #{DateTime.to_iso8601(datetime)})"
+      {:error, _reason} -> ""
+    end
+  end
+
+  defp format_reset_time(_reset_at), do: ""
 
   @spec stop_session(session()) :: :ok
   def stop_session(%{port: port}) when is_port(port) do
@@ -272,7 +393,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp send_initialize(port) do
+  defp send_initialize(port, deadline \\ response_deadline()) do
     payload = %{
       "method" => "initialize",
       "id" => @initialize_id,
@@ -290,7 +411,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
     send_message(port, payload)
 
-    with {:ok, _} <- await_response(port, @initialize_id) do
+    with {:ok, _} <- await_response(port, @initialize_id, deadline) do
       send_message(port, %{"method" => "initialized", "params" => %{}})
       :ok
     end
@@ -405,8 +526,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
     case Jason.decode(payload_string) do
       {:ok, %{"method" => "turn/completed"} = payload} ->
-        emit_turn_event(on_message, :turn_completed, payload, payload_string, port, payload)
-        {:ok, :turn_completed}
+        handle_completed_turn(port, on_message, payload, payload_string)
 
       {:ok, %{"method" => "turn/failed", "params" => _} = payload} ->
         emit_turn_event(
@@ -476,6 +596,41 @@ defmodule SymphonyElixir.Codex.AppServer do
         receive_loop(port, on_message, timeout_ms, "", tool_executor, auto_approve_requests)
     end
   end
+
+  defp handle_completed_turn(port, on_message, payload, payload_string) do
+    case completed_turn_result(payload) do
+      {:ok, _turn} = result ->
+        emit_turn_event(on_message, :turn_completed, payload, payload_string, port, payload)
+        result
+
+      {:error, reason} ->
+        emit_turn_event(on_message, :turn_failed, payload, payload_string, port, reason)
+        {:error, {:turn_failed, reason}}
+    end
+  end
+
+  defp completed_turn_result(payload) do
+    turn =
+      get_in(payload, ["params", "turn"]) ||
+        Map.get(payload, "turn")
+
+    case turn do
+      %{"status" => "failed"} -> {:error, Map.get(turn, "error", turn)}
+      %{"status" => "interrupted"} -> {:error, {:turn_interrupted, Map.get(turn, "error")}}
+      _ -> {:ok, :turn_completed}
+    end
+  end
+
+  defp quota_limit_error?({:error, reason}) do
+    message = inspect(reason, limit: :infinity, printable_limit: 4_000) |> String.downcase()
+
+    Enum.any?(
+      ["usage_limit_exceeded", "usagelimitexceeded", "usage limit exceeded", "usage limit reached"],
+      &String.contains?(message, &1)
+    )
+  end
+
+  defp quota_limit_error?(_result), do: false
 
   defp emit_turn_event(on_message, event, payload, payload_string, port, payload_details) do
     emit_message(
@@ -892,28 +1047,42 @@ defmodule SymphonyElixir.Codex.AppServer do
     String.starts_with?(normalized_label, "approve") or String.starts_with?(normalized_label, "allow")
   end
 
-  defp await_response(port, request_id) do
-    with_timeout_response(port, request_id, Config.settings!().codex.read_timeout_ms, "")
+  defp response_deadline do
+    System.monotonic_time(:millisecond) + Config.settings!().codex.read_timeout_ms
   end
 
-  defp with_timeout_response(port, request_id, timeout_ms, pending_line) do
+  defp await_response(port, request_id, deadline \\ response_deadline()) do
+    with_timeout_response(port, request_id, deadline, "")
+  end
+
+  defp with_timeout_response(port, request_id, deadline, pending_line) do
+    remaining_ms = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    if remaining_ms == 0 do
+      {:error, :response_timeout}
+    else
+      receive_response(port, request_id, deadline, pending_line, remaining_ms)
+    end
+  end
+
+  defp receive_response(port, request_id, deadline, pending_line, remaining_ms) do
     receive do
       {^port, {:data, {:eol, chunk}}} ->
         complete_line = pending_line <> to_string(chunk)
-        handle_response(port, request_id, complete_line, timeout_ms)
+        handle_response(port, request_id, complete_line, deadline)
 
       {^port, {:data, {:noeol, chunk}}} ->
-        with_timeout_response(port, request_id, timeout_ms, pending_line <> to_string(chunk))
+        with_timeout_response(port, request_id, deadline, pending_line <> to_string(chunk))
 
       {^port, {:exit_status, status}} ->
         {:error, {:port_exit, status}}
     after
-      timeout_ms ->
+      remaining_ms ->
         {:error, :response_timeout}
     end
   end
 
-  defp handle_response(port, request_id, data, timeout_ms) do
+  defp handle_response(port, request_id, data, deadline) do
     payload = to_string(data)
 
     case Jason.decode(payload) do
@@ -926,13 +1095,13 @@ defmodule SymphonyElixir.Codex.AppServer do
       {:ok, %{"id" => ^request_id} = response_payload} ->
         {:error, {:response_error, response_payload}}
 
-      {:ok, %{} = other} ->
+      {:ok, other} ->
         Logger.debug("Ignoring message while waiting for response: #{inspect(other)}")
-        with_timeout_response(port, request_id, timeout_ms, "")
+        with_timeout_response(port, request_id, deadline, "")
 
       {:error, _} ->
         log_non_json_stream_line(payload, "response stream")
-        with_timeout_response(port, request_id, timeout_ms, "")
+        with_timeout_response(port, request_id, deadline, "")
     end
   end
 

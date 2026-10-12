@@ -26,6 +26,16 @@ defmodule SymphonyElixir.Config do
           turn_sandbox_policy: map()
         }
 
+  @type runtime_control_settings :: %{
+          enabled: boolean(),
+          path: Path.t() | nil,
+          id: String.t() | nil,
+          members: [String.t()],
+          quota_check_timeout_ms: pos_integer(),
+          heartbeat_interval_ms: pos_integer(),
+          heartbeat_timeout_ms: pos_integer()
+        }
+
   @spec settings() :: {:ok, Schema.t()} | {:error, term()}
   def settings do
     WorkflowStore.settings()
@@ -83,6 +93,13 @@ defmodule SymphonyElixir.Config do
       port when is_integer(port) and port >= 0 -> port
       _ -> settings!().server.port
     end
+  end
+
+  @spec runtime_control() :: runtime_control_settings()
+  def runtime_control do
+    settings!().runtime_control
+    |> Map.from_struct()
+    |> Map.delete(:__meta__)
   end
 
   @doc false

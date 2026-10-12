@@ -5,6 +5,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
+  alias SymphonyElixir.RuntimeControl
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
   @runtime_tick_ms 1_000
 
@@ -26,7 +27,11 @@ defmodule SymphonyElixirWeb.DashboardLive do
   @impl true
   def handle_info(:runtime_tick, socket) do
     schedule_runtime_tick()
-    {:noreply, assign(socket, :now, DateTime.utc_now())}
+
+    {:noreply,
+     socket
+     |> assign(:payload, load_payload())
+     |> assign(:now, DateTime.utc_now())}
   end
 
   @impl true
@@ -35,6 +40,35 @@ defmodule SymphonyElixirWeb.DashboardLive do
      socket
      |> assign(:payload, load_payload())
      |> assign(:now, DateTime.utc_now())}
+  end
+
+  @impl true
+  def handle_event("pause_all", _params, socket) do
+    case RuntimeControl.pause("Paused by operator from the dashboard", "manual", runtime_control()) do
+      {:ok, _status} ->
+        :ok = ObservabilityPubSub.broadcast_update()
+        {:noreply, assign(socket, :payload, load_payload())}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "Could not pause runtime: #{inspect(reason)}")
+         |> assign(:payload, load_payload())}
+    end
+  end
+
+  def handle_event("resume_all", _params, socket) do
+    case RuntimeControl.resume(runtime_control()) do
+      {:ok, _status} ->
+        :ok = ObservabilityPubSub.broadcast_update()
+        {:noreply, assign(socket, :payload, load_payload())}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "Could not check Codex quota: #{inspect(reason)}")
+         |> assign(:payload, load_payload())}
+    end
   end
 
   @impl true
@@ -67,6 +101,58 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </div>
         </div>
       </header>
+
+      <p :if={Phoenix.Flash.get(@flash, :error)} role="alert" class="error-card">
+        <%= Phoenix.Flash.get(@flash, :error) %>
+      </p>
+
+      <section :if={@payload[:runtime_control] && Map.get(@payload.runtime_control, :enabled, true)} class="section-card runtime-control-card">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Runtime control</h2>
+            <p class="section-copy">Pause or resume Codex work across BE, FE and landing.</p>
+          </div>
+          <strong class={runtime_control_badge_class(@payload[:runtime_control])}>
+            <%= runtime_control_label(@payload[:runtime_control]) %>
+          </strong>
+        </div>
+
+        <p :if={@payload[:runtime_control] && @payload.runtime_control[:reason]} class="runtime-control-reason">
+          <%= @payload.runtime_control.reason %>
+        </p>
+        <p :if={@payload.runtime_control[:changed_at]} class="runtime-control-reason">
+          Changed: <%= @payload.runtime_control.changed_at %> · Source: <%= @payload.runtime_control[:source] %>
+        </p>
+        <p :for={{service, health} <- Map.get(@payload.runtime_control, :services, %{})} class="runtime-control-reason">
+          <%= service %>: <%= if health.status == :online, do: "Online", else: "Unknown / unavailable" %>
+        </p>
+        <p :if={@payload[:runtime_control] && @payload.runtime_control[:database_error]} class="runtime-control-reason">
+          State store error: <%= @payload.runtime_control.database_error %>
+        </p>
+        <p :if={@payload[:runtime_control] && @payload.runtime_control[:quota_summary]} class="runtime-control-reason">
+          Last quota check: <%= @payload.runtime_control.quota_summary %>
+          <span :if={@payload.runtime_control[:quota_checked_at]}> · <%= @payload.runtime_control.quota_checked_at %></span>
+        </p>
+        <p :if={@payload[:runtime_control] && runtime_control_mode(@payload.runtime_control) == :pausing && @payload.runtime_control.active_turns > 0} class="runtime-control-reason">
+          Waiting for <%= @payload.runtime_control.active_turns %> active Codex turn(s) to finish.
+        </p>
+
+        <div class="runtime-control-actions">
+          <button :if={runtime_control_mode(@payload[:runtime_control]) in [:running, :checking_quota]} phx-click="pause_all">
+            Pause all
+          </button>
+          <button :if={runtime_control_mode(@payload[:runtime_control]) == :paused} class="secondary" phx-click="resume_all">
+            Check quota and resume
+          </button>
+          <button :if={runtime_control_mode(@payload[:runtime_control]) in [:pausing, :checking_quota, :unknown]} disabled>
+            <%= case runtime_control_mode(@payload[:runtime_control]) do %>
+              <% :checking_quota -> %>Checking quota…
+              <% :pausing -> %>Pausing…
+              <% _ -> %>Control unavailable
+            <% end %>
+          </button>
+        </div>
+      </section>
 
       <%= if @payload[:error] do %>
         <section class="error-card">
@@ -330,12 +416,36 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp load_payload do
-    Presenter.state_payload(orchestrator(), snapshot_timeout_ms())
+    payload = Presenter.state_payload(orchestrator(), snapshot_timeout_ms())
+
+    if is_nil(payload[:runtime_control]) or not is_nil(Endpoint.config(:runtime_control)) do
+      control =
+        case RuntimeControl.status(runtime_control()) do
+          {:ok, status} ->
+            status
+
+          {:error, reason} ->
+            %{
+              mode: :unknown,
+              reason: "Runtime control unavailable",
+              active_turns: 0,
+              quota_summary: nil,
+              quota_checked_at: nil,
+              database_error: inspect(reason)
+            }
+        end
+
+      Map.put(payload, :runtime_control, control)
+    else
+      payload
+    end
   end
 
   defp orchestrator do
     Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
   end
+
+  defp runtime_control, do: Endpoint.config(:runtime_control) || RuntimeControl
 
   defp snapshot_timeout_ms do
     Endpoint.config(:snapshot_timeout_ms) || 15_000
@@ -424,6 +534,35 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp format_int(_value), do: "n/a"
+
+  defp runtime_control_mode(%{mode: mode}), do: mode
+  defp runtime_control_mode(%{"mode" => "running"}), do: :running
+  defp runtime_control_mode(%{"mode" => "pausing"}), do: :pausing
+  defp runtime_control_mode(%{"mode" => "paused"}), do: :paused
+  defp runtime_control_mode(%{"mode" => "checking_quota"}), do: :checking_quota
+  defp runtime_control_mode(_control), do: :unknown
+
+  defp runtime_control_label(control) do
+    case runtime_control_mode(control) do
+      :running -> "Running"
+      :pausing -> "Pausing"
+      :paused -> paused_label(control)
+      :checking_quota -> "Checking quota"
+      _ -> "Control unavailable"
+    end
+  end
+
+  defp paused_label(%{source: "manual"}), do: "Paused manually"
+  defp paused_label(%{source: source}) when source in ["quota", "quota_check"], do: "Waiting for quota"
+  defp paused_label(_control), do: "Paused"
+
+  defp runtime_control_badge_class(control) do
+    case runtime_control_mode(control) do
+      :running -> "status-badge runtime-control-running"
+      :paused -> "status-badge runtime-control-paused"
+      _ -> "status-badge status-badge-warning"
+    end
+  end
 
   defp state_badge_class(state) do
     base = "state-badge"
