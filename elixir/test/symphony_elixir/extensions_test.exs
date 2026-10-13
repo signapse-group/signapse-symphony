@@ -57,6 +57,10 @@ defmodule SymphonyElixir.ExtensionsTest do
     def handle_call(:request_refresh, _from, state) do
       {:reply, Keyword.get(state, :refresh, :unavailable), state}
     end
+
+    def handle_call(:workflow_update_ready, _from, state) do
+      {:reply, {:error, "Runtime is busy. Retry after agents finish."}, state}
+    end
   end
 
   setup do
@@ -536,6 +540,16 @@ defmodule SymphonyElixir.ExtensionsTest do
     render_click(element(view, "button", "Pause all"))
     assert {:ok, %{mode: :paused, source: "manual"}} = RuntimeControl.status(observer)
     assert render(view) =~ "Paused manually"
+  end
+
+  test "dashboard workflow update finishes asynchronously with a readable result" do
+    start_supervised!({StaticOrchestrator, name: __MODULE__.WorkflowOrchestrator, snapshot: static_snapshot()})
+    start_test_endpoint(orchestrator: __MODULE__.WorkflowOrchestrator)
+    {:ok, view, _html} = live(build_conn(), "/")
+    assert has_element?(view, "#update-workflow", "Update workflow")
+    render_click(element(view, "#update-workflow"))
+    assert render_async(view) =~ "Runtime is busy. Retry after agents finish."
+    assert has_element?(view, "#update-workflow:not([disabled])")
   end
 
   test "dashboard liveview renders and refreshes over pubsub" do

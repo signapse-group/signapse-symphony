@@ -465,6 +465,38 @@ The observability UI now runs on a minimal Phoenix stack:
 - Phoenix dependency static assets for the LiveView client bootstrap
 - Tracker issue identifiers link to the tracker-provided URL when it uses `http` or `https`
 
+### Workflow updates
+
+**Update workflow** updates only the repository containing this service's root `WORKFLOW.md`.
+It requires a clean checkout on `main`, an `origin` remote, Git credentials already available to
+the service, and `git` plus GNU `timeout` on its PATH. The button never requests credentials.
+Standalone workflows and workflows below the repository root cannot use this operation.
+
+The runtime refuses when an agent is running, fetches `origin/main` in the background, validates
+the candidate's configuration and Liquid syntax, then checks again for running agents before
+applying a fast-forward and verifying the loaded workflow. The apply step is serialized with
+dispatch/retry processing. Git hooks and recursive submodule updates are disabled. Concurrent
+requests prepared against an older local revision must retry; each Git command has a 20-second
+timeout. Git output is not displayed because it can contain credentials.
+
+Prompt changes and known fields in `polling`, `agent`, `hooks`, and `codex` can be applied.
+Other configuration changes, including tracker routing, workspace paths, server settings,
+runtime controls and unknown options, require a reviewed deployment. This conservative boundary
+does not change the existing file reload contract. Syntax validation does not prove that prompt
+instructions are correct or that newly requested external tools exist; merged `main` remains the
+trusted source. No application build, deployment, or repository-owned checker is executed.
+
+If activation fails, the updater attempts to restore the previous revision using `git reset --keep`
+and reload it. If rollback fails, the result explicitly requests operator intervention; check the
+checkout and loaded workflow before retrying. Service/process crashes during checkout also require
+that check. The last result is shown in the current dashboard session, not persisted as a history.
+
+The whole stable checkout advances, but existing issue clones, Jira state, engine, environment,
+and systemd units are untouched. Instructions in old issue clones stay unchanged. There is no
+scheduled update, update-all button, automatic restart, or automatic engine upgrade. The existing
+`POST /api/v1/refresh` retains its polling/reconciliation meaning. Keep the dashboard restricted
+to trusted operators; this write operation uses the existing LiveView origin and CSRF protections.
+
 ### Shared runtime controls
 
 Runtime controls are opt-in through `WORKFLOW.md`, and disabled by default. For BE, FE, and landing

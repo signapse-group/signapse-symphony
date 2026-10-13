@@ -37,6 +37,9 @@ help with the setup:
 Each target repository owns its `WORKFLOW.md` configuration and agent prompt, including its
 implementation, verification, and PR handoff rules. Symphony loads that file; optional agent skills
 are maintained by the target repository independently of Symphony releases.
+The dashboard's **Update workflow** button can fast-forward the current service's clean target
+checkout from `origin/main` while idle, validate and reload its workflow, and preserve issue clones.
+See [workflow updates](elixir/README.md#workflow-updates) for supported changes and prerequisites.
 Workflows with an active review task receive a fresh session and prompt when an agent crosses
 the configured review boundary, while retaining the issue workspace.
 Additional task phases, such as a Ready survey before implementation, can opt into

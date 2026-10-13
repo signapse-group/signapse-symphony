@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, RuntimeControl, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, RuntimeControl, StatusDashboard, Tracker, WorkflowUpdate, Workspace}
   alias SymphonyElixir.Tracker.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -1690,6 +1690,15 @@ defmodule SymphonyElixir.Orchestrator do
      }, state}
   end
 
+  def handle_call(:workflow_update_ready, _from, state) do
+    {:reply, workflow_update_ready(state), state}
+  end
+
+  def handle_call({:apply_workflow_update, candidate}, _from, state) do
+    result = with :ok <- workflow_update_ready(state), do: WorkflowUpdate.apply(candidate)
+    {:reply, result, state}
+  end
+
   def handle_call(:request_refresh, _from, state) do
     now_ms = System.monotonic_time(:millisecond)
     already_due? = is_integer(state.next_poll_due_at_ms) and state.next_poll_due_at_ms <= now_ms
@@ -1704,6 +1713,11 @@ defmodule SymphonyElixir.Orchestrator do
        operations: ["poll", "reconcile"]
      }, state}
   end
+
+  defp workflow_update_ready(%{running: running}) when map_size(running) > 0,
+    do: {:error, "Runtime is busy. Retry the workflow update after agents finish."}
+
+  defp workflow_update_ready(_state), do: :ok
 
   defp blocked_issue_state(%{issue: %Issue{state: state}}), do: state
   defp blocked_issue_state(_metadata), do: nil
