@@ -20,6 +20,8 @@ tracker:
     - Done
 polling:
   interval_ms: 5000
+# Dashboard updates need a clean main checkout with WORKFLOW.md at the repository root.
+# This source-development workflow is nested; see README.md#workflow-updates for target services.
 runtime_control:
   enabled: false
 # For services sharing a Codex account, enable this block in each deployment workflow:

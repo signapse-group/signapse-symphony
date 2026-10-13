@@ -613,6 +613,15 @@ Dynamic reload is REQUIRED:
 - Invalid reloads MUST NOT crash the service; keep operating with the last known good effective
   configuration and emit an operator-visible error.
 
+An implementation MAY offer an operator-triggered repository workflow update. The Elixir dashboard
+extension requires a clean `main` checkout with a root `WORKFLOW.md`, fetches `origin/main`, and
+validates configuration and prompt syntax before a fast-forward. It refuses while agents are
+running and serializes activation with dispatch and retry processing. It allows prompt and known
+`polling`, `agent`, `hooks`, and `codex` field changes; other configuration changes require a
+reviewed deployment. Failed activation attempts restore the prior revision without discarding
+local edits, and report explicitly if restoration fails. This operation does not synchronize issue
+clones, restart services, upgrade engines, or change the polling refresh API.
+
 ### 6.3 Dispatch Preflight Validation
 
 This validation is a scheduler preflight run before attempting to dispatch new work. It validates

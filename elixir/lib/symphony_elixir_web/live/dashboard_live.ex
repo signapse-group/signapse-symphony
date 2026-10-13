@@ -5,7 +5,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
-  alias SymphonyElixir.RuntimeControl
+  alias SymphonyElixir.{RuntimeControl, WorkflowUpdate}
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
   @runtime_tick_ms 1_000
 
@@ -14,6 +14,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
     socket =
       socket
       |> assign(:payload, load_payload())
+      |> assign(:workflow_updating, false)
+      |> assign(:workflow_update_message, nil)
       |> assign(:now, DateTime.utc_now())
 
     if connected?(socket) do
@@ -43,6 +45,18 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   @impl true
+  def handle_event("update_workflow", _params, %{assigns: %{workflow_updating: true}} = socket), do: {:noreply, socket}
+
+  def handle_event("update_workflow", _params, socket) do
+    server = orchestrator()
+
+    {:noreply,
+     socket
+     |> assign(:workflow_updating, true)
+     |> assign(:workflow_update_message, nil)
+     |> start_async(:update_workflow, fn -> WorkflowUpdate.update(server) end)}
+  end
+
   def handle_event("pause_all", _params, socket) do
     case RuntimeControl.pause("Paused by operator from the dashboard", "manual", runtime_control()) do
       {:ok, _status} ->
@@ -69,6 +83,15 @@ defmodule SymphonyElixirWeb.DashboardLive do
          |> put_flash(:error, "Could not check Codex quota: #{inspect(reason)}")
          |> assign(:payload, load_payload())}
     end
+  end
+
+  @impl true
+  def handle_async(:update_workflow, {:ok, {_status, message}}, socket) do
+    {:noreply, assign(socket, workflow_updating: false, workflow_update_message: message)}
+  end
+
+  def handle_async(:update_workflow, {:exit, _reason}, socket) do
+    {:noreply, assign(socket, workflow_updating: false, workflow_update_message: "Update interrupted. Check repository state before retrying.")}
   end
 
   @impl true
@@ -101,6 +124,19 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </div>
         </div>
       </header>
+
+      <section class="section-card">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Workflow</h2>
+            <p class="section-copy">Update this service's repository from main. Existing issue workspaces are kept.</p>
+          </div>
+          <button id="update-workflow" phx-click="update_workflow" disabled={@workflow_updating}>
+            <%= if @workflow_updating, do: "Updating…", else: "Update workflow" %>
+          </button>
+        </div>
+        <p :if={@workflow_update_message} role="status"><%= @workflow_update_message %></p>
+      </section>
 
       <p :if={Phoenix.Flash.get(@flash, :error)} role="alert" class="error-card">
         <%= Phoenix.Flash.get(@flash, :error) %>
