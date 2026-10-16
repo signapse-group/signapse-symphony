@@ -16,6 +16,7 @@ tracker:
     - In progress
   review_state: In review
   session_boundary_states: []
+# Boundaries interrupt observed in-flight phases; see README.md for stop/recovery prerequisites.
   terminal_states:
     - Done
 polling:

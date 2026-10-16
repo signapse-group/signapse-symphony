@@ -61,6 +61,10 @@ defmodule SymphonyElixir.AgentRunner do
             run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
           end
         after
+          if is_binary(Config.settings!().hooks.after_run) do
+            Keyword.get(opts, :on_after_run, fn -> :ok end).()
+          end
+
           Workspace.run_after_run_hook(workspace, issue, worker_host)
         end
 
@@ -77,7 +81,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_codex_update(recipient, %Issue{id: issue_id}, message)
        when is_binary(issue_id) and is_pid(recipient) do
-    send(recipient, {:codex_worker_update, issue_id, message})
+    send(recipient, {:codex_worker_update, issue_id, Map.put(message, :worker_pid, self())})
     :ok
   end
 
@@ -90,6 +94,7 @@ defmodule SymphonyElixir.AgentRunner do
       {:worker_runtime_info, issue_id,
        %{
          worker_host: worker_host,
+         worker_pid: self(),
          workspace_path: workspace
        }}
     )
@@ -103,11 +108,20 @@ defmodule SymphonyElixir.AgentRunner do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issues_by_ids/1)
 
-    with {:ok, session} <- AppServer.start_session(workspace, worker_host: worker_host) do
+    on_started = fn session_process ->
+      if is_pid(codex_update_recipient) do
+        send(codex_update_recipient, {:worker_runtime_info, issue.id, %{worker_pid: self(), session_process: session_process}})
+      end
+    end
+
+    with {:ok, session} <- AppServer.start_session(workspace, worker_host: worker_host, on_started: on_started) do
       try do
         do_run_codex_turns(session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, max_turns)
       after
-        AppServer.stop_session(session)
+        case AppServer.stop_session(session) do
+          :ok -> :ok
+          {:error, reason} -> exit({:session_stop_unconfirmed, reason})
+        end
       end
     end
   end
@@ -144,11 +158,34 @@ defmodule SymphonyElixir.AgentRunner do
 
           :ok
 
-        {:done, _refreshed_issue} ->
-          :ok
+        {:done, refreshed_issue} ->
+          finish_assignment(app_session, workspace, issue, refreshed_issue, codex_update_recipient, opts)
 
         {:error, reason} ->
           {:error, reason}
+      end
+    end
+  end
+
+  defp finish_assignment(session, workspace, issue, refreshed, recipient, opts) do
+    if same_agent_task?(issue, refreshed) do
+      :ok
+    else
+      recovery = %{
+        issue_id: issue.id,
+        identifier: issue.identifier,
+        issue_url: issue.url,
+        attempt: Keyword.get(opts, :attempt) || 1,
+        error: "Phase boundary handoff requires operator confirmation",
+        worker_host: session.worker_host,
+        workspace_path: workspace
+      }
+
+      prepare_boundary = Keyword.get(opts, :on_boundary, fn -> RuntimeControl.persist_retry(RuntimeControl.runtime_id(), recovery) end)
+
+      case prepare_boundary.() do
+        :ok -> send_codex_update(recipient, issue, %{event: :phase_boundary, timestamp: DateTime.utc_now()})
+        {:error, reason} -> exit({:session_stop_unconfirmed, {:recovery_persist_failed, reason}})
       end
     end
   end
@@ -163,7 +200,8 @@ defmodule SymphonyElixir.AgentRunner do
     - This is continuation turn ##{turn_number} of #{max_turns} for the current agent run.
     - Resume from the current workspace and workpad state instead of restarting from scratch.
     - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.
-    - Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.
+    - Continue only the assignment given to this session. Finish after its configured phase boundary transition and readback; a new session owns the next phase.
+    - Within the same assignment, focus on the remaining work until it is complete or you are blocked.
     """
   end
 
@@ -186,7 +224,8 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp continue_with_issue?(issue, _issue_state_fetcher), do: {:done, issue}
 
-  defp same_agent_task?(issue, refreshed_issue) do
+  @spec same_agent_task?(Issue.t(), Issue.t()) :: boolean()
+  def same_agent_task?(issue, refreshed_issue) do
     tracker = Config.settings!().tracker
 
     [tracker.review_state | tracker.session_boundary_states]

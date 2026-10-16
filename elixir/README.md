@@ -353,8 +353,9 @@ operator-input suspension is separate from Jira Blocked and is cleared on restar
 instances for one route; in-memory claims do not provide a distributed lock.
 
 A consuming workflow may include `review_state` in both dispatch and active states for a separate
-delivery task. After a normal turn completes, entering or leaving that state closes the old session;
-the scheduler rereads live state and renders the next task's full prompt in the same workspace.
+delivery task. When reconcile observes entering or leaving that state, it interrupts the old session
+even during a turn. After confirming session/tool and worker stop, the scheduler revalidates live
+admission and renders the next task's full prompt in a new thread in the same workspace.
 Ready → Progress continues the existing session unless Ready is an additional session boundary.
 For a separate BE survey followed by implementation and review/delivery, use the consumer's three
 phase prompts with:
@@ -372,9 +373,24 @@ Ready → Progress now closes the survey session; Progress → In Review and In 
 close their previous sessions. Each next worker renders the full prompt for live state in the same
 workspace. A state listed in `session_boundary_states` is its own boundary, so moving between two
 different listed states also ends the session. Same-state work continues, and an empty list retains
-the previous behavior. Polling/retry/startup use the existing ownership and workspace handling.
-The old worker keeps its claim until it exits,
-so an external phase change waits for the current turn to finish rather than interrupting its tools.
+the previous behavior for unconfigured boundaries. The post-turn check remains a fallback.
+The old worker keeps its claim/slot until session/tool and worker stop is confirmed. An unconfirmed
+stop retains ownership and reports an operator-inspection error; polling does not repeat the stop.
+Workspace/output and the existing durable retry ledger survive handoff. With persistent runtime
+control enabled, restart during handoff pauses dispatch until an operator checks the old processes
+and uses the existing quota-checked resume control. This pause affects all configured shared-control
+members. Runtime control disabled does not provide durable restart recovery.
+
+Boundary sessions use Linux `setsid` process groups, `bash`, `ps`, `awk`, `seq` and `sleep` on the
+execution host, including SSH workers. A surviving descendant in a different process group makes
+stop unconfirmed and requires operator inspection. Fully detached/reparented tools require stronger
+process containment before this mechanism can certify their shutdown; retain draft status until
+that containment gap is resolved for the intended runtime. Boundary startup on hosts without these
+tools is not supported by this implementation candidate. Workflows without boundaries and quota
+reads retain their existing launch path.
+
+Polling cannot prevent mutations before a transition is observed, detect every transition that
+reverses between polls, or treat failed tracker reads as boundary changes. This is not write fencing.
 Drain/restart the affected service before redefining its review boundary or task profile;
 workflow reload does not replace the instructions of a running Codex session.
 
