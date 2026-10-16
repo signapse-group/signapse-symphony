@@ -26,7 +26,7 @@ def main():
             f"Port {port}\nListenAddress 127.0.0.1\nHostKey {root / 'host'}\n"
             f"PidFile {root / 'sshd.pid'}\nAuthorizedKeysFile {root / 'authorized_keys'}\n"
             f"AllowUsers {user}\nStrictModes no\nPasswordAuthentication no\n"
-            "KbdInteractiveAuthentication no\nUsePAM no\nPermitRootLogin prohibit-password\n"
+            "KbdInteractiveAuthentication no\nUsePAM yes\nPrintMotd no\nPrintLastLog no\nPermitRootLogin prohibit-password\n"
             f"SetEnv XDG_RUNTIME_DIR={runtime} DBUS_SESSION_BUS_ADDRESS=unix:path={runtime}/bus\n"
             "LogLevel ERROR\n"
         )
