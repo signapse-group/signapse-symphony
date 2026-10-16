@@ -52,6 +52,11 @@ tracker issue states; see [runtime controls](elixir/README.md#shared-runtime-con
 
 For Jira Subtask workers, see the [Jira configuration and execution example](elixir/README.md#routed-jira-subtask-workflows).
 
+Updates to this repository's `main` deploy the verified Linux Burrito artifact to the four Signapse
+server services after CI and build succeed. Deployment restarts agents immediately and rolls back
+the service configuration if startup or health checks fail. See the [CD handoff](docs/symphony-cd-handoff.md)
+for one-time access setup and operational checks.
+
 ---
 
 ## License

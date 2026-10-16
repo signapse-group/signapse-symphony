@@ -36,3 +36,6 @@ jobs:
 
       - name: Verify make all
         run: make all
+
+      - name: Verify deployment script and CI gating
+        run: python3 -m unittest discover -s ../scripts -p 'test_*.py'

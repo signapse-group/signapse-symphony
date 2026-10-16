@@ -1,0 +1,108 @@
+name: deploy
+
+on:
+  workflow_run:
+    workflows: [make-all, burrito-nightly]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: symphony-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.repository == 'signapse-group/signapse-symphony' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+      DEPLOY_HOST: 100.113.56.38
+      DEPLOY_USER: dgminhtam
+
+    steps:
+      - name: Require successful CI and build for the current main commit
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          if [[ "$SOURCE_SHA" != "$head_sha" ]]; then
+            echo "Skipping superseded commit $SOURCE_SHA"
+            exit 0
+          fi
+          for workflow in make-all burrito-nightly; do
+            runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow.yml/runs?head_sha=$SOURCE_SHA&event=push&branch=main&per_page=1")"
+            if ! jq -e '.workflow_runs[0] | .status == "completed" and .conclusion == "success"' <<<"$runs" >/dev/null; then
+              echo "$workflow has not succeeded; its completion event will check again."
+              exit 0
+            fi
+            if [[ "$workflow" == burrito-nightly ]]; then
+              echo "build_run_id=$(jq -r '.workflow_runs[0].id' <<<"$runs")" >> "$GITHUB_OUTPUT"
+            fi
+          done
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+
+      - name: Checkout verified source
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Download the verified build artifact
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: linux_x86_64
+          path: candidate
+          run-id: ${{ steps.gate.outputs.build_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Connect to Tailscale
+        if: steps.gate.outputs.ready == 'true'
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          ping: ${{ env.DEPLOY_HOST }}
+
+      - name: Deploy all four services with automatic rollback
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" != "$SOURCE_SHA" ]]; then
+            echo 'A newer main commit arrived; skipping this deploy.'
+            exit 0
+          fi
+          cd candidate
+          sha256sum --check symphony-nightly-linux_x86_64.sha256
+          cd ..
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
+          umask 077
+          ssh_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$ssh_dir"' EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$ssh_dir/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          ssh_options=(-i "$ssh_dir/key" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$ssh_dir/known_hosts" -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+          target="$DEPLOY_USER@$DEPLOY_HOST"
+          stage="/opt/apps/symphony/runtime/deployments/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          unit="symphony-cd-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          ssh "${ssh_options[@]}" "$target" "umask 077; mkdir -p '$stage'"
+          scp "${ssh_options[@]}" scripts/deploy_symphony.py candidate/symphony-nightly-linux_x86_64 candidate/symphony-nightly-linux_x86_64.sha256 "$target:$stage/"
+          # A transient service finishes deploy/rollback even if the SSH client disconnects.
+          ssh "${ssh_options[@]}" "$target" "systemd-run --user --wait --collect --unit='$unit' /usr/bin/python3 '$stage/deploy_symphony.py' '$SOURCE_SHA' '$stage' || { journalctl --user -u '$unit' --no-pager -n 60; exit 1; }"

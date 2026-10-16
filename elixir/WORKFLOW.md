@@ -122,6 +122,9 @@ before continuing the same branch/PR.
 If the issue returns to `Ready` without the required input, move it to `In progress`, update and
 verify the existing blocker comment, then move it back to `Blocked` using the same sequence.
 
+Production runtime deployment runs automatically after successful main CI and build; unattended
+issue agents must not deploy directly or wait for deployment to close an implementation issue.
+
 Do not merge, deploy, mark the item `Done`, change product requirements, or create additional work
 items unless the root `AGENTS.md` explicitly assigns that action. Stop only at the `In review`
 handoff boundary, `Done`, or a true external blocker with no meaningful independent work remaining.

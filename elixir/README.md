@@ -545,7 +545,10 @@ Before the maintainer-owned rollout, verify the deployed Codex command, authenti
 payload using the actual service account. Build and smoke-test the Burrito targets because SQLite
 adds a native dependency. Upgrade all participating services together, keep the group Paused
 through the upgrade, and Resume only after all dashboards report the expected members and the
-quota check succeeds. Release and deployment remain maintainer-owned.
+quota check succeeds. This is the coordinated manual rollout procedure. The Signapse server's
+automatic CD uses the agreed immediate-restart policy instead: it preserves runtime-control
+databases and does not Pause or Resume. See [CD setup and operations](../docs/symphony-cd-handoff.md).
+Release remains maintainer-owned.
 
 ## Project Layout
 
