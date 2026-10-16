@@ -278,6 +278,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "session_id" => "thread-http",
                  "turn_count" => 7,
                  "last_event" => "notification",
+                 "handoff_error" => nil,
                  "last_message" => "rendered",
                  "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
                  "last_event_at" => nil,
@@ -345,6 +346,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "state" => "In Progress",
                "started_at" => issue_payload["running"]["started_at"],
                "last_event" => "notification",
+               "handoff_error" => nil,
                "last_message" => "rendered",
                "last_event_at" => nil,
                "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
@@ -384,6 +386,22 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert %{"queued" => true, "coalesced" => false, "operations" => ["poll", "reconcile"]} =
              json_response(conn, 202)
+  end
+
+  test "handoff failures remain claimed and visible in the API and dashboard" do
+    snapshot = static_snapshot()
+    running = Enum.map(snapshot.running, &Map.put(&1, :handoff_error, "session_stop_unconfirmed"))
+    snapshot = %{snapshot | running: running}
+    name = Module.concat(__MODULE__, :HandoffErrorOrchestrator)
+    {:ok, _} = StaticOrchestrator.start_link(name: name, snapshot: snapshot, refresh: %{})
+    start_test_endpoint(orchestrator: name, snapshot_timeout_ms: 50)
+
+    payload = json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
+    assert payload["status"] == "running"
+    assert payload["last_error"] == "session_stop_unconfirmed"
+    assert payload["running"]["handoff_error"] == "session_stop_unconfirmed"
+    assert json_response(get(build_conn(), "/api/v1/state"), 200)["counts"]["running"] == 1
+    assert html_response(get(build_conn(), "/"), 200) =~ "Operator inspection required"
   end
 
   test "phoenix observability api preserves 405, 404, and unavailable behavior" do

@@ -34,8 +34,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-mix-
 
-      - name: Verify make all
-        run: make all
+      - name: Prepare real systemd and SSH session tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y openssh-server
+          sudo mkdir -p /run/sshd
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
 
-      - name: Verify deployment script and CI gating
-        run: python3 -m unittest discover -s ../scripts -p 'test_*.py'
+      - name: Verify make all including real SSH phase handoffs
+        run: python3 ../scripts/run_session_tests.py make all
+
+      - name: Verify containment, deployment script and CI gating
+        run: python3 ../scripts/run_session_tests.py python3 -m unittest discover -s ../scripts -p 'test_*.py'

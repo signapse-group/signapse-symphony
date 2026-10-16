@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   """
 
   require Logger
-  alias SymphonyElixir.{Codex.DynamicTool, Config, PathSafety, RuntimeControl, SSH}
+  alias SymphonyElixir.{Codex.DynamicTool, Codex.SessionProcess, Config, PathSafety, RuntimeControl, SSH}
 
   @initialize_id 1
   @thread_start_id 2
@@ -14,7 +14,8 @@ defmodule SymphonyElixir.Codex.AppServer do
   @max_stream_log_bytes 1_000
   @type session :: %{
           port: port(),
-          process_group: pos_integer() | nil,
+          containment: map() | nil,
+          heartbeat: pid() | nil,
           metadata: map(),
           approval_policy: String.t() | map(),
           auto_approve_requests: boolean(),
@@ -46,10 +47,9 @@ defmodule SymphonyElixir.Codex.AppServer do
     dynamic_tool_binding = DynamicTool.bind()
 
     with {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host),
-         {:ok, port, process_group} <- start_port(expanded_workspace, worker_host, dynamic_tool_binding) do
+         {:ok, session_process} <- start_port(expanded_workspace, worker_host, dynamic_tool_binding, opts) do
+      port = session_process.port
       metadata = port_metadata(port, worker_host)
-      session_process = %{port: port, process_group: process_group, worker_host: worker_host}
-      Keyword.get(opts, :on_started, fn _ -> :ok end).(session_process)
 
       with {:ok, session_policies} <- session_policies(expanded_workspace, worker_host),
            {:ok, thread_id} <-
@@ -57,7 +57,8 @@ defmodule SymphonyElixir.Codex.AppServer do
         {:ok,
          %{
            port: port,
-           process_group: process_group,
+           containment: session_process.containment,
+           heartbeat: session_process.heartbeat,
            metadata: metadata,
            approval_policy: session_policies.approval_policy,
            auto_approve_requests: session_policies.approval_policy == "never",
@@ -70,8 +71,14 @@ defmodule SymphonyElixir.Codex.AppServer do
          }}
       else
         {:error, reason} ->
-          stop_failed_start(session_process, reason)
+          error = stop_failed_start(session_process, reason)
+          Keyword.get(opts, :on_stopped, fn -> :ok end).()
+          error
       end
+    else
+      {:error, _} = error ->
+        Keyword.get(opts, :on_stopped, fn -> :ok end).()
+        error
     end
   end
 
@@ -277,55 +284,14 @@ defmodule SymphonyElixir.Codex.AppServer do
   defp format_reset_time(_reset_at), do: ""
 
   @spec stop_session(map()) :: :ok | {:error, term()}
-  def stop_session(%{port: port, process_group: group, worker_host: host})
-      when is_port(port) and is_integer(group) and group > 1 do
-    command = """
-    command -v ps awk seq sleep >/dev/null || exit 2
-    kill -STOP -- -#{group} 2>/dev/null || true
-    snapshot=$(ps -eo pid=,ppid=,pgid=,stat=) || exit 2
-    printf '%s\\n' "$snapshot" | awk '
-      { parent[$1]=$2; group[$1]=$3; live[$1]=($4 !~ /^Z/); member[$1]=($3 == #{group}); count++ }
-      END {
-        do {
-          changed=0
-          for (pid in parent) if (!member[pid] && member[parent[pid]]) { member[pid]=1; changed=1 }
-        } while (changed)
-        for (pid in parent) if (member[pid] && live[pid] && group[pid] != #{group}) exit 3
-      }' || exit 3
-    kill -KILL -- -#{group} 2>/dev/null || true
-    for attempt in $(seq 1 100); do
-      snapshot=$(ps -eo pgid=,stat=) || exit 2
-      printf '%s\\n' "$snapshot" | awk '$1 == #{group} && $2 !~ /^Z/ { found=1 } END { exit !found }'
-      case $? in 1) exit 0 ;; 0) ;; *) exit 2 ;; esac
-      sleep 0.01
-    done
-    exit 1
-    """
-
-    task =
-      Task.async(fn ->
-        try do
-          if is_binary(host),
-            do: SSH.run(host, command, stderr_to_stdout: true),
-            else: {:ok, System.cmd("bash", ["-c", command], stderr_to_stdout: true)}
-        rescue
-          error -> {:error, Exception.message(error)}
-        end
-      end)
-
-    result = Task.yield(task, Config.settings!().codex.read_timeout_ms) || Task.shutdown(task, :brutal_kill)
-
-    case result do
-      {:ok, {:ok, {_, 0}}} -> stop_port(port)
-      other -> {:error, {:session_stop_unconfirmed, other}}
+  def stop_session(%{containment: containment} = session) when is_map(containment) do
+    with :ok <- SessionProcess.stop(session) do
+      if is_port(session[:port]), do: stop_port(session.port), else: :ok
     end
   end
 
-  def stop_session(%{port: port, process_group: nil}) when is_port(port), do: stop_port(port)
-
-  def stop_session(%{port: port}) when is_port(port) do
-    {:error, :session_process_unknown}
-  end
+  def stop_session(%{port: port, containment: nil}) when is_port(port), do: stop_port(port)
+  def stop_session(_session), do: {:error, :session_process_unknown}
 
   defp validate_workspace_cwd(workspace, nil) when is_binary(workspace) do
     expanded_workspace = Path.expand(workspace)
@@ -369,33 +335,47 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp start_port(workspace, worker_host, dynamic_tool_binding) do
+  defp start_port(workspace, worker_host, dynamic_tool_binding, opts) do
     tracker = Config.settings!().tracker
-    isolated = is_binary(tracker.review_state) or tracker.session_boundary_states != []
+    containment = if is_binary(tracker.review_state) or tracker.session_boundary_states != [], do: SessionProcess.new()
+    on_started = Keyword.get(opts, :on_started, fn _ -> :ok end)
+    session = %{port: nil, containment: containment, heartbeat: nil, worker_host: worker_host}
+    # Register ownership before a host can create any session processes.
+    :ok = on_started.(session)
 
-    with {:ok, port} <- open_port(workspace, worker_host, dynamic_tool_binding, isolated) do
-      if isolated do
-        receive do
-          {^port, {:data, {:eol, "SYMPHONY_PROCESS_GROUP:" <> group}}} ->
-            case Integer.parse(group) do
-              {pid, ""} when pid > 1 ->
-                {:ok, port, pid}
+    with {:ok, port} <- open_port(workspace, worker_host, dynamic_tool_binding, containment || false) do
+      heartbeat = if containment, do: SessionProcess.heartbeat(port, Keyword.get(opts, :lifecycle_owner))
+      session = %{session | port: port, heartbeat: heartbeat}
 
-              _ ->
-                stop_port(port)
-                exit({:session_stop_unconfirmed, :invalid_session_process_group})
-            end
-
-          {^port, {:exit_status, status}} ->
-            {:error, {:port_exit, status}}
-        after
-          Config.settings!().codex.read_timeout_ms ->
-            stop_port(port)
-            exit({:session_stop_unconfirmed, :session_process_group_timeout})
-        end
+      if containment do
+        await_containment(session, on_started)
       else
-        {:ok, port, nil}
+        :ok = on_started.(session)
+        {:ok, session}
       end
+    end
+  end
+
+  defp await_containment(%{port: port} = session, on_started) do
+    receive do
+      {^port, {:data, {:eol, "SYMPHONY_CGROUP:" <> invocation}}} ->
+        if String.match?(invocation, ~r/^[0-9a-f]{32}$/) do
+          session = put_in(session.containment.invocation, invocation)
+          :ok = on_started.(session)
+          true = Port.command(port, "SYMPHONY_START\n")
+          {:ok, session}
+        else
+          stop_failed_start(session, :invalid_session_containment)
+        end
+
+      {^port, {:data, _data}} ->
+        stop_failed_start(session, :session_containment_start_failed)
+
+      {^port, {:exit_status, status}} ->
+        stop_failed_start(session, {:port_exit, status})
+    after
+      Config.settings!().codex.read_timeout_ms ->
+        stop_failed_start(session, :session_containment_timeout)
     end
   end
 
@@ -405,7 +385,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     if is_nil(executable) do
       {:error, :bash_not_found}
     else
-      command = isolated_launch_command(local_launch_command(dynamic_tool_binding), isolated)
+      command = isolated_launch_command(local_launch_command(dynamic_tool_binding), isolated, workspace)
 
       port =
         Port.open(
@@ -426,16 +406,19 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp open_port(workspace, worker_host, dynamic_tool_binding, isolated) when is_binary(worker_host) do
-    remote_command = isolated_launch_command(remote_launch_command(workspace, dynamic_tool_binding), isolated)
+    remote_command =
+      [
+        tracker_secret_unset_command(dynamic_tool_binding),
+        isolated_launch_command(remote_launch_command(workspace, dynamic_tool_binding), isolated, workspace)
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" && ")
+
     SSH.start_port(worker_host, remote_command, line: @port_line_bytes)
   end
 
-  defp isolated_launch_command(command, false), do: command
-
-  defp isolated_launch_command(command, true) do
-    "exec setsid --fork --wait bash -c " <>
-      shell_escape("printf 'SYMPHONY_PROCESS_GROUP:%s\\n' \"$$\"; " <> command)
-  end
+  defp isolated_launch_command(command, false, _workspace), do: command
+  defp isolated_launch_command(command, containment, workspace), do: SessionProcess.launch_command(containment, command, workspace)
 
   defp local_launch_command(dynamic_tool_binding) do
     [

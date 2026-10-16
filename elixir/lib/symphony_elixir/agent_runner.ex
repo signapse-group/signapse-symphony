@@ -61,15 +61,20 @@ defmodule SymphonyElixir.AgentRunner do
             run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
           end
         after
-          if is_binary(Config.settings!().hooks.after_run) do
-            Keyword.get(opts, :on_after_run, fn -> :ok end).()
-          end
-
-          Workspace.run_after_run_hook(workspace, issue, worker_host)
+          finish_after_run_hook(workspace, issue, worker_host, opts)
         end
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp finish_after_run_hook(workspace, issue, worker_host, opts) do
+    if is_binary(Config.settings!().hooks.after_run) do
+      case Keyword.get(opts, :on_after_run, fn -> :ok end).() do
+        :ok -> Workspace.run_after_run_hook(workspace, issue, worker_host)
+        error -> exit({:session_stop_unconfirmed, error})
+      end
     end
   end
 
@@ -108,18 +113,30 @@ defmodule SymphonyElixir.AgentRunner do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issues_by_ids/1)
 
-    on_started = fn session_process ->
-      if is_pid(codex_update_recipient) do
-        send(codex_update_recipient, {:worker_runtime_info, issue.id, %{worker_pid: self(), session_process: session_process}})
-      end
-    end
+    on_started =
+      Keyword.get(opts, :on_session_process, fn session_process ->
+        if is_pid(codex_update_recipient) do
+          send(codex_update_recipient, {:worker_runtime_info, issue.id, %{worker_pid: self(), session_process: session_process}})
+        end
 
-    with {:ok, session} <- AppServer.start_session(workspace, worker_host: worker_host, on_started: on_started) do
+        :ok
+      end)
+
+    on_stopped = Keyword.get(opts, :on_session_closed, fn -> :ok end)
+
+    session_opts = [
+      worker_host: worker_host,
+      on_started: on_started,
+      on_stopped: on_stopped,
+      lifecycle_owner: codex_update_recipient
+    ]
+
+    with {:ok, session} <- AppServer.start_session(workspace, session_opts) do
       try do
         do_run_codex_turns(session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, max_turns)
       after
         case AppServer.stop_session(session) do
-          :ok -> :ok
+          :ok -> on_stopped.()
           {:error, reason} -> exit({:session_stop_unconfirmed, reason})
         end
       end

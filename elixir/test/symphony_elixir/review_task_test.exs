@@ -153,7 +153,7 @@ defmodule SymphonyElixir.ReviewTaskTest do
       {:ok, worker} = Task.Supervisor.start_child(supervisor, fn -> AgentRunner.run(issue, parent, worker_host: @host) end)
       monitor = Process.monitor(worker)
       assert_receive {:worker_runtime_info, _, runtime}, 2_000
-      assert_receive {:worker_runtime_info, _, %{session_process: _} = session_runtime}, 2_000
+      session_runtime = await_session_runtime()
       assert_receive {:codex_worker_update, _, %{event: :session_started, thread_id: previous_thread}}, 2_000
 
       entry = %{pid: worker, ref: monitor, identifier: issue.identifier, issue: issue, started_at: DateTime.utc_now()}
@@ -178,11 +178,93 @@ defmodule SymphonyElixir.ReviewTaskTest do
       retry_message = {:retry_issue, issue.id, retry.retry_token}
       assert {:noreply, dispatched} = Orchestrator.handle_info(retry_message, dispatch_ready)
       assert dispatched.running[issue.id].pid != worker
-      assert_receive {:codex_worker_update, _, %{event: :session_started, thread_id: next_thread}}, 2_000
+      {next_thread, dispatched} = await_session(dispatched)
+      next_worker = dispatched.running[issue.id].pid
+      next_monitor = Process.monitor(next_worker)
+      await_worker_completion(dispatched, next_monitor)
       assert previous_thread != next_thread
       assert turn_prompts(trace_messages(trace_file)) == ["#{@before} SIGN-90004", "#{@next_phase} SIGN-90004"]
       assert File.read!(Path.join(runtime.workspace_path, "output.txt")) == "preserved"
     end
+  end
+
+  test "worker death confirms containment stop before scheduling retry" do
+    {root, _, binary} = fake_codex_fixture!()
+    File.write!(Path.join(root, "hold-turn"), "")
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Ready", "Progress"],
+      tracker_session_boundary_states: ["Ready"],
+      workspace_root: Path.join(root, "workspaces"),
+      codex_command: binary
+    )
+
+    issue = %Issue{id: "worker-crash", identifier: "SIGN-90010", state: "Progress", dispatchable: true}
+    parent = self()
+    supervisor = start_supervised!(Task.Supervisor)
+    {:ok, worker} = Task.Supervisor.start_child(supervisor, fn -> AgentRunner.run(issue, parent) end)
+    monitor = Process.monitor(worker)
+    assert_receive {:worker_runtime_info, _, %{workspace_path: workspace}}, 2_000
+    session = await_session_runtime().session_process
+    assert_receive {:codex_worker_update, _, %{event: :session_started}}, 2_000
+
+    entry = %{
+      pid: worker,
+      ref: monitor,
+      identifier: issue.identifier,
+      issue: issue,
+      started_at: DateTime.utc_now(),
+      workspace_path: workspace,
+      session_process: session
+    }
+
+    state = %Orchestrator.State{task_supervisor: supervisor, running: %{issue.id => entry}, claimed: MapSet.new([issue.id]), codex_totals: %{}}
+    Process.exit(worker, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :killed} = down, 2_000
+    assert {:noreply, stopped} = Orchestrator.handle_info(down, state)
+    refute Map.has_key?(stopped.running, issue.id)
+    assert Map.has_key?(stopped.retry_attempts, issue.id)
+    assert :ok = AppServer.stop_session(session)
+    assert File.dir?(workspace)
+    child = root |> Path.join("child.pid") |> File.read!() |> String.trim()
+    {status, _} = System.cmd("ps", ["-o", "stat=", "-p", child])
+    assert String.trim(status) == "" or String.starts_with?(String.trim(status), "Z")
+  end
+
+  test "terminal cleanup preserves ownership and output when stop is unconfirmed" do
+    {root, _, _} = fake_codex_fixture!()
+    workspace = Path.join(root, "workspace")
+    File.mkdir_p!(workspace)
+    File.write!(Path.join(workspace, "output.txt"), "preserved")
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Ready", "Progress"],
+      tracker_terminal_states: ["Done"],
+      workspace_root: root
+    )
+
+    issue = %Issue{id: "terminal-unconfirmed", identifier: "SIGN-90011", state: "Progress", dispatchable: true}
+    supervisor = start_supervised!(Task.Supervisor)
+    {:ok, worker} = Task.Supervisor.start_child(supervisor, fn -> receive do: (:stop -> :ok) end)
+
+    entry = %{
+      pid: worker,
+      ref: nil,
+      identifier: issue.identifier,
+      issue: issue,
+      started_at: DateTime.utc_now(),
+      workspace_path: workspace,
+      session_process: %{port: nil}
+    }
+
+    state = %Orchestrator.State{task_supervisor: supervisor, running: %{issue.id => entry}, claimed: MapSet.new([issue.id]), codex_totals: %{}}
+    held = Orchestrator.reconcile_issue_states_for_test([%{issue | state: "Done"}], state)
+    assert held.running[issue.id].handoff_error =~ "session_process_unknown"
+    assert MapSet.member?(held.claimed, issue.id)
+    assert held.retry_attempts == %{}
+    assert File.read!(Path.join(workspace, "output.txt")) == "preserved"
   end
 
   test "late messages cannot update a replacement worker or its recovery" do
@@ -211,7 +293,7 @@ defmodule SymphonyElixir.ReviewTaskTest do
              )
   end
 
-  test "a child outside the session process group prevents confirmed stop" do
+  test "a child outside the session process group is contained and stop is idempotent" do
     {root, _, codex_binary} = fake_codex_fixture!()
     File.write!(Path.join(root, "detached-child"), "")
     workspace = Path.join(root, "workspace")
@@ -225,13 +307,41 @@ defmodule SymphonyElixir.ReviewTaskTest do
 
     assert {:ok, session} = AppServer.start_session(workspace)
     child_pid = root |> Path.join("child.pid") |> File.read!() |> String.trim()
+    assert :ok = AppServer.stop_session(session)
+    {status, _} = System.cmd("ps", ["-o", "stat=", "-p", child_pid])
+    assert String.trim(status) == "" or String.starts_with?(String.trim(status), "Z")
+    assert :ok = AppServer.stop_session(session)
+  end
 
-    try do
-      assert {:error, {:session_stop_unconfirmed, _}} = AppServer.stop_session(session)
-    after
-      System.cmd("kill", ["-KILL", child_pid])
-      assert :ok = AppServer.stop_session(session)
+  test "failed initialization cleans its registered unit before returning" do
+    {root, _, _} = fake_codex_fixture!()
+    workspace = Path.join(root, "workspace")
+    File.mkdir_p!(workspace)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      workspace_root: root,
+      tracker_session_boundary_states: ["Ready"],
+      codex_command: "exit 1"
+    )
+
+    owner = self()
+
+    on_started = fn session ->
+      send(owner, {:registered, session})
+      :ok
     end
+
+    on_stopped = fn ->
+      send(owner, :startup_cleaned)
+      :ok
+    end
+
+    assert {:error, _} = AppServer.start_session(workspace, on_started: on_started, on_stopped: on_stopped)
+    assert_receive {:registered, %{port: nil}}
+    assert_receive {:registered, %{containment: %{invocation: invocation}} = session}
+    assert is_binary(invocation)
+    assert_receive :startup_cleaned
+    assert :ok = AppServer.stop_session(session)
   end
 
   test "reconcile without configured boundaries retains active-state continuation" do
@@ -381,6 +491,46 @@ defmodule SymphonyElixir.ReviewTaskTest do
     messages = trace_messages(trace_file)
     assert Enum.count(messages, &(&1["method"] == "thread/start")) == 4
     assert turn_prompts(messages) == ["Survey SIGN-90002", "Implement SIGN-90002", "Review SIGN-90002", "Implement SIGN-90002"]
+  end
+
+  defp await_session_runtime do
+    receive do
+      {:worker_runtime_info, _, %{session_process: %{port: port}} = info} when is_port(port) -> info
+    after
+      2_000 -> flunk("session containment did not become ready")
+    end
+  end
+
+  defp await_session(state) do
+    receive do
+      {:"$gen_call", from, request} ->
+        {:reply, reply, state} = Orchestrator.handle_call(request, from, state)
+        GenServer.reply(from, reply)
+        await_session(state)
+
+      {:worker_runtime_info, id, info} ->
+        {:noreply, state} = Orchestrator.handle_info({:worker_runtime_info, id, info}, state)
+        await_session(state)
+
+      {:codex_worker_update, _, %{event: :session_started, thread_id: thread}} ->
+        {thread, state}
+    after
+      5_000 -> flunk("replacement session did not start")
+    end
+  end
+
+  defp await_worker_completion(state, monitor) do
+    receive do
+      {:"$gen_call", from, request} ->
+        {:reply, reply, state} = Orchestrator.handle_call(request, from, state)
+        GenServer.reply(from, reply)
+        await_worker_completion(state, monitor)
+
+      {:DOWN, ^monitor, :process, _pid, :normal} ->
+        :ok
+    after
+      5_000 -> flunk("replacement session did not stop cleanly")
+    end
   end
 
   defp fake_codex_fixture! do

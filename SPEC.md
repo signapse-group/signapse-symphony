@@ -730,6 +730,17 @@ Important nuance:
 - An unconfirmed stop retains ownership/capacity and requires operator inspection rather than
   repeated automatic stop attempts. A restart during handoff requires operator-confirmed resume
   through runtime control before retrying. Pausing a shared control applies to its configured members.
+- Boundary sessions in this implementation require Linux cgroup v2, a systemd user manager,
+  Python 3.9+ and bash on the execution host, locally or over SSH. Register and persist a
+  unique session unit before launch and acknowledge its host-verified identity before
+  starting Codex. A per-session transient service owns all descendants, including
+  detached/reparented tools. Its guard ends on stdin EOF or a 15-second owner-heartbeat
+  lease expiry; systemd stops the entire cgroup. Disconnected remote turns are not reattached.
+- Confirm containment shutdown before cleanup or retry on terminal, route, stalled,
+  blocked and worker-crash paths as well as normal completion and startup failure.
+  A missing unit alone does not confirm an unverified startup. Query errors, identity
+  mismatch and timeout fail closed, preserving ownership and durable recovery.
+  Expose held handoff failures in API last_error and the dashboard without releasing capacity.
 - The first turn SHOULD use the full rendered task prompt.
 - Continuation turns SHOULD send only continuation guidance to the existing thread, not resend the
   original task prompt that is already present in thread history.

@@ -150,7 +150,16 @@ Lượt lưu ban đầu chỉ thêm plan. Lượt triển khai tiếp theo đã 
 - Startup cleanup giữ workspace của handoff pending kể cả khi live issue đã sang Done; lỗi khôi phục ledger cũng chặn cleanup đầu phiên. Regression kiểm giữ output qua trường hợp này.
 - Khi worker đã dừng nhưng phiên thay thế chưa nhận workspace, marker recovery vẫn được giữ. Retry handoff không tự chuyển sang host khác làm mất output.
 - Boundary sessions hiện dùng process group Linux qua `setsid`. Nếu còn descendant ở group khác, stop bị coi là chưa xác nhận và giữ ownership; worker có thể đang bị suspend, cần operator kiểm tra trước recovery. Hook sau phiên phải đồng bộ đóng session với Orchestrator trước khi chạy.
-- **Blocker containment:** process đã daemonize/reparent hoàn toàn không còn xác định được đầy đủ bằng snapshot group/ancestry. Candidate này chưa chứng minh invariant dừng mọi tool trong trường hợp đó. Không chuyển PR sang ready hoặc rollout cho đến khi giải quyết bằng containment phù hợp và regression tương ứng; không coi đây là debt tùy chọn.
+- **Blocker containment của candidate lịch sử:** process đã daemonize/reparent hoàn toàn không còn xác định được đầy đủ bằng snapshot group/ancestry. Candidate này chưa chứng minh invariant dừng mọi tool trong trường hợp đó. Không chuyển PR sang ready hoặc rollout cho đến khi giải quyết bằng containment phù hợp và regression tương ứng; không coi đây là debt tùy chọn.
 - **Gate nền tảng/recovery:** đường boundary mới cần các công cụ Linux nêu trong Elixir README; chưa kiểm macOS. Recovery bền vững cần runtime control được bật. Khi control dùng chung, pause recovery tác động toàn bộ membership đã cấu hình. Đây là điều kiện phải rà trước nghiệm thu, không được suy ra từ việc tests với control tắt chạy qua.
 - Completion gate `make -C elixir all` đã qua trên candidate source với Elixir 1.19.5 / OTP 28: 375 tests, 0 lỗi, 6 live tests được skip; coverage theo cấu hình repo đạt 100%, format/lint/specs/Dialyzer đạt. Cả ba hướng chuyển phase qua local và SSH loopback thật đã chạy, không bị skip trong lượt kiểm chứng này.
 - Chín Python tests cho deployment/CI đã qua trong bản sao cô lập. Nội dung PR đã qua `mix pr_body.check`. Required CI và maintainer review vẫn phải đối chiếu trên revision được push; các kết quả test xanh không đóng blocker containment. Merge, deploy và canary chưa được thực hiện.
+
+## Bổ sung containment ngày 2026-10-16
+
+Các kết quả candidate phía trên là lịch sử. Phần triển khai tiếp theo thay process group bằng
+transient systemd service/cgroup riêng cho mỗi phiên, bao gồm local và SSH; xem
+[contract triển khai, kiểm chứng và recovery](codex-session-containment.md).
+Người dùng đã chốt mất SSH/owner thì dừng phiên remote, giữ recovery khi chưa xác nhận stop;
+không nối lại turn cũ. Sau kiểm chứng đầy đủ, push trực tiếp main để CI/CD hiện có deploy cả
+bốn service, rồi kiểm canary. Không dùng rollout riêng BE trong lượt này.

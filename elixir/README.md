@@ -381,13 +381,15 @@ control enabled, restart during handoff pauses dispatch until an operator checks
 and uses the existing quota-checked resume control. This pause affects all configured shared-control
 members. Runtime control disabled does not provide durable restart recovery.
 
-Boundary sessions use Linux `setsid` process groups, `bash`, `ps`, `awk`, `seq` and `sleep` on the
-execution host, including SSH workers. A surviving descendant in a different process group makes
-stop unconfirmed and requires operator inspection. Fully detached/reparented tools require stronger
-process containment before this mechanism can certify their shutdown; retain draft status until
-that containment gap is resolved for the intended runtime. Boundary startup on hosts without these
-tools is not supported by this implementation candidate. Workflows without boundaries and quota
-reads retain their existing launch path.
+Boundary sessions require Linux cgroup v2, a reachable systemd 254+ user manager, Python 3.9+,
+and bash on the execution host, including SSH workers. Each session uses its own transient
+service with a leased guard; daemonized/reparented tools stay in that service's cgroup.
+A dead worker/owner or disconnected SSH channel ends the lease; the host then kills the
+session. No replacement starts until stop is confirmed. Unknown stop retains claim/capacity
+and is exposed through API last_error and the dashboard. Workflows without boundaries
+and quota reads retain their existing launch path.
+See [session containment and recovery](../docs/codex-session-containment.md) for identity,
+lease timing, prerequisites, local/SSH checks and the four-service rollout procedure.
 
 Polling cannot prevent mutations before a transition is observed, detect every transition that
 reverses between polls, or treat failed tracker reads as boundary changes. This is not write fencing.

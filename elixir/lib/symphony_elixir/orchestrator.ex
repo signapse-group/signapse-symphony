@@ -150,16 +150,7 @@ defmodule SymphonyElixir.Orchestrator do
             {:noreply, hold_failed_handoff(state, entry.issue, entry, reason)}
 
           true ->
-            {running_entry, state} = pop_running_entry(state, issue_id)
-            state = record_session_completion_totals(state, running_entry)
-            session_id = running_entry_session_id(running_entry)
-
-            state = handle_agent_down(reason, state, issue_id, running_entry, session_id)
-
-            Logger.info("Agent task finished for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}")
-
-            notify_dashboard()
-            {:noreply, state}
+            finish_stopped_worker(state, issue_id, reason)
         end
     end
   end
@@ -182,7 +173,7 @@ defmodule SymphonyElixir.Orchestrator do
           normalize_retry_attempt(updated_running_entry[:retry_attempt]),
           updated_running_entry.identifier,
           updated_running_entry.issue.url,
-          "Agent run was interrupted by a service restart",
+          if(get_in(updated_running_entry, [:session_process, :containment]), do: @handoff_recovery, else: "Agent run was interrupted by a service restart"),
           updated_running_entry[:worker_host],
           updated_running_entry[:workspace_path]
         )
@@ -241,6 +232,28 @@ defmodule SymphonyElixir.Orchestrator do
   def handle_info(msg, state) do
     Logger.debug("Orchestrator ignored message: #{inspect(msg)}")
     {:noreply, state}
+  end
+
+  defp finish_stopped_worker(state, issue_id, reason) do
+    entry = state.running[issue_id]
+
+    case stop_entry_session(entry) do
+      :ok ->
+        {running_entry, state} = pop_running_entry(state, issue_id)
+        state = record_session_completion_totals(state, running_entry)
+        session_id = running_entry_session_id(running_entry)
+
+        state = handle_agent_down(reason, state, issue_id, running_entry, session_id)
+
+        Logger.info("Agent task finished for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}")
+
+        notify_dashboard()
+        {:noreply, state}
+
+      error ->
+        RuntimeControl.persist_retry(RuntimeControl.runtime_id(), boundary_recovery(entry.issue, entry))
+        {:noreply, hold_failed_handoff(state, entry.issue, entry, error)}
+    end
   end
 
   defp handle_agent_down(:normal, state, issue_id, running_entry, session_id) do
@@ -732,32 +745,37 @@ defmodule SymphonyElixir.Orchestrator do
        when is_map_key(running, issue_id) and is_map_key(:erlang.map_get(issue_id, running), :handoff_error), do: state
 
   defp terminate_running_issue(%State{} = state, issue_id, cleanup_workspace) do
-    RuntimeControl.delete_retry(RuntimeControl.runtime_id(), issue_id)
-
     case Map.get(state.running, issue_id) do
       nil ->
+        RuntimeControl.delete_retry(RuntimeControl.runtime_id(), issue_id)
         release_issue_claim(state, issue_id)
 
-      %{pid: pid, ref: ref, identifier: identifier} = running_entry ->
-        state = record_session_completion_totals(state, running_entry)
+      %{pid: _pid, ref: _ref, identifier: _identifier} = entry ->
+        case stop_running_task(entry, state.task_supervisor) do
+          :ok ->
+            finish_terminated_issue(state, issue_id, entry, cleanup_workspace)
 
-        stop_running_task(pid, ref, state.task_supervisor)
-
-        if cleanup_workspace do
-          cleanup_issue_workspace(Map.get(running_entry, :issue, identifier), running_entry)
+          error ->
+            hold_failed_handoff(state, entry.issue, entry, error)
         end
-
-        %{
-          state
-          | running: Map.delete(state.running, issue_id),
-            claimed: MapSet.delete(state.claimed, issue_id),
-            blocked: Map.delete(state.blocked, issue_id),
-            retry_attempts: Map.delete(state.retry_attempts, issue_id)
-        }
 
       _ ->
         release_issue_claim(state, issue_id)
     end
+  end
+
+  defp finish_terminated_issue(state, issue_id, entry, cleanup_workspace) do
+    RuntimeControl.delete_retry(RuntimeControl.runtime_id(), issue_id)
+    state = record_session_completion_totals(state, entry)
+    if cleanup_workspace, do: cleanup_issue_workspace(entry.issue, entry)
+
+    %{
+      state
+      | running: Map.delete(state.running, issue_id),
+        claimed: MapSet.delete(state.claimed, issue_id),
+        blocked: Map.delete(state.blocked, issue_id),
+        retry_attempts: Map.delete(state.retry_attempts, issue_id)
+    }
   end
 
   defp handoff_running_issue(state, issue, entry) do
@@ -787,7 +805,9 @@ defmodule SymphonyElixir.Orchestrator do
       attempt: normalize_retry_attempt(entry[:retry_attempt]),
       error: @handoff_recovery,
       worker_host: entry[:worker_host],
-      workspace_path: entry[:workspace_path]
+      workspace_path: entry[:workspace_path],
+      session_unit: get_in(entry, [:session_process, :containment, :unit]),
+      session_invocation: get_in(entry, [:session_process, :containment, :invocation])
     }
   end
 
@@ -797,7 +817,7 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | running: Map.put(state.running, issue.id, held)}
   end
 
-  defp stop_boundary_session(%{process_group: group} = session) when is_integer(group), do: AppServer.stop_session(session)
+  defp stop_boundary_session(%{containment: containment} = session) when is_map(containment), do: AppServer.stop_session(session)
   defp stop_boundary_session(_session), do: {:error, :session_process_unknown}
 
   defp suspend_boundary_worker(%{pid: pid}) when is_pid(pid) do
@@ -999,26 +1019,22 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp terminate_task(_pid, _task_supervisor), do: :ok
 
-  defp stop_running_task(pid, ref, task_supervisor) do
-    if is_pid(pid) do
-      terminate_task(pid, task_supervisor)
-    end
+  defp stop_entry_session(%{session_process: session}) when is_map(session), do: AppServer.stop_session(session)
+  defp stop_entry_session(_entry), do: :ok
 
-    if is_reference(ref) do
-      Process.demonitor(ref, [:flush])
+  defp stop_running_task(entry, supervisor) do
+    with :ok <- RuntimeControl.persist_retry(RuntimeControl.runtime_id(), boundary_recovery(entry.issue, entry)),
+         :ok <- if(is_map(entry[:session_process]), do: suspend_boundary_worker(entry), else: :ok),
+         :ok <- stop_entry_session(entry) do
+      confirm_worker_stop(entry, supervisor)
     end
-
-    :ok
   end
 
-  defp stop_and_block_issue(%State{} = state, issue_id, running_entry, error) do
-    stop_running_task(
-      Map.get(running_entry, :pid),
-      Map.get(running_entry, :ref),
-      state.task_supervisor
-    )
-
-    block_issue_from_entry(state, issue_id, running_entry, error)
+  defp stop_and_block_issue(%State{} = state, issue_id, entry, error) do
+    case stop_running_task(entry, state.task_supervisor) do
+      :ok -> block_issue_from_entry(state, issue_id, entry, error)
+      stop_error -> hold_failed_handoff(state, entry.issue, entry, stop_error)
+    end
   end
 
   defp block_issue_from_entry(%State{} = state, issue_id, running_entry, error) do
@@ -1262,11 +1278,26 @@ defmodule SymphonyElixir.Orchestrator do
       prepare_boundary(recipient, issue.id)
     end
 
-    on_after_run = fn ->
+    on_session_process = fn session ->
+      GenServer.call(recipient, {:session_process, issue.id, self(), session}, Config.settings!().codex.read_timeout_ms)
+    end
+
+    on_session_closed = fn ->
       GenServer.call(recipient, {:session_closed, issue.id, self()}, Config.settings!().codex.read_timeout_ms)
     end
 
-    opts = [attempt: attempt, worker_host: worker_host, on_boundary: on_boundary, on_after_run: on_after_run]
+    on_after_run = fn ->
+      GenServer.call(recipient, {:after_run, issue.id, self()}, Config.settings!().codex.read_timeout_ms)
+    end
+
+    opts = [
+      attempt: attempt,
+      worker_host: worker_host,
+      on_boundary: on_boundary,
+      on_session_process: on_session_process,
+      on_session_closed: on_session_closed,
+      on_after_run: on_after_run
+    ]
 
     case Task.Supervisor.start_child(state.task_supervisor, fn ->
            AgentRunner.run(issue, recipient, opts)
@@ -1356,6 +1387,10 @@ defmodule SymphonyElixir.Orchestrator do
         retry_attempts: Map.delete(state.retry_attempts, issue_id)
     }
   end
+
+  defp schedule_issue_retry(%State{running: running} = state, issue_id, _attempt, _metadata)
+       when is_map_key(running, issue_id) and is_map_key(:erlang.map_get(issue_id, running), :handoff_error),
+       do: state
 
   defp schedule_issue_retry(%State{} = state, issue_id, attempt, metadata)
        when is_binary(issue_id) and is_map(metadata) do
@@ -1752,9 +1787,43 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @impl true
+  def handle_call({:session_process, issue_id, worker, session}, _from, state) do
+    case state.running[issue_id] do
+      %{pid: ^worker} = entry when not is_map_key(entry, :handoff_error) ->
+        entry = Map.put(entry, :session_process, session)
+
+        recovery = boundary_recovery(entry.issue, entry)
+
+        recovery =
+          if session[:containment],
+            do: recovery,
+            else: %{recovery | error: "Agent run was interrupted by a service restart"}
+
+        case RuntimeControl.persist_retry(RuntimeControl.runtime_id(), recovery) do
+          :ok -> {:reply, :ok, %{state | running: Map.put(state.running, issue_id, entry)}}
+          error -> {:reply, error, hold_failed_handoff(state, entry.issue, entry, error)}
+        end
+
+      _ ->
+        {:reply, {:error, :stale_worker}, state}
+    end
+  end
+
+  def handle_call({:after_run, issue_id, worker}, _from, state) do
+    case state.running[issue_id] do
+      %{pid: ^worker} = entry when not is_map_key(entry, :handoff_error) ->
+        if is_nil(entry[:session_process]),
+          do: {:reply, :ok, state},
+          else: {:reply, {:error, :session_stop_unconfirmed}, state}
+
+      _ ->
+        {:reply, {:error, :stale_worker}, state}
+    end
+  end
+
   def handle_call({:session_closed, issue_id, worker}, _from, state) do
     case state.running[issue_id] do
-      %{pid: ^worker} = entry ->
+      %{pid: ^worker} = entry when not is_map_key(entry, :handoff_error) ->
         entry = Map.put(entry, :session_process, nil)
         {:reply, :ok, %{state | running: Map.put(state.running, issue_id, entry)}}
 
@@ -1805,6 +1874,7 @@ defmodule SymphonyElixir.Orchestrator do
           last_codex_timestamp: metadata.last_codex_timestamp,
           last_codex_message: metadata.last_codex_message,
           last_codex_event: metadata.last_codex_event,
+          handoff_error: Map.get(metadata, :handoff_error),
           runtime_seconds: running_seconds(metadata.started_at, now)
         }
       end)
