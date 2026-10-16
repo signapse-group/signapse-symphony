@@ -71,6 +71,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       pid,
       {:codex_worker_update, issue_id,
        %{
+         worker_pid: self(),
          event: :session_started,
          session_id: "thread-live-turn-live",
          timestamp: now
@@ -81,6 +82,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       pid,
       {:codex_worker_update, issue_id,
        %{
+         worker_pid: self(),
          event: :notification,
          payload: %{method: "some-event"},
          timestamp: now
@@ -158,6 +160,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       pid,
       {:codex_worker_update, issue_id,
        %{
+         worker_pid: self(),
          event: :session_started,
          session_id: "thread-usage-turn-usage",
          timestamp: now
@@ -168,6 +171,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       pid,
       {:codex_worker_update, issue_id,
        %{
+         worker_pid: self(),
          event: :notification,
          payload: %{
            "method" => "thread/tokenUsage/updated",
@@ -253,6 +257,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       pid,
       {:codex_worker_update, issue_id,
        %{
+         worker_pid: self(),
          event: :turn_completed,
          payload: %{
            method: "turn/completed",
@@ -330,6 +335,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       pid,
       {:codex_worker_update, issue_id,
        %{
+         worker_pid: self(),
          event: :notification,
          payload: %{
            "method" => "codex/event/token_count",
@@ -354,6 +360,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       pid,
       {:codex_worker_update, issue_id,
        %{
+         worker_pid: self(),
          event: :notification,
          payload: %{
            "method" => "codex/event/token_count",
@@ -448,6 +455,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       pid,
       {:codex_worker_update, issue_id,
        %{
+         worker_pid: self(),
          event: :notification,
          payload: %{
            "method" => "codex/event/token_count",
@@ -522,6 +530,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       pid,
       {:codex_worker_update, issue_id,
        %{
+         worker_pid: self(),
          event: :notification,
          payload: %{
            "method" => "codex/event/token_count",
@@ -614,6 +623,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
         pid,
         {:codex_worker_update, issue_id,
          %{
+           worker_pid: self(),
            event: :notification,
            payload: %{
              "method" => "thread/tokenUsage/updated",
@@ -684,6 +694,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       pid,
       {:codex_worker_update, issue_id,
        %{
+         worker_pid: self(),
          event: :notification,
          payload: %{
            "method" => "codex/event/token_count",

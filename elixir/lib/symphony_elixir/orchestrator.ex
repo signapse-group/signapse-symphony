@@ -8,10 +8,12 @@ defmodule SymphonyElixir.Orchestrator do
   import Bitwise, only: [<<<: 2]
 
   alias SymphonyElixir.{AgentRunner, Config, RuntimeControl, StatusDashboard, Tracker, WorkflowUpdate, Workspace}
+  alias SymphonyElixir.Codex.AppServer
   alias SymphonyElixir.Tracker.Issue
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
+  @handoff_recovery "Phase boundary handoff requires operator confirmation"
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @empty_codex_totals %{
@@ -71,7 +73,7 @@ defmodule SymphonyElixir.Orchestrator do
         }
 
         state = restore_pending_retries(state)
-        run_terminal_workspace_cleanup()
+        run_terminal_workspace_cleanup(state)
         state = schedule_tick(state, 0)
 
         {:ok, state}
@@ -138,30 +140,42 @@ defmodule SymphonyElixir.Orchestrator do
         {:noreply, state}
 
       issue_id ->
-        {running_entry, state} = pop_running_entry(state, issue_id)
-        state = record_session_completion_totals(state, running_entry)
-        session_id = running_entry_session_id(running_entry)
+        cond do
+          state.running[issue_id][:handoff_error] ->
+            {:noreply, state}
 
-        state = handle_agent_down(reason, state, issue_id, running_entry, session_id)
+          match?({:session_stop_unconfirmed, _}, reason) ->
+            entry = state.running[issue_id]
+            RuntimeControl.persist_retry(RuntimeControl.runtime_id(), boundary_recovery(entry.issue, entry))
+            {:noreply, hold_failed_handoff(state, entry.issue, entry, reason)}
 
-        Logger.info("Agent task finished for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}")
+          true ->
+            {running_entry, state} = pop_running_entry(state, issue_id)
+            state = record_session_completion_totals(state, running_entry)
+            session_id = running_entry_session_id(running_entry)
 
-        notify_dashboard()
-        {:noreply, state}
+            state = handle_agent_down(reason, state, issue_id, running_entry, session_id)
+
+            Logger.info("Agent task finished for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}")
+
+            notify_dashboard()
+            {:noreply, state}
+        end
     end
   end
 
-  def handle_info({:worker_runtime_info, issue_id, runtime_info}, %{running: running} = state)
-      when is_binary(issue_id) and is_map(runtime_info) do
+  def handle_info({:worker_runtime_info, issue_id, info}, %{running: running} = state)
+      when is_binary(issue_id) and is_map(info) do
     case Map.get(running, issue_id) do
       nil ->
         {:noreply, state}
 
-      running_entry ->
+      %{pid: pid} = running_entry when info.worker_pid == pid and not is_map_key(running_entry, :handoff_error) ->
         updated_running_entry =
           running_entry
-          |> maybe_put_runtime_value(:worker_host, runtime_info[:worker_host])
-          |> maybe_put_runtime_value(:workspace_path, runtime_info[:workspace_path])
+          |> maybe_put_runtime_value(:worker_host, info[:worker_host])
+          |> maybe_put_runtime_value(:workspace_path, info[:workspace_path])
+          |> maybe_put_runtime_value(:session_process, info[:session_process])
 
         persist_retry_state(
           issue_id,
@@ -175,6 +189,9 @@ defmodule SymphonyElixir.Orchestrator do
 
         notify_dashboard()
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
+
+      _ ->
+        {:noreply, state}
     end
   end
 
@@ -186,7 +203,7 @@ defmodule SymphonyElixir.Orchestrator do
       nil ->
         {:noreply, state}
 
-      running_entry ->
+      %{pid: pid} = running_entry when update.worker_pid == pid and not is_map_key(running_entry, :handoff_error) ->
         {updated_running_entry, token_delta} = integrate_codex_update(running_entry, update)
 
         state =
@@ -196,6 +213,9 @@ defmodule SymphonyElixir.Orchestrator do
 
         notify_dashboard()
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
+
+      _ ->
+        {:noreply, state}
     end
   end
 
@@ -230,11 +250,12 @@ defmodule SymphonyElixir.Orchestrator do
       Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
 
       state
-      |> complete_issue(issue_id)
+      |> complete_issue(issue_id, running_entry[:boundary_completed] == true)
       |> schedule_issue_retry(issue_id, 1, %{
         identifier: running_entry.identifier,
         issue_url: running_entry.issue.url,
         delay_type: :continuation,
+        error: if(running_entry[:boundary_completed], do: @handoff_recovery),
         worker_host: Map.get(running_entry, :worker_host),
         workspace_path: Map.get(running_entry, :workspace_path)
       })
@@ -265,7 +286,7 @@ defmodule SymphonyElixir.Orchestrator do
     schedule_issue_retry(state, issue_id, next_attempt, %{
       identifier: running_entry.identifier,
       issue_url: running_entry.issue.url,
-      error: "agent exited: #{inspect(reason)}",
+      error: if(running_entry[:boundary_completed], do: @handoff_recovery, else: "agent exited: #{inspect(reason)}"),
       worker_host: Map.get(running_entry, :worker_host),
       workspace_path: Map.get(running_entry, :workspace_path)
     })
@@ -386,9 +407,16 @@ defmodule SymphonyElixir.Orchestrator do
   defp restore_pending_retries(%State{} = state) do
     case RuntimeControl.pending_retries(RuntimeControl.runtime_id()) do
       {:ok, retries} ->
-        retries
-        |> Enum.reduce(state, &restore_one_retry/2)
-        |> Map.put(:retry_restore_pending, false)
+        case pause_handoff_recovery(retries) do
+          :ok ->
+            retries
+            |> Enum.reduce(state, &restore_one_retry/2)
+            |> Map.put(:retry_restore_pending, false)
+
+          {:error, reason} ->
+            Logger.error("Unable to pause handoff recovery: #{inspect(reason)}; refusing dispatch")
+            state
+        end
 
       {:error, reason} ->
         Logger.error("Unable to restore pending issue retries: #{inspect(reason)}")
@@ -409,6 +437,17 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp restore_one_retry(_retry, state), do: state
+
+  defp pause_handoff_recovery(retries) do
+    if Enum.any?(retries, &String.starts_with?(&1["error"] || "", @handoff_recovery)) do
+      case RuntimeControl.pause(@handoff_recovery, "recovery") do
+        {:ok, _} -> :ok
+        error -> error
+      end
+    else
+      :ok
+    end
+  end
 
   defp persist_retry_state(issue_id, attempt, identifier, issue_url, error, worker_host, workspace_path) do
     case RuntimeControl.persist_retry(RuntimeControl.runtime_id(), %{
@@ -539,6 +578,9 @@ defmodule SymphonyElixir.Orchestrator do
     )
   end
 
+  defp reconcile_issue_state(%Issue{id: id}, %{running: running} = state, _active_states, _terminal_states)
+       when is_map_key(running, id) and is_map_key(:erlang.map_get(id, running), :handoff_error), do: state
+
   defp reconcile_issue_state(%Issue{} = issue, state, active_states, terminal_states) do
     cond do
       !issue_routable?(issue) ->
@@ -552,7 +594,7 @@ defmodule SymphonyElixir.Orchestrator do
         terminate_running_issue(state, issue.id, true)
 
       active_issue_state?(issue.state, active_states) ->
-        refresh_running_issue_state(state, issue)
+        reconcile_active_issue(state, issue)
 
       true ->
         Logger.info("Issue moved to non-active state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
@@ -562,6 +604,20 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp reconcile_issue_state(_issue, state, _active_states, _terminal_states), do: state
+
+  defp reconcile_active_issue(state, issue) do
+    case Map.get(state.running, issue.id) do
+      %{issue: previous} = entry ->
+        if AgentRunner.same_agent_task?(previous, issue) do
+          refresh_running_issue_state(state, issue)
+        else
+          handoff_running_issue(state, issue, entry)
+        end
+
+      _ ->
+        state
+    end
+  end
 
   defp reconcile_blocked_issue_states([], state, _active_states, _terminal_states), do: state
 
@@ -672,6 +728,9 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  defp terminate_running_issue(%State{running: running} = state, issue_id, _cleanup_workspace)
+       when is_map_key(running, issue_id) and is_map_key(:erlang.map_get(issue_id, running), :handoff_error), do: state
+
   defp terminate_running_issue(%State{} = state, issue_id, cleanup_workspace) do
     RuntimeControl.delete_retry(RuntimeControl.runtime_id(), issue_id)
 
@@ -701,6 +760,70 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  defp handoff_running_issue(state, issue, entry) do
+    # shortcut: polling can observe boundaries after writes; add mutation fencing for synchronous enforcement.
+    Logger.info("Phase boundary handoff #{issue_context(issue)} phase_before=#{entry.issue.state} phase_after=#{issue.state} session_id=#{running_entry_session_id(entry)}")
+
+    with :ok <- RuntimeControl.persist_retry(RuntimeControl.runtime_id(), boundary_recovery(issue, entry)),
+         :ok <- suspend_boundary_worker(entry),
+         :ok <- stop_boundary_session(entry[:session_process]),
+         :ok <- confirm_worker_stop(entry, state.task_supervisor) do
+      state = record_session_completion_totals(state, entry)
+      Logger.info("Phase boundary stop confirmed #{issue_context(issue)} session_id=#{running_entry_session_id(entry)}")
+      # Keep the recovery marker until the replacement persists its own recovery record.
+      state = %{state | running: Map.delete(state.running, issue.id)}
+      schedule_issue_retry(state, issue.id, 1, Map.put(boundary_recovery(issue, entry), :delay_type, :continuation))
+    else
+      error ->
+        hold_failed_handoff(state, issue, entry, error)
+    end
+  end
+
+  defp boundary_recovery(issue, entry) do
+    %{
+      issue_id: issue.id,
+      identifier: issue.identifier,
+      issue_url: issue.url,
+      attempt: normalize_retry_attempt(entry[:retry_attempt]),
+      error: @handoff_recovery,
+      worker_host: entry[:worker_host],
+      workspace_path: entry[:workspace_path]
+    }
+  end
+
+  defp hold_failed_handoff(state, issue, entry, error) do
+    Logger.error("Phase boundary stop unconfirmed #{issue_context(issue)} session_id=#{running_entry_session_id(entry)} reason=#{inspect(error)}; operator inspection required")
+    held = entry |> Map.put(:handoff_error, inspect(error)) |> Map.put(:last_codex_message, @handoff_recovery <> ": " <> inspect(error))
+    %{state | running: Map.put(state.running, issue.id, held)}
+  end
+
+  defp stop_boundary_session(%{process_group: group} = session) when is_integer(group), do: AppServer.stop_session(session)
+  defp stop_boundary_session(_session), do: {:error, :session_process_unknown}
+
+  defp suspend_boundary_worker(%{pid: pid}) when is_pid(pid) do
+    if Process.alive?(pid), do: :erlang.suspend_process(pid)
+    :ok
+  rescue
+    ArgumentError -> :ok
+  end
+
+  defp suspend_boundary_worker(_entry), do: {:error, :session_process_unknown}
+
+  defp confirm_worker_stop(%{pid: pid} = entry, supervisor) do
+    monitor = Process.monitor(pid)
+    terminate_task(pid, supervisor)
+
+    receive do
+      {:DOWN, ^monitor, :process, ^pid, _} ->
+        if is_reference(entry[:ref]), do: Process.demonitor(entry.ref, [:flush])
+        :ok
+    after
+      Config.settings!().codex.read_timeout_ms ->
+        Process.demonitor(monitor, [:flush])
+        {:error, :worker_stop_timeout}
+    end
+  end
+
   defp reconcile_stalled_running_issues(%State{} = state) do
     timeout_ms = Config.settings!().codex.stall_timeout_ms
 
@@ -714,9 +837,9 @@ defmodule SymphonyElixir.Orchestrator do
       true ->
         now = DateTime.utc_now()
 
-        Enum.reduce(state.running, state, fn {issue_id, running_entry}, state_acc ->
-          maybe_restart_stalled_issue(state_acc, issue_id, running_entry, now, timeout_ms)
-        end)
+        state.running
+        |> Enum.reject(fn {_id, entry} -> entry[:handoff_error] end)
+        |> Enum.reduce(state, fn {issue_id, entry}, acc -> maybe_restart_stalled_issue(acc, issue_id, entry, now, timeout_ms) end)
     end
   end
 
@@ -772,7 +895,7 @@ defmodule SymphonyElixir.Orchestrator do
         Map.merge(metadata, %{
           identifier: issue.identifier,
           issue_url: issue.url,
-          error: "Runtime paused before retry dispatch",
+          error: retry_error(metadata, "Runtime paused before retry dispatch"),
           worker_host: worker_host
         })
       )
@@ -1106,27 +1229,27 @@ defmodule SymphonyElixir.Orchestrator do
           state
 
         worker_host ->
-          spawn_issue_on_worker_host(state, issue, attempt, recipient, worker_host)
+          spawn_issue_on_worker_host(state, issue, attempt, recipient, worker_host, metadata)
       end
     else
       defer_dispatch_retry(state, issue, attempt, preferred_worker_host, metadata)
     end
   end
 
-  defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host) do
+  defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host, metadata) do
     recovery = %{
       issue_id: issue.id,
       identifier: issue.identifier,
       issue_url: issue.url,
       attempt: normalize_retry_attempt(attempt),
-      error: "Agent run was interrupted by a service restart",
+      error: retry_error(metadata, "Agent run was interrupted by a service restart"),
       worker_host: worker_host,
-      workspace_path: nil
+      workspace_path: metadata[:workspace_path]
     }
 
     case RuntimeControl.persist_retry(RuntimeControl.runtime_id(), recovery) do
       :ok ->
-        start_issue_child(state, issue, attempt, recipient, worker_host)
+        start_issue_child(state, issue, attempt, recipient, worker_host, metadata)
 
       {:error, reason} ->
         Logger.error("Unable to persist active task recovery for #{issue_context(issue)}: #{inspect(reason)}; leaving issue undispatched")
@@ -1134,9 +1257,19 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp start_issue_child(state, issue, attempt, recipient, worker_host) do
+  defp start_issue_child(state, issue, attempt, recipient, worker_host, metadata) do
+    on_boundary = fn ->
+      prepare_boundary(recipient, issue.id)
+    end
+
+    on_after_run = fn ->
+      GenServer.call(recipient, {:session_closed, issue.id, self()}, Config.settings!().codex.read_timeout_ms)
+    end
+
+    opts = [attempt: attempt, worker_host: worker_host, on_boundary: on_boundary, on_after_run: on_after_run]
+
     case Task.Supervisor.start_child(state.task_supervisor, fn ->
-           AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
+           AgentRunner.run(issue, recipient, opts)
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
@@ -1150,7 +1283,7 @@ defmodule SymphonyElixir.Orchestrator do
             identifier: issue.identifier,
             issue: issue,
             worker_host: worker_host,
-            workspace_path: nil,
+            workspace_path: metadata[:workspace_path],
             session_id: nil,
             last_codex_message: nil,
             last_codex_timestamp: nil,
@@ -1181,10 +1314,16 @@ defmodule SymphonyElixir.Orchestrator do
         schedule_issue_retry(state, issue.id, next_attempt, %{
           identifier: issue.identifier,
           issue_url: issue.url,
-          error: "failed to spawn agent: #{inspect(reason)}",
+          error: retry_error(metadata, "failed to spawn agent: #{inspect(reason)}"),
           worker_host: worker_host
         })
     end
+  end
+
+  defp prepare_boundary(recipient, issue_id) do
+    GenServer.call(recipient, {:prepare_boundary, issue_id, self()}, Config.settings!().codex.read_timeout_ms)
+  catch
+    :exit, reason -> {:error, {:boundary_prepare_failed, reason}}
   end
 
   defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, allowed_states, terminal_states)
@@ -1208,8 +1347,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _allowed_states, _terminal_states),
     do: {:ok, issue}
 
-  defp complete_issue(%State{} = state, issue_id) do
-    RuntimeControl.delete_retry(RuntimeControl.runtime_id(), issue_id)
+  defp complete_issue(%State{} = state, issue_id, preserve_recovery) do
+    unless preserve_recovery, do: RuntimeControl.delete_retry(RuntimeControl.runtime_id(), issue_id)
 
     %{
       state
@@ -1295,7 +1434,7 @@ defmodule SymphonyElixir.Orchestrator do
            state,
            issue_id,
            attempt + 1,
-           Map.merge(metadata, %{error: "retry poll failed: #{inspect(reason)}"})
+           Map.merge(metadata, %{error: retry_error(metadata, "retry poll failed: #{inspect(reason)}")})
          )}
     end
   end
@@ -1311,6 +1450,10 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.info("Issue state is terminal: issue_id=#{issue_id} issue_identifier=#{issue.identifier} state=#{issue.state}; removing associated workspace")
 
         cleanup_issue_workspace(issue, metadata)
+        {:noreply, release_issue_claim(state, issue_id)}
+
+      String.starts_with?(metadata[:error] || "", @handoff_recovery) and
+          not active_issue_state?(issue.state, dispatch_state_set()) ->
         {:noreply, release_issue_claim(state, issue_id)}
 
       retry_candidate_issue?(issue, terminal_states) ->
@@ -1350,15 +1493,20 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp cleanup_issue_workspace(_issue_or_identifier, _worker_host), do: :ok
 
-  defp run_terminal_workspace_cleanup do
+  defp run_terminal_workspace_cleanup(%State{retry_restore_pending: true}), do: :ok
+
+  defp run_terminal_workspace_cleanup(state) do
     case Tracker.fetch_issues_by_states(Config.settings!().tracker.terminal_states) do
       {:ok, issues} ->
-        for %Issue{} = issue <- issues, issue_routable?(issue), do: cleanup_issue_workspace(issue)
+        for %Issue{} = issue <- issues, issue_routable?(issue), not pending_handoff?(state.retry_attempts[issue.id]), do: cleanup_issue_workspace(issue)
 
       {:error, reason} ->
         Logger.warning("Skipping startup terminal workspace cleanup; failed to fetch terminal issues: #{inspect(reason)}")
     end
   end
+
+  defp pending_handoff?(nil), do: false
+  defp pending_handoff?(metadata), do: String.starts_with?(metadata[:error] || "", @handoff_recovery)
 
   defp notify_dashboard do
     StatusDashboard.notify_update()
@@ -1367,8 +1515,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp handle_active_retry(state, issue, attempt, metadata) do
     if retry_candidate_issue?(issue, terminal_state_set()) and
          dispatch_slots_available?(issue, state) and
-         worker_slots_available?(state, metadata[:worker_host]) do
-      case refresh_issue_for_dispatch(issue, active_state_set()) do
+         retry_worker_available?(state, metadata) do
+      case refresh_issue_for_dispatch(issue, retry_allowed_states(metadata)) do
         {:ok, %Issue{} = refreshed_issue} ->
           {:noreply, do_dispatch_issue(state, refreshed_issue, attempt, metadata[:worker_host], metadata)}
 
@@ -1386,7 +1534,7 @@ defmodule SymphonyElixir.Orchestrator do
              attempt + 1,
              Map.merge(metadata, %{
                identifier: issue.identifier,
-               error: "retry dispatch refresh failed: #{inspect(reason)}"
+               error: retry_error(metadata, "retry dispatch refresh failed: #{inspect(reason)}")
              })
            )}
       end
@@ -1400,10 +1548,20 @@ defmodule SymphonyElixir.Orchestrator do
          attempt + 1,
          Map.merge(metadata, %{
            identifier: issue.identifier,
-           error: "no available orchestrator slots"
+           error: retry_error(metadata, "no available orchestrator slots")
          })
        )}
     end
+  end
+
+  defp retry_worker_available?(state, metadata) do
+    host = select_worker_host(state, metadata[:worker_host])
+    boundary = String.starts_with?(metadata[:error] || "", @handoff_recovery)
+    host != :no_worker_capacity and (not boundary or host == metadata[:worker_host])
+  end
+
+  defp retry_allowed_states(meta) do
+    if String.starts_with?(meta[:error] || "", @handoff_recovery), do: dispatch_state_set(), else: active_state_set()
   end
 
   defp release_issue_claim(%State{} = state, issue_id) do
@@ -1450,6 +1608,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp pick_retry_error(previous_retry, metadata) do
     metadata[:error] || Map.get(previous_retry, :error)
+  end
+
+  defp retry_error(metadata, error) do
+    if String.starts_with?(metadata[:error] || "", @handoff_recovery), do: @handoff_recovery <> ": " <> error, else: error
   end
 
   defp pick_retry_worker_host(previous_retry, metadata) do
@@ -1512,10 +1674,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp worker_slots_available?(%State{} = state) do
     select_worker_host(state, nil) != :no_worker_capacity
-  end
-
-  defp worker_slots_available?(%State{} = state, preferred_worker_host) do
-    select_worker_host(state, preferred_worker_host) != :no_worker_capacity
   end
 
   defp worker_host_slots_available?(%State{} = state, worker_host) when is_binary(worker_host) do
@@ -1594,6 +1752,34 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @impl true
+  def handle_call({:session_closed, issue_id, worker}, _from, state) do
+    case state.running[issue_id] do
+      %{pid: ^worker} = entry ->
+        entry = Map.put(entry, :session_process, nil)
+        {:reply, :ok, %{state | running: Map.put(state.running, issue_id, entry)}}
+
+      _ ->
+        {:reply, {:error, :stale_worker}, state}
+    end
+  end
+
+  def handle_call({:prepare_boundary, issue_id, worker}, _from, state) do
+    case state.running[issue_id] do
+      %{pid: ^worker} = entry when not is_map_key(entry, :handoff_error) ->
+        case RuntimeControl.persist_retry(RuntimeControl.runtime_id(), boundary_recovery(entry.issue, entry)) do
+          :ok ->
+            entry = Map.put(entry, :boundary_completed, true)
+            {:reply, :ok, %{state | running: Map.put(state.running, issue_id, entry)}}
+
+          error ->
+            {:reply, error, hold_failed_handoff(state, entry.issue, entry, error)}
+        end
+
+      _ ->
+        {:reply, {:error, :stale_worker}, state}
+    end
+  end
+
   def handle_call(:snapshot, _from, state) do
     state = refresh_runtime_config(state)
     now = DateTime.utc_now()
@@ -1738,6 +1924,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     {
       Map.merge(running_entry, %{
+        boundary_completed: event == :phase_boundary or Map.get(running_entry, :boundary_completed, false),
         last_codex_timestamp: timestamp,
         last_codex_message: summarize_codex_update(update),
         session_id: session_id_for_update(running_entry.session_id, update),
@@ -1906,7 +2093,6 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp extract_token_delta(running_entry, %{event: _, timestamp: _} = update) do
-    running_entry = running_entry || %{}
     usage = extract_token_usage(update)
 
     {

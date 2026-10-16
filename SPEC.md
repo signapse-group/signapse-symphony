@@ -403,19 +403,25 @@ Fields:
   - Names the provider-native non-terminal review handoff boundary.
   - The tracker adapter MAY validate that the state exists; this key alone does not make it active.
   - When included in active/dispatch states, entering or leaving it ends the current task session
-    after its normal turn completes. The next worker renders a fresh prompt in the same workspace.
+    when a successful reconcile observes the boundary, including during a turn. The next worker
+    renders a fresh prompt in the same workspace after the old worker/session stop is confirmed.
 - `dispatch_states` (list of strings)
   - Default: the effective `active_states` value.
   - Values are provider-native states eligible for new worker dispatch.
   - Compared case-insensitively by the scheduler.
 - `session_boundary_states` (list of nonblank strings, optional)
   - Default: `[]`; existing workflows retain their continuation behavior.
-  - Entering or leaving each named state ends the current task session after its normal turn
-    completes; moving between two different named states also ends the session.
+  - Entering or leaving each named state ends the current task session when reconcile observes the
+    transition, including during a turn; moving between different named states also ends the session.
   - Remaining in the same state continues; comparison ignores case and surrounding whitespace.
   - These boundaries supplement `review_state` and do not make a state active or dispatchable.
-  - The existing worker retains ownership until exit; the next worker rereads live state and renders
-    a fresh prompt in the same workspace. Retry/restart preserves existing workspace output.
+  - The existing worker retains ownership until its session/tool processes and worker are confirmed
+    stopped. The next worker rereads live state and renders a fresh prompt in a new thread in the
+    same workspace. Preserve uncommitted output and durable handoff recovery until replacement.
+  - An unconfirmed stop retains the claim/slot and requires operator inspection. Restart during
+    handoff pauses dispatch through existing runtime controls until operator-confirmed resume.
+  - Polling cannot prevent writes before the transition is observed or detect every transition
+    that reverses between snapshots. A tracker read failure does not establish a boundary change.
 - `terminal_states` (list of strings)
   - REQUIRED unless the selected adapter profile documents a default.
   - Values are provider-native state names compared case-insensitively by the scheduler.
@@ -715,9 +721,15 @@ Important nuance:
 - If the issue is still in an active state and has not crossed the configured review boundary,
   the worker SHOULD start another turn on the same live
   coding-agent thread in the same workspace, up to `agent.max_turns`.
-- On an active review-boundary transition, finish the current turn and close its session before
-  the normal continuation retry starts a new worker. Preserve the workspace and the single owner claim
-  until the old worker exits; reconciliation does not interrupt an in-flight turn for this transition.
+- On an observed active transition across a configured review or session boundary, stop the current
+  session even during a turn. Keep the claim until the old worker and its session-owned tools are
+  confirmed stopped; retain the workspace/output and durable recovery record. Revalidate live
+  admission before automatically starting a new worker/thread with its full phase prompt.
+- Keep the post-normal-completion boundary check as a fallback. Continuation guidance permits
+  finishing the current assignment at its boundary; it does not assign the next phase to the old thread.
+- An unconfirmed stop retains ownership/capacity and requires operator inspection rather than
+  repeated automatic stop attempts. A restart during handoff requires operator-confirmed resume
+  through runtime control before retrying. Pausing a shared control applies to its configured members.
 - The first turn SHOULD use the full rendered task prompt.
 - Continuation turns SHOULD send only continuation guidance to the existing thread, not resend the
   original task prompt that is already present in thread history.

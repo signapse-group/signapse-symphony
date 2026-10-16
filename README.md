@@ -44,6 +44,9 @@ Workflows with an active review task receive a fresh session and prompt when an 
 the configured review boundary, while retaining the issue workspace.
 Additional task phases, such as a Ready survey before implementation, can opt into
 `tracker.session_boundary_states` without changing continuation for other workflows.
+Reconciliation interrupts a running turn when it observes a configured boundary and waits for
+confirmed session/worker stop before dispatching the next phase. Unconfirmed stops retain ownership;
+restart during handoff requires operator-confirmed recovery. Polling leaves a delay before detection.
 
 Deployments sharing a Codex account can opt into durable, shared runtime controls. A usage-limit
 failure pauses all participating services, lets current turns finish, and requires an operator to
