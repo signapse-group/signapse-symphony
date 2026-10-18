@@ -9,6 +9,10 @@ defmodule SymphonyElixir.Jira.AgentTool do
   @allowed_methods ["GET", "POST", "PUT", "DELETE"]
   @jira_rest_description """
   Execute a Jira Cloud REST v3 request using Symphony's configured auth.
+  Successful GET /issue/{key} responses include authoritative `dependencies` alongside the unchanged body.
+  Use dependencies.blocked_by for prerequisites and dependencies.blocks for downstream issues.
+  Missing/unreadable links produce complete=false and ready=false; request fields=issuelinks to read them.
+  Never infer direction from type.inward || type.outward: Jira always supplies both labels.
   """
   @jira_rest_input_schema %{
     "type" => "object",
@@ -62,7 +66,7 @@ defmodule SymphonyElixir.Jira.AgentTool do
          {:ok, %{status: status, body: response_body}} <-
            jira_client.(method, path, query, body, client_opts),
          true <- is_integer(status) do
-      rest_response(status, response_body)
+      rest_response(status, response_body, method, path)
     else
       {:error, reason} -> failure_response(tool_error_payload(reason))
       _ -> failure_response(tool_error_payload(:jira_unknown_payload))
@@ -103,8 +107,17 @@ defmodule SymphonyElixir.Jira.AgentTool do
   defp normalize_query(query) when is_map(query), do: {:ok, query}
   defp normalize_query(_query), do: {:error, :invalid_query}
 
-  defp rest_response(status, body) do
-    dynamic_tool_response(status in 200..299, encode_payload(%{"status" => status, "body" => body}))
+  defp rest_response(status, body, method, path) do
+    payload = %{"status" => status, "body" => body}
+
+    payload =
+      if status in 200..299 and method == "GET" and Regex.match?(~r{^/rest/api/3/issue/[^/]+/?$}, path) and is_map(body) do
+        Map.put(payload, "dependencies", Client.dependencies(body["fields"]))
+      else
+        payload
+      end
+
+    dynamic_tool_response(status in 200..299, encode_payload(payload))
   end
 
   defp failure_response(payload), do: dynamic_tool_response(false, encode_payload(payload))

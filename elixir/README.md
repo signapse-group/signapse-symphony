@@ -668,3 +668,11 @@ you.
 ## License
 
 This project is licensed under the [Apache License 2.0](../LICENSE).
+
+## Jira dependency contract
+
+Successful `jira_rest` GET issue reads retain the raw `body` and add a `dependencies` envelope from the same parser used by scheduler admission. Request `issuelinks` in `fields` and retain this envelope when parsing the response. `blocked_by` contains incoming Blocks prerequisites; `blocks` contains outgoing downstream issues. Both carry issue identity/state. `complete` is false for missing or malformed link data or unreadable prerequisite status categories; `ready` requires complete data and every prerequisite in Jira category `done`. An empty list with incomplete data is not clearance.
+
+Jira supplies both `type.inward` and `type.outward` on every link. Use the actual `inwardIssue` / `outwardIssue` endpoint; never select a label with boolean fallback or treat both endpoints as prerequisites. Downstream QA does not block upstream implementation. Non-Blocks links do not create prerequisites. Live rereads remain mandatory before mutations/handoff; prompt snapshots are not current authority.
+
+The Update workflow action validates local Markdown references in the candidate commit before fast-forwarding. Operator rollout also runs each consumer real-parser phase checker, preserves host configuration and issue output, drains active turns, and verifies a fresh session. Reload does not update existing workspaces or erase old session context. Keep legacy runner checkouts for rollback, not as fallback instruction sources.

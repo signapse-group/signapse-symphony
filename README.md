@@ -1,5 +1,7 @@
 # Symphony
 
+Agent Jira reads and scheduler admission share one [dependency contract](elixir/README.md#jira-dependency-contract). Workflow updates reject missing repository runbook references before activation.
+
 Symphony turns project work into isolated, autonomous implementation runs, allowing teams to manage
 work instead of supervising coding agents.
 

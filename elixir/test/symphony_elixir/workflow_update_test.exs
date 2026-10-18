@@ -47,6 +47,26 @@ defmodule SymphonyElixir.WorkflowUpdateTest do
     assert message =~ "already up to date"
   end
 
+  test "missing workflow references refuse activation and tracked runbooks are accepted", context do
+    publish(context, prompt: "Read [runbook](<docs/runbooks/survey.md#gate>).")
+    assert {:error, message} = WorkflowUpdate.update(context.server)
+    assert message =~ "reference is missing"
+    assert git(context.checkout, ["rev-parse", "HEAD"]) == context.before
+
+    path = Path.join(context.seed, "docs/runbooks/survey.md")
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "# Gate\nRead the accepted contract.\n")
+    commit_and_push(context.seed)
+    assert {:ok, _} = WorkflowUpdate.update(context.server)
+    assert File.read!(Path.join(context.checkout, "docs/runbooks/survey.md")) =~ "# Gate"
+
+    script = Path.join(context.seed, "check.sh")
+    File.write!(script, "#!/bin/sh\nexit 0\n")
+    File.chmod!(script, 0o755)
+    publish(context, prompt: "Read [runbook](docs/runbooks/survey.md) and [check](check.sh); [external](https://example.invalid) [section](#gate).")
+    assert {:ok, _} = WorkflowUpdate.update(context.server)
+  end
+
   test "busy runtime refuses before fetching and again before applying", context do
     %{server: server, checkout: checkout, before: before} = context
     publish(context, prompt: "New prompt")

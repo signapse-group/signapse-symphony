@@ -2415,3 +2415,7 @@ Extension config:
 - Cleanup and observability:
   - Operators need to know which host owns a run, where its workspace lives, and whether cleanup
     happened on the right machine.
+
+### Jira dependency reads
+
+For native Jira execution, scheduler admission and agent GET issue responses MUST use the same issue-relative Blocks parser. Tool responses MUST preserve the REST body and expose `dependencies.blocked_by`, `dependencies.blocks`, `dependencies.complete` and `dependencies.ready`. Missing/malformed links or unreadable prerequisite status categories MUST NOT imply admission. Outgoing Blocks links MUST NOT block their source. Before updating a repository workflow, local prompt references MUST resolve to regular files in the candidate commit.
