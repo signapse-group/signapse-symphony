@@ -41,10 +41,10 @@ SSH với host verification và đọc health cả bốn service thành công. K
 còn thao tác Tailscale bắt buộc trước khi đưa CD lên `main`. Hướng dẫn bên
 dưới giữ lại để dùng khi cần cấu hình lại.
 
-Đã khảo sát workflow live của `signapse-group/signapse`: BE dùng OAuth client
+Đã khảo sát workflow live của `dgminhtam/signapse`: BE dùng OAuth client
 với `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_SECRET`, `tag:ci`, kết nối tới cùng server
 `100.113.56.38`, user `dgminhtam`. Run
-[38752593517](https://github.com/signapse-group/signapse/actions/runs/38752593517)
+[38752593517](https://github.com/dgminhtam/signapse/actions/runs/38752593517)
 ngày 2026-10-15 có bước kết nối Tailscale và deploy thành công.
 
 Workflow Symphony đã đổi sang đúng cách này. Không cần OIDC, `TS_AUDIENCE`
