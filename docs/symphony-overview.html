@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Signapse — Symphony hoạt động như thế nào</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;family=Inter:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+:root{--paper:#fafaf7;--ink:#03141d;--muted:#3c6a70;--accent:#006f66;--tint:#edf6f3;--rule:#cadbd8}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px Geist,Arial,sans-serif}main{max-width:1440px;margin:auto;padding:40px 40px 28px;min-width:0}.brand{font-weight:600;letter-spacing:.18em;color:var(--accent);font-size:12px}h1{font:600 38px Inter,Arial,sans-serif;letter-spacing:-1.5px;margin:18px 0 12px}.intro{color:var(--muted);font-size:17px;max-width:900px;line-height:1.6;margin:0 0 24px}.diagram-container{width:100%;overflow-x:auto;border:1px solid var(--rule);border-radius:8px}svg{display:block;width:100%;min-width:1280px;background:var(--paper)}text{fill:var(--ink);font-family:Geist,Arial,sans-serif}.name{font-weight:600;font-size:19px}.sub{font-size:14px;fill:var(--muted)}.tag{font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:1px;fill:var(--muted)}.small{font-size:13px;fill:var(--muted)}.node{fill:var(--paper);stroke:var(--muted);stroke-width:1.3}.focal{fill:var(--tint);stroke:var(--accent);stroke-width:1.8}.edge{fill:none;stroke:var(--muted);stroke-width:1.6;marker-end:url(#arrow)}.return{stroke-dasharray:5 5}.label{font:11px 'Geist Mono',monospace;fill:var(--muted);letter-spacing:.7px}.note{display:grid;grid-template-columns:1.3fr 1fr;gap:36px;padding:24px 0;line-height:1.65}.note strong{display:block;margin-bottom:5px}.note p{margin:0;color:var(--muted)}footer{border-top:1px solid var(--rule);padding-top:16px;font-size:12px;color:var(--muted);line-height:1.6}@media(max-width:700px){main{padding:24px 16px}h1{font-size:30px}.note{grid-template-columns:1fr;gap:18px}}@media print{.diagram-container{overflow-x:visible}svg{min-width:0}main{padding:12px}}
+</style></head><body><main><div class="brand">SIGNAPSE / ENGINEERING</div><h1>Symphony hoạt động như thế nào?</h1><p class="intro">Một dịch vụ điều phối liên tục: nhận issue đủ điều kiện, giao cho Codex trong workspace riêng, theo dõi tiến độ và đưa kết quả tới bước review.</p>
+<div class="diagram-container"><svg viewBox="0 0 1280 720" role="img" aria-labelledby="symphony-overview-title symphony-overview-desc">
+<title id="symphony-overview-title">Tổng quan hoạt động của Symphony</title><desc id="symphony-overview-desc">Symphony đọc cấu hình workflow, lấy issue từ tracker, điều phối Codex trong workspace riêng, theo dõi và thử lại khi cần, rồi bàn giao pull request cho maintainer.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="#3c6a70" stroke-width="1.5"/></marker></defs>
+<rect x="336" y="208" width="600" height="284" rx="8" fill="#edf6f3" fill-opacity=".45" stroke="#cadbd8" stroke-dasharray="5 5"/>
+<text x="360" y="236" class="tag">SYMPHONY RUNTIME · ELIXIR / OTP</text>
+<!-- Connectors precede nodes; each route has distinct ports. -->
+<path class="edge" d="M 608 168 V 268"/>
+<path class="edge" d="M 280 328 H 368"/>
+<path class="edge" d="M 616 328 H 672"/>
+<path class="edge" d="M 912 328 H 992"/>
+<path class="edge" d="M 1104 388 V 544"/>
+<path class="edge" d="M 492 388 V 544"/>
+<path class="edge return" d="M 792 388 V 448 Q 792 456 784 456 H 556 Q 548 456 548 448 V 388"/>
+<path class="edge return" d="M 368 356 H 320 Q 312 356 312 364 V 500 Q 312 508 304 508 H 176 Q 168 508 168 500 V 388"/>
+<rect x="556" y="200" width="104" height="24" fill="#fafaf7"/><text x="608" y="216" class="label" text-anchor="middle">CONFIG + PROMPT</text>
+<rect x="184" y="444" width="112" height="24" fill="#fafaf7"/><text x="240" y="460" class="label" text-anchor="middle">RECONCILE</text>
+<rect x="620" y="420" width="120" height="24" fill="#fafaf7"/><text x="680" y="436" class="label" text-anchor="middle">EVENTS / RETRY</text>
+<rect x="512" y="76" width="384" height="92" rx="6" class="node"/>
+<text x="536" y="102" class="tag">CHÍNH SÁCH TRONG REPO</text><text x="536" y="132" class="name">WORKFLOW.md + AGENTS.md</text><text x="536" y="152" class="sub">Cấu hình, prompt, quy tắc thực thi</text>
+<rect x="56" y="268" width="224" height="120" rx="6" class="node"/>
+<text x="80" y="296" class="tag">01 / NGUỒN VIỆC</text><text x="80" y="328" class="name">Issue tracker</text><text x="80" y="352" class="sub">GitHub Project: Ready</text><text x="80" y="372" class="sub">Issue, trạng thái, ưu tiên</text>
+<rect x="368" y="268" width="248" height="120" rx="6" class="focal"/>
+<text x="392" y="296" class="tag">02 / ĐIỀU PHỐI</text><text x="392" y="328" class="name">Orchestrator</text><text x="392" y="352" class="sub">Poll → lọc → phân công</text><text x="392" y="372" class="sub">Giới hạn số agent đồng thời</text>
+<rect x="672" y="268" width="240" height="120" rx="6" class="focal"/>
+<text x="696" y="296" class="tag">03 / THỰC THI</text><text x="696" y="328" class="name">Workspace + Codex</text><text x="696" y="352" class="sub">Mỗi issue một thư mục riêng</text><text x="696" y="372" class="sub">Sửa code → test → tạo PR</text>
+<rect x="992" y="268" width="232" height="120" rx="6" class="node"/>
+<text x="1016" y="296" class="tag">04 / BÀN GIAO</text><text x="1016" y="328" class="name">Pull request + CI</text><text x="1016" y="352" class="sub">Kết quả và bằng chứng test</text><text x="1016" y="372" class="sub">Issue → In review</text>
+<rect x="368" y="544" width="328" height="100" rx="6" class="node"/>
+<text x="392" y="572" class="tag">QUAN SÁT VẬN HÀNH</text><text x="392" y="600" class="name">Logs · Dashboard · JSON API</text><text x="392" y="624" class="sub">Phiên chạy, token, lỗi, trạng thái blocked</text>
+<rect x="992" y="544" width="232" height="100" rx="6" class="node"/>
+<text x="1016" y="572" class="tag">05 / HOÀN TẤT</text><text x="1016" y="600" class="name">Maintainer merge</text><text x="1016" y="624" class="sub">Issue đóng → Project Done</text>
+<line x1="56" y1="680" x2="88" y2="680" stroke="#3c6a70" stroke-width="1.6"/><text x="100" y="684" class="small">Luồng chính</text><line x1="240" y1="680" x2="272" y2="680" stroke="#3c6a70" stroke-width="1.6" stroke-dasharray="5 5"/><text x="284" y="684" class="small">Phản hồi / kiểm tra lại</text><text x="1224" y="684" class="small" text-anchor="end">Một workspace cho mỗi issue · Nhiều issue chạy song song</text>
+</svg></div>
+<div class="note"><div><strong>Vòng điều phối luôn tiếp tục</strong><p>Symphony kiểm tra trạng thái issue và phiên agent. Lỗi tạm thời được thử lại với backoff; yêu cầu nhập liệu hoặc phê duyệt được hiển thị là blocked. Issue sang trạng thái kết thúc sẽ dừng agent và dọn workspace.</p></div><div><strong>Symphony điều phối, Codex thực hiện</strong><p>Codex nhận prompt qua App Server và dùng công cụ tracker do Symphony cung cấp để cập nhật issue. Bước review, merge và điều kiện hoàn tất tuân theo workflow của từng repo.</p></div></div>
+<footer>Nội dung: SPEC.md · elixir/README.md · elixir/WORKFLOW.md · AGENTS.md — workflow GitHub của repo Symphony, không phải ảnh chụp server đang chạy.<br>Thiết kế: token từ signapse-landing/src/styles/global.css — ink #03141d, accent #006f66, muted #3c6a70; nền điều chỉnh #fafaf7. Font Inter 600, Geist 400–600, Geist Mono 400 qua Google Fonts; có fallback hệ thống khi ngoại tuyến.</footer>
+</main></body></html>
