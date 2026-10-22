@@ -37,7 +37,7 @@ Planning requires autonomous workers to receive native **Subtasks** under Story,
 | `route-backend` | `signapse-group/signapse` |
 | `route-frontend` | `signapse-group/signapse-ui` |
 | `route-quality-assurance` | `signapse-group/signapse-qa` |
-| `route-mdg` | `signapse-group/signapse-mdg` |
+| `route-mdg` | `dgminhtam/signapse-mdg` |
 | `route-landing` | `signapse-group/signapse-landing` |
 
 Use one fixed repository/clone hook and workspace root per worker. Keep the label set in workflow configuration, not a Signapse constant in the scheduler. Ordinary business labels may coexist; missing or conflicting routes stay unclaimed with a diagnostic.
