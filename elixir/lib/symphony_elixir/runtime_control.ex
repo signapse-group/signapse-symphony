@@ -528,7 +528,7 @@ defmodule SymphonyElixir.RuntimeControl do
   defp persist_retry_database(conn, runtime_id, retry) do
     payload =
       retry
-      |> Map.take([:issue_id, :identifier, :issue_url, :attempt, :error, :worker_host, :workspace_path])
+      |> Map.take([:issue_id, :identifier, :issue_url, :attempt, :error, :worker_host, :workspace_path, :session_unit, :session_invocation])
       |> atom_keys_to_strings()
       |> Jason.encode()
 

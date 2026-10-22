@@ -238,7 +238,8 @@ defmodule SymphonyElixir.Jira.Client do
     title = fields["summary"]
     state = issue_status(fields)["name"]
     status_category = status_category(issue_status(fields))
-    blockers = extract_blockers(fields["issuelinks"])
+    dependencies = dependencies(fields)
+    blockers = dependencies.blocked_by
     native_ref = native_ref(fields)
     labels = extract_labels(fields["labels"])
     selection_error = selection_error(native_ref, labels, settings)
@@ -262,7 +263,7 @@ defmodule SymphonyElixir.Jira.Client do
         labels: labels,
         blocked_by: blockers,
         dispatchable: is_nil(selection_error) and dispatchable?(state, status_category, blockers, settings),
-        admission_ready: dependencies_ready?(fields["issuelinks"], blockers, settings),
+        admission_ready: dependency_admission(settings, dependencies),
         created_at: parse_datetime(fields["created"]),
         updated_at: parse_datetime(fields["updated"])
       }
@@ -316,16 +317,36 @@ defmodule SymphonyElixir.Jira.Client do
   defp valid_subtask?(%{issue_type: %{subtask: true}, parent: parent}) when is_map(parent), do: true
   defp valid_subtask?(_native_ref), do: false
 
-  defp dependencies_ready?(_links, _blockers, %{routing_labels: []}), do: true
+  defp dependency_admission(%{routing_labels: []}, _dependencies), do: true
+  defp dependency_admission(_settings, dependencies), do: dependencies.ready
 
-  defp dependencies_ready?(links, blockers, _settings) when is_list(links) do
-    Enum.all?(links, fn
-      %{"type" => %{"name" => name}} -> present_string?(name)
-      _ -> false
-    end) and Enum.all?(blockers, &(present_string?(&1.id) and present_string?(&1.identifier) and &1[:status_category] == "done"))
+  @doc "Normalizes issue-relative Jira links for both scheduler admission and agent reads."
+  @spec dependencies(term()) :: map()
+  def dependencies(%{"issuelinks" => links}) when is_list(links) do
+    blockers = extract_blockers(links)
+
+    downstream =
+      for %{"type" => %{"name" => name}, "outwardIssue" => issue} <- links,
+          normalize_state(name) == "blocks",
+          do: blocker_ref(issue)
+
+    complete =
+      Enum.all?(links, &valid_dependency_link?/1) and
+        Enum.all?(blockers ++ downstream, &(present_string?(&1.id) and present_string?(&1.identifier))) and
+        Enum.all?(blockers, &present_string?(&1[:status_category]))
+
+    %{complete: complete, blocked_by: blockers, blocks: downstream, ready: complete and Enum.all?(blockers, &(&1[:status_category] == "done"))}
   end
 
-  defp dependencies_ready?(_links, _blockers, _settings), do: false
+  def dependencies(_fields), do: %{complete: false, blocked_by: [], blocks: [], ready: false}
+
+  defp valid_dependency_link?(%{"type" => %{"name" => name}} = link) do
+    present_string?(name) and
+      (normalize_state(name) != "blocks" or
+         is_map(link["inwardIssue"]) != is_map(link["outwardIssue"]))
+  end
+
+  defp valid_dependency_link?(_link), do: false
 
   defp selected_type?(%{id: id, name: name}, types) do
     Enum.any?(types, &(normalize_state(&1) in [normalize_state(id), normalize_state(name)]))

@@ -44,8 +44,37 @@ defmodule SymphonyElixir.WorkflowUpdate do
          {:ok, _} <- git(root, ["merge-base", "--is-ancestor", before, revision]),
          :ok <- regular_workflow(root, revision),
          {:ok, content} <- git(root, ["show", "#{revision}:WORKFLOW.md"]),
-         {:ok, workflow} <- validate(content) do
+         {:ok, workflow} <- validate(content),
+         :ok <- validate_references(root, revision, workflow.prompt) do
       {:ok, %{root: root, before: before, revision: revision, workflow: workflow}}
+    end
+  end
+
+  defp validate_references(root, revision, prompt) do
+    references = Regex.scan(~r/\]\((<[^>]+>|[^\s)]+)\)/, prompt, capture: :all_but_first)
+
+    Enum.reduce_while(references, :ok, fn [reference], :ok ->
+      case validate_reference(root, revision, reference) do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_reference(root, revision, reference) do
+    path = reference |> String.trim_leading("<") |> String.trim_trailing(">") |> String.split("#", parts: 2) |> hd() |> URI.decode()
+
+    if path == "" or URI.parse(path).scheme do
+      :ok
+    else
+      absolute = Path.expand(path, root)
+      relative = Path.relative_to(absolute, root)
+
+      case git(root, ["ls-tree", revision, "--", relative]) do
+        {:ok, "100644 blob " <> _} -> :ok
+        {:ok, "100755 blob " <> _} -> :ok
+        _ -> {:error, "Workflow reference is missing or not a regular repository file: #{reference}. Nothing was updated."}
+      end
     end
   end
 

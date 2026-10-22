@@ -353,8 +353,9 @@ operator-input suspension is separate from Jira Blocked and is cleared on restar
 instances for one route; in-memory claims do not provide a distributed lock.
 
 A consuming workflow may include `review_state` in both dispatch and active states for a separate
-delivery task. After a normal turn completes, entering or leaving that state closes the old session;
-the scheduler rereads live state and renders the next task's full prompt in the same workspace.
+delivery task. When reconcile observes entering or leaving that state, it interrupts the old session
+even during a turn. After confirming session/tool and worker stop, the scheduler revalidates live
+admission and renders the next task's full prompt in a new thread in the same workspace.
 Ready → Progress continues the existing session unless Ready is an additional session boundary.
 For a separate BE survey followed by implementation and review/delivery, use the consumer's three
 phase prompts with:
@@ -372,9 +373,26 @@ Ready → Progress now closes the survey session; Progress → In Review and In 
 close their previous sessions. Each next worker renders the full prompt for live state in the same
 workspace. A state listed in `session_boundary_states` is its own boundary, so moving between two
 different listed states also ends the session. Same-state work continues, and an empty list retains
-the previous behavior. Polling/retry/startup use the existing ownership and workspace handling.
-The old worker keeps its claim until it exits,
-so an external phase change waits for the current turn to finish rather than interrupting its tools.
+the previous behavior for unconfigured boundaries. The post-turn check remains a fallback.
+The old worker keeps its claim/slot until session/tool and worker stop is confirmed. An unconfirmed
+stop retains ownership and reports an operator-inspection error; polling does not repeat the stop.
+Workspace/output and the existing durable retry ledger survive handoff. With persistent runtime
+control enabled, restart during handoff pauses dispatch until an operator checks the old processes
+and uses the existing quota-checked resume control. This pause affects all configured shared-control
+members. Runtime control disabled does not provide durable restart recovery.
+
+Boundary sessions require Linux cgroup v2, a reachable systemd 254+ user manager, Python 3.9+,
+and bash on the execution host, including SSH workers. Each session uses its own transient
+service with a leased guard; daemonized/reparented tools stay in that service's cgroup.
+A dead worker/owner or disconnected SSH channel ends the lease; the host then kills the
+session. No replacement starts until stop is confirmed. Unknown stop retains claim/capacity
+and is exposed through API last_error and the dashboard. Workflows without boundaries
+and quota reads retain their existing launch path.
+See [session containment and recovery](../docs/codex-session-containment.md) for identity,
+lease timing, prerequisites, local/SSH checks and the four-service rollout procedure.
+
+Polling cannot prevent mutations before a transition is observed, detect every transition that
+reverses between polls, or treat failed tracker reads as boundary changes. This is not write fencing.
 Drain/restart the affected service before redefining its review boundary or task profile;
 workflow reload does not replace the instructions of a running Codex session.
 
@@ -650,3 +668,11 @@ you.
 ## License
 
 This project is licensed under the [Apache License 2.0](../LICENSE).
+
+## Jira dependency contract
+
+Successful `jira_rest` GET issue reads retain the raw `body` and add a `dependencies` envelope from the same parser used by scheduler admission. Request `issuelinks` in `fields` and retain this envelope when parsing the response. `blocked_by` contains incoming Blocks prerequisites; `blocks` contains outgoing downstream issues. Both carry issue identity/state. `complete` is false for missing or malformed link data or unreadable prerequisite status categories; `ready` requires complete data and every prerequisite in Jira category `done`. An empty list with incomplete data is not clearance.
+
+Jira supplies both `type.inward` and `type.outward` on every link. Use the actual `inwardIssue` / `outwardIssue` endpoint; never select a label with boolean fallback or treat both endpoints as prerequisites. Downstream QA does not block upstream implementation. Non-Blocks links do not create prerequisites. Live rereads remain mandatory before mutations/handoff; prompt snapshots are not current authority.
+
+The Update workflow action validates local Markdown references in the candidate commit before fast-forwarding. Operator rollout also runs each consumer real-parser phase checker, preserves host configuration and issue output, drains active turns, and verifies a fresh session. Reload does not update existing workspaces or erase old session context. Keep legacy runner checkouts for rollback, not as fallback instruction sources.

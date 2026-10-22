@@ -16,6 +16,8 @@ tracker:
     - In progress
   review_state: In review
   session_boundary_states: []
+# Boundaries require Linux/systemd containment on every execution host, including SSH.
+# See README.md and ../docs/codex-session-containment.md for stop/recovery prerequisites.
   terminal_states:
     - Done
 polling:

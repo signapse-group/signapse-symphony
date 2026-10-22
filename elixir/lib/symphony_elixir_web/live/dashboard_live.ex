@@ -288,6 +288,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                       <span class={state_badge_class(entry.state)}>
                         <%= entry.state %>
                       </span>
+                      <span :if={entry[:handoff_error]} class="status-badge runtime-control-paused">Operator inspection required</span>
                     </td>
                     <td>
                       <div class="session-stack">

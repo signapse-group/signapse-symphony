@@ -393,6 +393,57 @@ defmodule SymphonyElixir.Jira.AdapterTest do
     refute issue.dispatchable
   end
 
+  test "scheduler and jira_rest agree on issue-relative dependencies, including missing data" do
+    upstream =
+      linked_issue("10202", "SIGN-197", "Progress")
+      |> put_in(["fields", "status", "statusCategory"], %{"key" => "indeterminate"})
+
+    downstream =
+      linked_issue("10204", "SIGN-199", "Open")
+      |> put_in(["fields", "status", "statusCategory"], %{"key" => "new"})
+
+    type = %{"name" => "Blocks", "inward" => "is blocked by", "outward" => "blocks"}
+
+    outgoing = %{"type" => type, "outwardIssue" => downstream}
+    incoming = %{"type" => type, "inwardIssue" => upstream}
+
+    for {links, ready, complete} <- [
+          {[outgoing], true, true},
+          {[incoming], false, true},
+          {[], true, true},
+          {nil, false, false},
+          {[Map.merge(incoming, outgoing)], false, false},
+          {[%{"type" => type}], false, false},
+          {[false], false, false},
+          {[put_in(incoming, ["inwardIssue", "fields", "status", "statusCategory"], nil)], false, false}
+        ] do
+      raw = put_in(raw_subtask("10202", "SYM-197", "Progress"), ["fields", "issuelinks"], links)
+      normalized = JiraClient.normalize_issue_for_test(raw, routed_settings())
+
+      response =
+        JiraAgentTool.execute("jira_rest", %{"method" => "GET", "path" => "/rest/api/3/issue/SYM-197"},
+          jira_client: fn "GET", _path, _query, _body, _opts ->
+            {:ok, %{status: 200, body: raw}}
+          end
+        )
+
+      payload = Jason.decode!(response["output"])
+      assert payload["body"] == raw
+      assert payload["dependencies"]["ready"] == ready
+      assert payload["dependencies"]["complete"] == complete
+      assert normalized.admission_ready == ready
+      assert payload["dependencies"]["blocked_by"] == Jason.decode!(Jason.encode!(normalized.blocked_by))
+    end
+
+    assert %{blocked_by: [], blocks: [%{identifier: "SIGN-199"}], ready: true} = JiraClient.dependencies(%{"issuelinks" => [outgoing]})
+    assert %{blocked_by: [%{identifier: "SIGN-197"}], blocks: [], ready: false} = JiraClient.dependencies(%{"issuelinks" => [incoming]})
+    done = put_in(incoming, ["inwardIssue", "fields", "status", "statusCategory", "key"], "done")
+    assert %{ready: true} = JiraClient.dependencies(%{"issuelinks" => [done]})
+    assert %{ready: true} = JiraClient.dependencies(%{"issuelinks" => [%{"type" => %{"name" => "Relates"}}]})
+    assert %{complete: false, ready: false} = JiraClient.dependencies(%{})
+    assert %{complete: false, ready: false} = JiraClient.dependencies(nil)
+  end
+
   test "jira_rest preserves REST status and body while rejecting unsafe arguments" do
     test_pid = self()
     tracker_settings = tracker_settings()

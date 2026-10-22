@@ -1,5 +1,7 @@
 # Symphony
 
+Agent Jira reads and scheduler admission share one [dependency contract](elixir/README.md#jira-dependency-contract). Workflow updates reject missing repository runbook references before activation.
+
 Symphony turns project work into isolated, autonomous implementation runs, allowing teams to manage
 work instead of supervising coding agents.
 
@@ -44,6 +46,12 @@ Workflows with an active review task receive a fresh session and prompt when an 
 the configured review boundary, while retaining the issue workspace.
 Additional task phases, such as a Ready survey before implementation, can opt into
 `tracker.session_boundary_states` without changing continuation for other workflows.
+Reconciliation interrupts a running turn when it observes a configured boundary and waits for
+confirmed session/worker stop before dispatching the next phase. Unconfirmed stops retain ownership;
+restart during handoff requires operator-confirmed recovery. Polling leaves a delay before detection.
+Boundary sessions use a per-session systemd cgroup on Linux, locally and over SSH;
+a leased guard cleans up daemonized tools when the worker or connection disappears.
+See [session containment](docs/codex-session-containment.md) for host prerequisites and recovery.
 
 Deployments sharing a Codex account can opt into durable, shared runtime controls. A usage-limit
 failure pauses all participating services, lets current turns finish, and requires an operator to

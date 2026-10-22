@@ -89,10 +89,13 @@ defmodule SymphonyElixirWeb.Presenter do
         codex_session_logs: []
       },
       recent_events: recent_events_payload(running || blocked),
-      last_error: (blocked && blocked.error) || (retry && retry.error),
+      last_error: running_error(running) || (blocked && blocked.error) || (retry && retry.error),
       tracked: %{}
     }
   end
+
+  defp running_error(nil), do: nil
+  defp running_error(running), do: Map.get(running, :handoff_error)
 
   defp issue_id_from_entries(running, retry, blocked),
     do: (running && running.issue_id) || (retry && retry.issue_id) || (blocked && blocked.issue_id)
@@ -116,6 +119,7 @@ defmodule SymphonyElixirWeb.Presenter do
       session_id: entry.session_id,
       turn_count: Map.get(entry, :turn_count, 0),
       last_event: entry.last_codex_event,
+      handoff_error: Map.get(entry, :handoff_error),
       last_message: summarize_message(entry.last_codex_message),
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(entry.last_codex_timestamp),
@@ -166,6 +170,7 @@ defmodule SymphonyElixirWeb.Presenter do
       state: running.state,
       started_at: iso8601(running.started_at),
       last_event: running.last_codex_event,
+      handoff_error: Map.get(running, :handoff_error),
       last_message: summarize_message(running.last_codex_message),
       last_event_at: iso8601(running.last_codex_timestamp),
       tokens: %{
