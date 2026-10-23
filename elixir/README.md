@@ -475,6 +475,13 @@ consumer's rollout procedure; do not reset tracker states or restart other route
 
 ## Web dashboard
 
+Tracker polling, retry lookups and final admission refreshes run in supervised tasks so slow tracker
+responses cannot block worker session registration. Results are applied to current scheduler state;
+stale worker/retry results are discarded and admission rechecks current configuration and capacity.
+Pending admission reads also prevent idle-only workflow updates. A failed registration before host
+launch carries an explicit `session_not_started` worker exit and follows ordinary retry/backoff,
+preserving its workspace and original failure. A missing port alone is never proof of safe cleanup.
+
 The observability UI now runs on a minimal Phoenix stack:
 
 - LiveView for the dashboard at `/`

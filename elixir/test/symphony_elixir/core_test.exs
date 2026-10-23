@@ -1090,6 +1090,7 @@ defmodule SymphonyElixir.CoreTest do
           error: "agent exited"
         })
 
+      updated_state = drain_tracker_reads(updated_state)
       refute MapSet.member?(updated_state.claimed, issue_id)
       refute Map.has_key?(updated_state.running, issue_id)
       refute Map.has_key?(updated_state.retry_attempts, issue_id)
@@ -1222,7 +1223,13 @@ defmodule SymphonyElixir.CoreTest do
 
     send(orchestrator, {:retry_issue, issue_id, retry_token})
     assert %{retrying: _retries} = GenServer.call(orchestrator, :snapshot)
-    paused_state = :sys.get_state(orchestrator)
+
+    paused_state =
+      eventually_value(fn ->
+        state = :sys.get_state(orchestrator)
+        if Agent.get(counter, & &1) == 2 and state.retry_attempts[issue_id], do: state
+      end)
+
     assert Agent.get(counter, & &1) == 2, inspect(paused_state)
     assert {:ok, %{mode: :paused}} = RuntimeControl.status()
     refute Map.has_key?(paused_state.running, issue_id)
@@ -1248,7 +1255,12 @@ defmodule SymphonyElixir.CoreTest do
 
     assert %{attempt: 2, retry_token: resumed_token, workspace_path: ^recorded_workspace} = resumed_retry
     send(orchestrator, {:retry_issue, issue_id, resumed_token})
-    assert %{running: [_running_issue]} = GenServer.call(orchestrator, :snapshot)
+
+    assert %{running: [_running_issue]} =
+             eventually_value(fn ->
+               snapshot = GenServer.call(orchestrator, :snapshot)
+               if snapshot.running != [], do: snapshot
+             end)
 
     persisted =
       eventually_value(fn ->

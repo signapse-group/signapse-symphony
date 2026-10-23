@@ -341,7 +341,11 @@ defmodule SymphonyElixir.Codex.AppServer do
     on_started = Keyword.get(opts, :on_started, fn _ -> :ok end)
     session = %{port: nil, containment: containment, heartbeat: nil, worker_host: worker_host}
     # Register ownership before a host can create any session processes.
-    :ok = on_started.(session)
+    try do
+      :ok = on_started.(session)
+    catch
+      kind, reason -> exit({:session_not_started, {kind, reason}})
+    end
 
     with {:ok, port} <- open_port(workspace, worker_host, dynamic_tool_binding, containment || false) do
       heartbeat = if containment, do: SessionProcess.heartbeat(port, Keyword.get(opts, :lifecycle_owner))

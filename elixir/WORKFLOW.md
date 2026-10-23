@@ -17,6 +17,8 @@ tracker:
   review_state: In review
   session_boundary_states: []
 # Boundaries require Linux/systemd containment on every execution host, including SSH.
+# Tracker reads do not block session registration. Proven prelaunch failures use ordinary retry;
+# uncertain startup/stop still requires operator recovery. Pending admissions count as busy.
 # See README.md and ../docs/codex-session-containment.md for stop/recovery prerequisites.
   terminal_states:
     - Done

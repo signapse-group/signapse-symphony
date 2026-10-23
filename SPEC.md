@@ -49,6 +49,11 @@ Important boundary:
 
 - Poll the issue tracker on a fixed cadence and dispatch work with bounded concurrency.
 - Maintain a single authoritative orchestrator state for dispatch, retries, and reconciliation.
+- Tracker polling, retry lookups and admission refreshes must not block the scheduler mailbox.
+  Supervised reads return data; only the orchestrator applies results, fences stale attempts/config,
+  and rechecks current admission capacity and runtime controls before launch.
+- A worker failure proven to precede host launch follows ordinary retry. An empty session record
+  alone is not that proof; uncertain startup or stop must continue to retain ownership.
 - Create deterministic per-issue workspaces and preserve them across runs.
 - Stop active runs when issue state changes make them ineligible.
 - Recover from transient failures with exponential backoff.

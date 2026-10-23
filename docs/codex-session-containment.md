@@ -48,6 +48,12 @@ Polling does not repeatedly retry an uncertain stop. The API exposes handoff_err
 and last_error while the dashboard shows operator intervention; the issue remains
 in running ownership rather than moving to the distinct blocked collection.
 
+The initial ownership callback runs before any host launch. If that callback fails or times out,
+the worker exits with `session_not_started`; this positive prelaunch proof permits normal retry
+even if a late registration stored an empty placeholder. After-run hooks cannot replace this exit.
+Dead/stale worker registrations are rejected. External worker death, failure after host launch,
+and unknown session identities retain the existing fail-closed recovery behavior.
+
 After a service/scheduler restart, a pending session recovery record pauses its
 existing control membership. An operator verifies the old unit/processes are gone
 before Resume. BE/FE/landing share control; QA has its own control database.

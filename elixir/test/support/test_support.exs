@@ -22,7 +22,13 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Workspace
 
       import SymphonyElixir.TestSupport,
-        only: [write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]
+        only: [
+          write_workflow_file!: 1,
+          write_workflow_file!: 2,
+          restore_env: 2,
+          stop_default_http_server: 0,
+          drain_tracker_reads: 1
+        ]
 
       setup do
         workflow_root =
@@ -47,6 +53,20 @@ defmodule SymphonyElixir.TestSupport do
 
         :ok
       end
+    end
+  end
+
+  def drain_tracker_reads(%{tracker_tasks: tasks} = state) when map_size(tasks) == 0, do: state
+
+  def drain_tracker_reads(state) do
+    tasks = state.tracker_tasks
+
+    receive do
+      {ref, _result} = message when is_map_key(tasks, ref) ->
+        {:noreply, state} = SymphonyElixir.Orchestrator.handle_info(message, state)
+        drain_tracker_reads(state)
+    after
+      2_000 -> raise "tracker read did not complete"
     end
   end
 

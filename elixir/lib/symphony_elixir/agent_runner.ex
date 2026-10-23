@@ -56,13 +56,22 @@ defmodule SymphonyElixir.AgentRunner do
       {:ok, workspace} ->
         send_worker_runtime_info(codex_update_recipient, issue, worker_host, workspace)
 
-        try do
-          with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
-            run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
+        result =
+          try do
+            with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
+              run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
+            end
+          catch
+            :exit, {:session_not_started, _} = reason ->
+              exit(reason)
+
+            kind, reason ->
+              finish_after_run_hook(workspace, issue, worker_host, opts)
+              :erlang.raise(kind, reason, __STACKTRACE__)
           end
-        after
-          finish_after_run_hook(workspace, issue, worker_host, opts)
-        end
+
+        finish_after_run_hook(workspace, issue, worker_host, opts)
+        result
 
       {:error, reason} ->
         {:error, reason}

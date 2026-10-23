@@ -53,6 +53,10 @@ Boundary sessions use a per-session systemd cgroup on Linux, locally and over SS
 a leased guard cleans up daemonized tools when the worker or connection disappears.
 See [session containment](docs/codex-session-containment.md) for host prerequisites and recovery.
 
+Tracker polling, retry lookups and admission refreshes run outside the scheduler mailbox.
+Startup registration failures proven to precede process launch retry normally; uncertain process
+stops still retain ownership for operator recovery.
+
 Deployments sharing a Codex account can opt into durable, shared runtime controls. A usage-limit
 failure pauses all participating services, lets current turns finish, and requires an operator to
 Resume after a successful quota check. The dashboard exposes the shared state without changing

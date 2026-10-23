@@ -177,6 +177,7 @@ defmodule SymphonyElixir.ReviewTaskTest do
       dispatch_ready = %{reconciled | retry_restore_pending: false}
       retry_message = {:retry_issue, issue.id, retry.retry_token}
       assert {:noreply, dispatched} = Orchestrator.handle_info(retry_message, dispatch_ready)
+      dispatched = drain_tracker_reads(dispatched)
       assert dispatched.running[issue.id].pid != worker
       {next_thread, dispatched} = await_session(dispatched)
       next_worker = dispatched.running[issue.id].pid
