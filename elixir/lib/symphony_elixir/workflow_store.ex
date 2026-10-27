@@ -25,22 +25,22 @@ defmodule SymphonyElixir.WorkflowStore do
 
   @spec current() :: {:ok, Workflow.loaded_workflow()} | {:error, term()}
   def current do
-    case Process.whereis(__MODULE__) do
-      pid when is_pid(pid) ->
-        GenServer.call(__MODULE__, :current)
+    case cached_state() do
+      %State{workflow: workflow} ->
+        {:ok, workflow}
 
-      _ ->
+      nil ->
         Workflow.load()
     end
   end
 
   @spec settings() :: {:ok, Schema.t()} | {:error, term()}
   def settings do
-    case Process.whereis(__MODULE__) do
-      pid when is_pid(pid) ->
-        GenServer.call(__MODULE__, :settings)
+    case cached_state() do
+      %State{settings: settings} ->
+        {:ok, settings}
 
-      _ ->
+      nil ->
         case load_state(Workflow.workflow_file_path()) do
           {:ok, %State{settings: settings}} -> {:ok, settings}
           {:error, reason} -> {:error, reason}
@@ -66,6 +66,8 @@ defmodule SymphonyElixir.WorkflowStore do
   def init(_opts) do
     case load_state(Workflow.workflow_file_path()) do
       {:ok, state} ->
+        :ets.new(__MODULE__, [:named_table, :protected, read_concurrency: true])
+        cache_state(state)
         schedule_poll()
         {:ok, state}
 
@@ -75,33 +77,14 @@ defmodule SymphonyElixir.WorkflowStore do
   end
 
   @impl true
-  def handle_call(:current, _from, %State{} = state) do
-    case reload_state(state) do
-      {:ok, new_state} ->
-        {:reply, {:ok, new_state.workflow}, new_state}
-
-      {:error, _reason, new_state} ->
-        {:reply, {:ok, new_state.workflow}, new_state}
-    end
-  end
-
   def handle_call(:force_reload, _from, %State{} = state) do
     case reload_state(state) do
       {:ok, new_state} ->
+        cache_state(new_state)
         {:reply, :ok, new_state}
 
       {:error, reason, new_state} ->
         {:reply, {:error, reason}, new_state}
-    end
-  end
-
-  def handle_call(:settings, _from, %State{} = state) do
-    case reload_state(state) do
-      {:ok, new_state} ->
-        {:reply, {:ok, new_state.settings}, new_state}
-
-      {:error, _reason, new_state} ->
-        {:reply, {:ok, new_state.settings}, new_state}
     end
   end
 
@@ -110,13 +93,31 @@ defmodule SymphonyElixir.WorkflowStore do
     schedule_poll()
 
     case reload_state(state) do
-      {:ok, new_state} -> {:noreply, new_state}
-      {:error, _reason, new_state} -> {:noreply, new_state}
+      {:ok, new_state} ->
+        cache_state(new_state)
+        {:noreply, new_state}
+
+      {:error, _reason, new_state} ->
+        {:noreply, new_state}
     end
   end
 
   defp schedule_poll do
     Process.send_after(self(), :poll, @poll_interval_ms)
+  end
+
+  defp cached_state do
+    case :ets.lookup(__MODULE__, :state) do
+      [{:state, state}] -> state
+      [] -> nil
+    end
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp cache_state(state) do
+    :ets.insert(__MODULE__, {:state, state})
+    :ok
   end
 
   defp reload_state(%State{} = state) do
