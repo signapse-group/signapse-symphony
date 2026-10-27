@@ -103,6 +103,28 @@ defmodule SymphonyElixir.ExtensionsTest do
     end
   end
 
+  test "workflow reads fall back if the cache is temporarily empty" do
+    ensure_workflow_store_running()
+    store = Process.whereis(WorkflowStore)
+    assert {:ok, workflow} = Workflow.current()
+    assert {:ok, settings} = WorkflowStore.settings()
+
+    :sys.replace_state(store, fn state ->
+      :ets.delete(WorkflowStore, :state)
+      state
+    end)
+
+    try do
+      assert {:ok, ^workflow} = Workflow.current()
+      assert {:ok, ^settings} = WorkflowStore.settings()
+    after
+      :sys.replace_state(store, fn state ->
+        :ets.insert(WorkflowStore, {:state, state})
+        state
+      end)
+    end
+  end
+
   test "workflow store reloads changes, keeps last good workflow, and falls back when stopped" do
     ensure_workflow_store_running()
     assert {:ok, %{prompt: "You are an agent for this repository."}} = Workflow.current()
