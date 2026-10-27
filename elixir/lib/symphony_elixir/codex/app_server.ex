@@ -376,7 +376,7 @@ defmodule SymphonyElixir.Codex.AppServer do
         stop_failed_start(session, :session_containment_start_failed)
 
       {^port, {:exit_status, status}} ->
-        stop_failed_start(session, {:port_exit, status})
+        stop_failed_start(session, port_exit_reason(status))
     after
       Config.settings!().codex.read_timeout_ms ->
         stop_failed_start(session, :session_containment_timeout)
@@ -582,6 +582,9 @@ defmodule SymphonyElixir.Codex.AppServer do
     )
   end
 
+  defp port_exit_reason(75), do: :session_heartbeat_expired
+  defp port_exit_reason(status), do: {:port_exit, status}
+
   defp receive_loop(port, on_message, timeout_ms, pending_line, tool_executor, auto_approve_requests) do
     receive do
       {^port, {:data, {:eol, chunk}}} ->
@@ -599,7 +602,7 @@ defmodule SymphonyElixir.Codex.AppServer do
         )
 
       {^port, {:exit_status, status}} ->
-        {:error, {:port_exit, status}}
+        {:error, port_exit_reason(status)}
     after
       timeout_ms ->
         {:error, :turn_timeout}
@@ -1160,7 +1163,7 @@ defmodule SymphonyElixir.Codex.AppServer do
         with_timeout_response(port, request_id, deadline, pending_line <> to_string(chunk))
 
       {^port, {:exit_status, status}} ->
-        {:error, {:port_exit, status}}
+        {:error, port_exit_reason(status)}
     after
       remaining_ms ->
         {:error, :response_timeout}

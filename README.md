@@ -57,6 +57,9 @@ Tracker polling, retry lookups and admission refreshes run outside the scheduler
 Startup registration failures proven to precede process launch retry normally; uncertain process
 stops still retain ownership for operator recovery.
 
+Boundary sessions tolerate heartbeat gaps up to 60 seconds. Pending retries reserve
+worker capacity; three consecutive heartbeat expiries pause their configured control group.
+
 Deployments sharing a Codex account can opt into durable, shared runtime controls. A usage-limit
 failure pauses all participating services, lets current turns finish, and requires an operator to
 Resume after a successful quota check. The dashboard exposes the shared state without changing

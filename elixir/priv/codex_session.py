@@ -8,8 +8,18 @@ import sys
 import threading
 import time
 
-LEASE_SECONDS = 15
+LEASE_SECONDS = 60
 UNIT_PATTERN = r"symphony-session-[0-9a-f]{32}\.service"
+
+
+def exit_guard(code, message):
+    # A full logging pipe must never prevent reaping the session.
+    try:
+        os.set_blocking(2, False)
+        os.write(2, (message + "\n").encode())
+    except OSError:
+        pass
+    os._exit(code)
 
 
 def properties(unit):
@@ -91,10 +101,12 @@ def guard(unit, command, workspace, names):
 
     def watch():
         while True:
-            if time.monotonic() - last_heartbeat > LEASE_SECONDS:
-                os._exit(3)
+            age = time.monotonic() - last_heartbeat
+            if age > LEASE_SECONDS:
+                exit_guard(75, f"SYMPHONY_SESSION_EXIT reason=heartbeat_expired unit={unit} heartbeat_age_seconds={age:.3f}")
             if child is not None and child.poll() is not None:
-                os._exit(0 if child.returncode == 0 else 3)
+                exit_guard(0 if child.returncode == 0 else 3,
+                           f"SYMPHONY_SESSION_EXIT reason=child_exit unit={unit} child_exit_code={child.returncode}")
             time.sleep(0.1)
 
     threading.Thread(target=watch, daemon=True).start()
@@ -111,6 +123,7 @@ def guard(unit, command, workspace, names):
         else:
             return 3
     # systemd kills the whole cgroup after its main process exits, including daemonized tools.
+    os.write(2, f"SYMPHONY_SESSION_EXIT reason=stdin_closed unit={unit}\n".encode())
     return 3
 
 

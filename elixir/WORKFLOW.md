@@ -132,3 +132,6 @@ issue agents must not deploy directly or wait for deployment to close an impleme
 Do not merge, deploy, mark the item `Done`, change product requirements, or create additional work
 items unless the root `AGENTS.md` explicitly assigns that action. Stop only at the `In review`
 handoff boundary, `Done`, or a true external blocker with no meaningful independent work remaining.
+
+<!-- Runtime retry safety: heartbeat lease 60s; pending retries reserve capacity;
+three consecutive heartbeat expiries pause the configured control membership. -->

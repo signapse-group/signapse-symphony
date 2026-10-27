@@ -25,12 +25,14 @@ existing launch transport; no helper installation on remote workers is required.
 2. The guard passes the existing filtered caller environment, cwd and stdio protocol
    to Codex. Its heartbeat/start frames are consumed outside the Codex protocol.
    Environment values do not enter the systemd-run argument list.
-3. A host-side 15-second lease is refreshed every second by an Elixir process that
+3. A host-side 60-second lease is refreshed every second by an Elixir process that
    monitors both the worker and scheduler owner. EOF closes the guard immediately.
    Lost connectivity or a dead owner ends renewal; lease expiry exits the guard.
    systemd then stops the complete cgroup, with a one-second stop grace period.
    Local sessions also bind to their owning user service when one is identifiable.
    A disconnected SSH session is terminated, never reattached to a continuing turn.
+   Heartbeat expiry reports `session_heartbeat_expired` (guard exit 75); diagnostics
+   include the unit and heartbeat age. Child exit and EOF have separate diagnostics.
 4. Boundary handoff persists recovery, suspends the old worker, kills only its unit
    and confirms the cgroup subtree has no live processes before terminating the
    worker. A fresh worker/thread still goes through existing live admission and
@@ -56,12 +58,29 @@ and unknown session identities retain the existing fail-closed recovery behavior
 
 After a service/scheduler restart, a pending session recovery record pauses its
 existing control membership. An operator verifies the old unit/processes are gone
-before Resume. BE/FE/landing share control; QA has its own control database.
+before Resume. Control membership is configured per deployment. Use a separate FE
+database and `members: [fe]` to pause FE without stopping BE/landing; QA also has its
+own control database.
 Preserve workspaces, uncommitted output and Jira states. Never remove retry markers
 by hand to bypass recovery. The guard is process lifecycle management, not a sandbox
 against an agent deliberately using host privileges or external service APIs.
 
 ## Verification and rollout
+
+Pending retries reserve capacity, including during backoff and tracker admission.
+Their first failure order survives retries and restart; waiting for capacity does
+not increment the failure attempt. Three consecutive `session_heartbeat_expired`
+failures on one issue pause its configured RuntimeControl membership. The saved
+retry remains available after quota-checked manual Resume with a fresh allowance.
+Normal completion or a different failure resets the consecutive heartbeat count.
+
+On the shared host, protect orchestration services from build/browser reclaim:
+each Symphony service has `MemoryLow=256M`, `CPUWeight=1000`, `IOWeight=1000`.
+Propagate `MemoryLow=2G` through `app.slice`, `user@1000.service`,
+`user-1000.slice` and `user.slice`; descendant protection alone is insufficient.
+This is reclaim protection, not a memory reservation or a workload hard limit.
+The existing parent `MemoryHigh=6G` / `MemoryMax=8G` remains in force. Keep the
+before-values for rollback and check actual memory/IO pressure after rollout.
 
 Run with a real user manager and disposable loopback sshd:
 

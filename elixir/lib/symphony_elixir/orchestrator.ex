@@ -186,7 +186,8 @@ defmodule SymphonyElixir.Orchestrator do
           updated_running_entry.issue.url,
           if(get_in(updated_running_entry, [:session_process, :containment]), do: @handoff_recovery, else: "Agent run was interrupted by a service restart"),
           updated_running_entry[:worker_host],
-          updated_running_entry[:workspace_path]
+          updated_running_entry[:workspace_path],
+          updated_running_entry
         )
 
         notify_dashboard()
@@ -308,8 +309,15 @@ defmodule SymphonyElixir.Orchestrator do
     Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
 
     next_attempt = next_retry_attempt_from_running(running_entry)
+    failures = if reason == :session_heartbeat_expired, do: Map.get(running_entry, :infrastructure_failures, 0) + 1, else: 0
+
+    if failures >= 3 do
+      RuntimeControl.pause("Infrastructure retry limit: #{running_entry.identifier} heartbeat expired #{failures} consecutive times", "infrastructure")
+    end
 
     schedule_issue_retry(state, issue_id, next_attempt, %{
+      infrastructure_failures: if(failures >= 3, do: 0, else: failures),
+      retry_priority: Map.get(running_entry, :retry_priority) || System.system_time(:millisecond),
       identifier: running_entry.identifier,
       issue_url: running_entry.issue.url,
       error: if(running_entry[:boundary_completed], do: @handoff_recovery, else: "agent exited: #{inspect(reason)}"),
@@ -424,13 +432,13 @@ defmodule SymphonyElixir.Orchestrator do
   defp admission_ready?(state, issue, _attempt, metadata) do
     current_retry_read?(state, issue.id) and
       candidate_issue?(issue, retry_allowed_states(metadata), terminal_state_set()) and
-      dispatch_slots_available?(issue, state) and retry_worker_available?(state, metadata)
+      dispatch_slots_available?(issue, state) and retry_priority_available?(state, issue.id, metadata) and retry_worker_available?(state, metadata)
   end
 
   defp defer_admission(state, _issue, nil, _metadata), do: {:noreply, state}
 
   defp defer_admission(state, issue, attempt, metadata) do
-    {:noreply, schedule_issue_retry(state, issue.id, attempt + 1, metadata)}
+    {:noreply, schedule_issue_retry(state, issue.id, attempt, metadata)}
   end
 
   defp finish_poll(state) do
@@ -507,7 +515,9 @@ defmodule SymphonyElixir.Orchestrator do
           issue_url: retry.issue_url,
           error: retry.error,
           worker_host: retry.worker_host,
-          workspace_path: retry.workspace_path
+          workspace_path: retry.workspace_path,
+          infrastructure_failures: Map.get(retry, :infrastructure_failures, 0),
+          retry_priority: Map.get(retry, :retry_priority)
         })
       end)
     else
@@ -543,7 +553,9 @@ defmodule SymphonyElixir.Orchestrator do
       issue_url: retry["issue_url"],
       error: retry["error"],
       worker_host: retry["worker_host"],
-      workspace_path: retry["workspace_path"]
+      workspace_path: retry["workspace_path"],
+      infrastructure_failures: retry["infrastructure_failures"] || 0,
+      retry_priority: retry["retry_priority"]
     })
   end
 
@@ -560,7 +572,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp persist_retry_state(issue_id, attempt, identifier, issue_url, error, worker_host, workspace_path) do
+  defp persist_retry_state(issue_id, attempt, identifier, issue_url, error, worker_host, workspace_path, metadata) do
     case RuntimeControl.persist_retry(RuntimeControl.runtime_id(), %{
            issue_id: issue_id,
            attempt: attempt,
@@ -568,7 +580,9 @@ defmodule SymphonyElixir.Orchestrator do
            issue_url: issue_url,
            error: error,
            worker_host: worker_host,
-           workspace_path: workspace_path
+           workspace_path: workspace_path,
+           infrastructure_failures: Map.get(metadata, :infrastructure_failures, 0),
+           retry_priority: Map.get(metadata, :retry_priority)
          }) do
       :ok ->
         :ok
@@ -855,6 +869,8 @@ defmodule SymphonyElixir.Orchestrator do
       error: @handoff_recovery,
       worker_host: entry[:worker_host],
       workspace_path: entry[:workspace_path],
+      infrastructure_failures: Map.get(entry, :infrastructure_failures, 0),
+      retry_priority: entry[:retry_priority],
       session_unit: get_in(entry, [:session_process, :containment, :unit]),
       session_invocation: get_in(entry, [:session_process, :containment, :invocation])
     }
@@ -1158,7 +1174,7 @@ defmodule SymphonyElixir.Orchestrator do
       !Map.has_key?(running, issue.id) and
       !Map.has_key?(blocked, issue.id) and
       not pending_dispatch?(state, issue.id) and
-      available_slots(state) > 0 and
+      available_slots(state) > map_size(state.retry_attempts) + pending_retry_reads(state) and
       state_slots_available?(issue, running) and
       worker_slots_available?(state)
   end
@@ -1308,7 +1324,9 @@ defmodule SymphonyElixir.Orchestrator do
       attempt: normalize_retry_attempt(attempt),
       error: retry_error(metadata, "Agent run was interrupted by a service restart"),
       worker_host: worker_host,
-      workspace_path: metadata[:workspace_path]
+      workspace_path: metadata[:workspace_path],
+      infrastructure_failures: Map.get(metadata, :infrastructure_failures, 0),
+      retry_priority: metadata[:retry_priority]
     }
 
     case RuntimeControl.persist_retry(RuntimeControl.runtime_id(), recovery) do
@@ -1376,6 +1394,8 @@ defmodule SymphonyElixir.Orchestrator do
             codex_last_reported_total_tokens: 0,
             turn_count: 0,
             retry_attempt: normalize_retry_attempt(attempt),
+            infrastructure_failures: Map.get(metadata, :infrastructure_failures, 0),
+            retry_priority: metadata[:retry_priority],
             started_at: DateTime.utc_now()
           })
 
@@ -1453,6 +1473,8 @@ defmodule SymphonyElixir.Orchestrator do
     error = pick_retry_error(previous_retry, metadata)
     worker_host = pick_retry_worker_host(previous_retry, metadata)
     workspace_path = pick_retry_workspace_path(previous_retry, metadata)
+    infrastructure_failures = Map.get(metadata, :infrastructure_failures, 0)
+    retry_priority = metadata[:retry_priority] || System.system_time(:millisecond)
 
     if is_reference(old_timer) do
       Process.cancel_timer(old_timer)
@@ -1476,11 +1498,14 @@ defmodule SymphonyElixir.Orchestrator do
             issue_url: issue_url,
             error: error,
             worker_host: worker_host,
-            workspace_path: workspace_path
+            workspace_path: workspace_path,
+            infrastructure_failures: infrastructure_failures,
+            retry_priority: retry_priority
           })
     }
 
-    persist_retry_state(issue_id, next_attempt, identifier, issue_url, error, worker_host, workspace_path)
+    extra = %{infrastructure_failures: infrastructure_failures, retry_priority: retry_priority}
+    persist_retry_state(issue_id, next_attempt, identifier, issue_url, error, worker_host, workspace_path, extra)
     updated_state
   end
 
@@ -1492,7 +1517,9 @@ defmodule SymphonyElixir.Orchestrator do
           issue_url: Map.get(retry_entry, :issue_url),
           error: Map.get(retry_entry, :error),
           worker_host: Map.get(retry_entry, :worker_host),
-          workspace_path: Map.get(retry_entry, :workspace_path)
+          workspace_path: Map.get(retry_entry, :workspace_path),
+          infrastructure_failures: Map.get(retry_entry, :infrastructure_failures, 0),
+          retry_priority: Map.get(retry_entry, :retry_priority)
         }
 
         {:ok, attempt, metadata, %{state | retry_attempts: Map.delete(state.retry_attempts, issue_id)}}
@@ -1581,7 +1608,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_active_retry(state, issue, attempt, metadata) do
     if retry_candidate_issue?(issue, terminal_state_set()) and
-         dispatch_slots_available?(issue, state) and
+         dispatch_slots_available?(issue, state) and retry_priority_available?(state, issue.id, metadata) and
          retry_worker_available?(state, metadata) do
       {:noreply, dispatch_issue(state, issue, attempt, metadata)}
     else
@@ -1591,7 +1618,7 @@ defmodule SymphonyElixir.Orchestrator do
        schedule_issue_retry(
          state,
          issue.id,
-         attempt + 1,
+         attempt,
          Map.merge(metadata, %{
            identifier: issue.identifier,
            error: retry_error(metadata, "no available orchestrator slots")
@@ -1604,6 +1631,25 @@ defmodule SymphonyElixir.Orchestrator do
     host = select_worker_host(state, metadata[:worker_host])
     boundary = String.starts_with?(metadata[:error] || "", @handoff_recovery)
     host != :no_worker_capacity and (not boundary or host == metadata[:worker_host])
+  end
+
+  defp pending_retry_reads(state) do
+    Enum.count(state.tracker_tasks, fn {_ref, task} -> match?({:retry, _, _, _}, task.purpose) end)
+  end
+
+  defp retry_priority_available?(state, issue_id, metadata) do
+    priority = {metadata[:retry_priority] || 0, issue_id}
+
+    waiting =
+      Map.to_list(state.retry_attempts) ++
+        Enum.flat_map(state.tracker_tasks, fn
+          {_ref, %{purpose: {:retry, id, _attempt, meta}}} -> [{id, meta}]
+          {_ref, %{purpose: {:dispatch, %{id: id}, attempt, meta}}} when is_integer(attempt) -> [{id, meta}]
+          _ -> []
+        end)
+
+    ahead = waiting |> Enum.uniq_by(&elem(&1, 0)) |> Enum.count(fn {id, meta} -> id != issue_id and {meta[:retry_priority] || 0, id} < priority end)
+    available_slots(state) > ahead
   end
 
   defp retry_allowed_states(meta) do

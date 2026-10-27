@@ -29,6 +29,9 @@ defmodule SymphonyElixir.AgentRunner do
       :ok ->
         :ok
 
+      {:error, :session_heartbeat_expired} ->
+        exit(:session_heartbeat_expired)
+
       {:error, reason} ->
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
 

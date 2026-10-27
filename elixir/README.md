@@ -685,3 +685,8 @@ Successful `jira_rest` GET issue reads retain the raw `body` and add a `dependen
 Jira supplies both `type.inward` and `type.outward` on every link. Use the actual `inwardIssue` / `outwardIssue` endpoint; never select a label with boolean fallback or treat both endpoints as prerequisites. Downstream QA does not block upstream implementation. Non-Blocks links do not create prerequisites. Live rereads remain mandatory before mutations/handoff; prompt snapshots are not current authority.
 
 The Update workflow action validates local Markdown references in the candidate commit before fast-forwarding. Operator rollout also runs each consumer real-parser phase checker, preserves host configuration and issue output, drains active turns, and verifies a fresh session. Reload does not update existing workspaces or erase old session context. Keep legacy runner checkouts for rollback, not as fallback instruction sources.
+
+Session heartbeat expiry reports session_heartbeat_expired after 60 seconds.
+Retries reserve capacity in original failure order. Three consecutive heartbeat expiries
+on one issue pause its configured RuntimeControl membership; manual Resume starts a fresh
+three-failure allowance. Give FE a separate control database to keep BE/landing running.

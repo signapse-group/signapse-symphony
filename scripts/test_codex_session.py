@@ -180,14 +180,25 @@ class SessionTests(unittest.TestCase):
         session.beating.clear()
         session.process.kill()
         session.process.wait(timeout=5)
-        wait_until(session.inactive, timeout=20)
+        wait_until(session.inactive, timeout=70)
         session.assert_quiet()
 
     def test_expired_lease_reaps_daemon_even_with_open_stdin(self):
         session = self.session()
         session.beating.clear()
-        session.process.wait(timeout=20)
+        self.assertEqual(session.process.wait(timeout=70), 75)
+        self.assertIn(b"reason=heartbeat_expired", session.process.stderr.read())
         session.assert_quiet()
+
+    def test_heartbeat_gap_longer_than_old_lease_keeps_session_alive(self):
+        session = self.session()
+        session.beating.clear()
+        time.sleep(20)
+        self.assertIsNone(session.process.poll())
+        session.send("SYMPHONY_HEARTBEAT")
+        session.send("still-alive")
+        self.assertEqual(session.readline(), "ECHO:still-alive")
+        self.assertEqual(session.stop(), 0)
 
     def test_no_agent_starts_before_containment_is_acknowledged(self):
         session = self.session(start=False)

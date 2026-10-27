@@ -37,6 +37,22 @@ defmodule SymphonyElixir.RuntimeControlTest do
     assert {:ok, %{mode: :paused, reason: "Quota exhausted", source: "quota"}} = RuntimeControl.status(restarted)
   end
 
+  test "isolated FE control can pause without stopping BE or landing", %{path: path} do
+    backend = start_control(path, "be", members: ["be", "landing"])
+    landing = start_control(path, "landing", members: ["be", "landing"])
+    frontend = start_control(path <> ".fe", "fe", members: ["fe"])
+    resume(backend)
+    resume(frontend)
+    assert {:ok, %{mode: :paused}} = RuntimeControl.pause("Infrastructure retry limit", "infrastructure", frontend)
+    assert {:ok, %{mode: :running}} = RuntimeControl.status(backend)
+    assert {:ok, %{mode: :running}} = RuntimeControl.status(landing)
+    assert {:ok, token} = RuntimeControl.acquire_turn(backend)
+    assert {:ok, _} = RuntimeControl.release_turn(token, backend)
+    stop_control(frontend)
+    restarted = start_control(path <> ".fe", "fe", members: ["fe"])
+    assert {:ok, %{mode: :paused, source: "infrastructure"}} = RuntimeControl.status(restarted)
+  end
+
   test "control-only restart reconstructs live turn ownership", %{path: path} do
     first = start_control(path, "be")
     resume(first)

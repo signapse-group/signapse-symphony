@@ -17,9 +17,9 @@ import urllib.request
 ROOT = Path('/opt/apps/symphony')
 UNITS = Path.home() / '.config/systemd/user'
 WORKERS = (
-    ('be', 'symphony.service', 'signapse', 4000, 'logs', {'be', 'fe', 'landing'}),
-    ('fe', 'symphony-fe.service', 'signapse-ui', 4001, 'logs-fe', {'be', 'fe', 'landing'}),
-    ('landing', 'symphony-landing.service', 'signapse-landing', 4002, 'logs-landing', {'be', 'fe', 'landing'}),
+    ('be', 'symphony.service', 'signapse', 4000, 'logs', {'be', 'landing'}),
+    ('fe', 'symphony-fe.service', 'signapse-ui', 4001, 'logs-fe', {'fe'}),
+    ('landing', 'symphony-landing.service', 'signapse-landing', 4002, 'logs-landing', {'be', 'landing'}),
     ('qa', 'symphony-qa.service', 'signapse-qa', 4003, 'logs-qa', {'qa'}),
 )
 SERVICES = [worker[1] for worker in WORKERS]
