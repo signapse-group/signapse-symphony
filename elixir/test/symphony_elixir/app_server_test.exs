@@ -288,100 +288,176 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
-  test "turn deadlines bound active streams and tools, release admission, and hold retries" do
-    for scenario <- [:notifications, :partial, :tool, :tool_error, :queued_completion, :silence, :completed] do
-      test_root = Path.join(System.tmp_dir!(), "symphony-turn-deadline-#{scenario}-#{System.unique_integer([:positive])}")
+  test "turn timeout resets on updates and silence releases admission without pausing" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-turn-timeout-#{System.unique_integer([:positive])}"
+      )
+
+    control_name = Module.concat(__MODULE__, "TimeoutControl#{System.unique_integer([:positive])}")
+
+    try do
       workspace_root = Path.join(test_root, "workspaces")
-      workspace = Path.join(workspace_root, "MT-DEADLINE")
-      binary = Path.join(test_root, "fake-codex")
+      workspace = Path.join(workspace_root, "MT-TIMEOUT")
+      codex_binary = Path.join(test_root, "fake-codex")
       File.mkdir_p!(workspace)
 
-      control_name = Module.concat(__MODULE__, "DeadlineControl#{System.unique_integer([:positive])}")
-      start_supervised!({RuntimeControl, name: control_name, path: Path.join(test_root, "control.sqlite3"), runtime_id: "deadline-test"}, id: control_name)
+      start_supervised!({RuntimeControl, name: control_name, path: Path.join(test_root, "control.sqlite3"), runtime_id: "timeout-test"}, id: control_name)
       assert {:ok, %{version: version}} = RuntimeControl.begin_resume(control_name)
-      quota = {:ok, %{available?: true, summary: "test quota"}}
-      assert {:ok, %{mode: :running}} = RuntimeControl.complete_resume(version, quota, control_name)
 
-      tool_request = Jason.encode!(%{"id" => 101, "method" => "item/tool/call", "params" => %{"tool" => "slow", "arguments" => %{}}})
+      assert {:ok, %{mode: :running}} =
+               RuntimeControl.complete_resume(version, {:ok, %{available?: true, summary: "test quota"}}, control_name)
 
-      stream =
-        case scenario do
-          :notifications -> ~s|for i in $(seq 1 40); do printf '%s\n' '{"method":"item/updated"}'; sleep 0.05; done|
-          :partial -> "for i in $(seq 1 40); do head -c 1048576 /dev/zero | tr '\\000' x; sleep 0.05; done"
-          scenario when scenario in [:tool, :tool_error] -> "printf '%s\\n' '#{tool_request}'; sleep 2"
-          :queued_completion -> ~s(printf '%s\n' '{"method":"item/updated"}' '{"method":"turn/completed"}')
-          :silence -> "sleep 2"
-          :completed -> ~s(printf '%s\n' '{"method":"item/updated"}'; sleep 0.03; printf '%s\n' '{"method":"turn/completed"}')
-        end
-
-      File.write!(binary, """
+      File.write!(codex_binary, """
       #!/bin/sh
-      while IFS= read -r line; do
-        case "$line" in
-          *'"id":1'*) printf '%s\n' '{"id":1,"result":{}}' ;;
-          *'"id":2'*) printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-deadline"}}}' ;;
-          *'"id":3'*)
-            printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-deadline"}}}'
-            #{stream}
-            sleep 2
+      count=0
+      while IFS= read -r _line; do
+        count=$((count + 1))
+        case "$count" in
+          1) printf '%s\n' '{"id":1,"result":{}}' ;;
+          2) ;;
+          3) printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-timeout"}}}' ;;
+          4)
+            printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-timeout"}}}'
+            sleep 0.15
+            printf '%s\n' '{"method":"item/updated","params":{"item":{"id":"one"}}}'
+            sleep 0.15
+            printf '%s\n' '{"method":"item/updated","params":{"item":{"id":"two"}}}'
+            sleep 0.15
+            printf '%s\n' '{"method":"turn/completed"}'
+            exit 0
             ;;
+          *) exit 0 ;;
         esac
       done
       """)
 
-      File.chmod!(binary, 0o755)
-      options = [workspace_root: workspace_root, codex_command: "#{binary} app-server", codex_turn_timeout_ms: 200]
-      write_workflow_file!(Workflow.workflow_file_path(), options)
-      issue = %Issue{id: "deadline", identifier: "MT-DEADLINE", title: "Deadline", state: "In Progress", labels: []}
-      owner = self()
+      File.chmod!(codex_binary, 0o755)
 
-      executor = fn _, _ ->
-        send(owner, {:tool_pid, self()})
-        if scenario == :tool_error, do: raise("executor failed")
-        Process.sleep(2_000)
-        send(owner, :late_tool_result)
-        %{"success" => true, "contentItems" => []}
-      end
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server",
+        codex_turn_timeout_ms: 250
+      )
 
-      callback = fn event ->
-        if scenario == :queued_completion and event.event == :notification, do: Process.sleep(300)
-      end
+      issue = %Issue{
+        id: "issue-turn-timeout",
+        identifier: "MT-TIMEOUT",
+        title: "Stream timeout",
+        description: "Keep active streams alive",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-TIMEOUT",
+        labels: ["backend"]
+      }
+
+      started_at = System.monotonic_time(:millisecond)
+      assert {:ok, _result} = AppServer.run(workspace, "stream updates", issue, runtime_control: control_name)
+      assert System.monotonic_time(:millisecond) - started_at > 250
+      assert {:ok, %{mode: :running, active_turns: 0}} = RuntimeControl.status(control_name)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r _line; do
+        count=$((count + 1))
+        case "$count" in
+          1) printf '%s\n' '{"id":1,"result":{}}' ;;
+          2) ;;
+          3) printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-silent"}}}' ;;
+          4)
+            printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-silent"}}}'
+            sleep 0.4
+            printf '%s\n' '{"method":"turn/completed"}'
+            exit 0
+            ;;
+          *) exit 0 ;;
+        esac
+      done
+      """)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server",
+        codex_turn_timeout_ms: 100
+      )
+
+      assert {:error, :turn_timeout} = AppServer.run(workspace, "silent turn", issue, runtime_control: control_name)
+      assert {:ok, %{mode: :running, active_turns: 0}} = RuntimeControl.status(control_name)
+    after
+      stop_supervised(control_name)
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "slow tools can complete beyond the idle timeout and raised tools release admission" do
+    for scenario <- [:slow, :raise] do
+      test_root = Path.join(System.tmp_dir!(), "symphony-idle-tool-#{scenario}-#{System.unique_integer([:positive])}")
+      control_name = Module.concat(__MODULE__, "IdleToolControl#{System.unique_integer([:positive])}")
 
       try do
-        started_at = System.monotonic_time(:millisecond)
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "MT-IDLE-TOOL")
+        binary = Path.join(test_root, "fake-codex")
+        File.mkdir_p!(workspace)
 
-        result =
-          if scenario == :tool_error do
-            assert_raise RuntimeError, "executor failed", fn ->
-              AppServer.run(workspace, "deadline", issue, runtime_control: control_name, tool_executor: executor, on_message: callback)
-            end
+        start_supervised!({RuntimeControl, name: control_name, path: Path.join(test_root, "control.sqlite3"), runtime_id: "idle-tool-test"}, id: control_name)
+        assert {:ok, %{version: version}} = RuntimeControl.begin_resume(control_name)
 
-            {:ok, :exception_cleaned_up}
-          else
-            AppServer.run(workspace, "deadline", issue, runtime_control: control_name, tool_executor: executor, on_message: callback)
+        assert {:ok, %{mode: :running}} =
+                 RuntimeControl.complete_resume(version, {:ok, %{available?: true, summary: "test quota"}}, control_name)
+
+        File.write!(binary, """
+        #!/bin/sh
+        count=0
+        while IFS= read -r _line; do
+          count=$((count + 1))
+          case "$count" in
+            1) printf '%s\\n' '{"id":1,"result":{}}' ;;
+            2) ;;
+            3) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-idle-tool"}}}' ;;
+            4)
+              printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-idle-tool"}}}'
+              printf '%s\\n' '{"id":101,"method":"item/tool/call","params":{"tool":"slow","arguments":{}}}'
+              ;;
+            5)
+              printf '%s\\n' '{"method":"turn/completed"}'
+              exit 0
+              ;;
+          esac
+        done
+        """)
+
+        File.chmod!(binary, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          codex_command: "#{binary} app-server",
+          codex_turn_timeout_ms: 100
+        )
+
+        issue = %Issue{id: "idle-tool", identifier: "MT-IDLE-TOOL", title: "Idle tool", state: "In Progress", labels: []}
+
+        executor = fn "slow", %{} ->
+          if scenario == :raise, do: raise("executor failed")
+          Process.sleep(200)
+          %{"success" => true, "contentItems" => []}
+        end
+
+        if scenario == :raise do
+          assert_raise RuntimeError, "executor failed", fn ->
+            AppServer.run(workspace, "idle tool", issue, runtime_control: control_name, tool_executor: executor)
           end
-
-        if scenario in [:notifications, :partial, :tool] do
-          assert System.monotonic_time(:millisecond) - started_at < 1_000
-        end
-
-        if scenario in [:completed, :tool_error] do
-          assert {:ok, _} = result
-          assert {:ok, %{mode: :running, active_turns: 0}} = RuntimeControl.status(control_name)
         else
-          assert {:error, :turn_timeout} = result
-          assert {:ok, %{mode: :paused, active_turns: 0}} = RuntimeControl.status(control_name)
-          assert {:error, _} = RuntimeControl.acquire_turn(control_name)
+          started_at = System.monotonic_time(:millisecond)
+          assert {:ok, _result} = AppServer.run(workspace, "idle tool", issue, runtime_control: control_name, tool_executor: executor)
+          assert System.monotonic_time(:millisecond) - started_at > 100
         end
 
-        if scenario in [:tool, :tool_error] do
-          assert_received {:tool_pid, pid}
-          refute Process.alive?(pid)
-          refute_received :late_tool_result
-        end
+        assert {:ok, %{mode: :running, active_turns: 0}} = RuntimeControl.status(control_name)
       after
         stop_supervised(control_name)
-        File.rm_rf!(test_root)
+        File.rm_rf(test_root)
       end
     end
   end
