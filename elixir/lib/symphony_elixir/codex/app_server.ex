@@ -126,6 +126,13 @@ defmodule SymphonyElixir.Codex.AppServer do
       try do
         result = run_admitted_turn(session, prompt, issue, on_message, tool_executor)
 
+        if result == {:error, :turn_timeout} do
+          case RuntimeControl.pause("Turn deadline exceeded; verify session stop and recovery ledger before Resume", "deadline", runtime_control) do
+            {:ok, _status} -> :ok
+            {:error, reason} -> exit({:session_stop_unconfirmed, {:deadline_pause_failed, reason}})
+          end
+        end
+
         if quota_limit_error?(result) do
           RuntimeControl.pause("Codex usage limit exceeded", "quota", runtime_control)
         end
@@ -572,30 +579,70 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp await_turn_completion(port, on_message, tool_executor, auto_approve_requests) do
+    deadline = System.monotonic_time(:millisecond) + Config.settings!().codex.turn_timeout_ms
+
+    bounded_executor = fn tool, arguments -> execute_tool_before_deadline(tool_executor, tool, arguments, deadline) end
+
     receive_loop(
       port,
       on_message,
-      Config.settings!().codex.turn_timeout_ms,
+      deadline,
       "",
-      tool_executor,
+      bounded_executor,
       auto_approve_requests
     )
+  catch
+    :turn_timeout -> {:error, :turn_timeout}
+  end
+
+  defp execute_tool_before_deadline(executor, tool, arguments, deadline) do
+    remaining_ms = deadline - System.monotonic_time(:millisecond)
+    if remaining_ms <= 0, do: throw(:turn_timeout)
+
+    task =
+      Task.async(fn ->
+        try do
+          {:returned, executor.(tool, arguments)}
+        catch
+          kind, reason -> {:raised, kind, reason, __STACKTRACE__}
+        end
+      end)
+
+    try do
+      case Task.yield(task, remaining_ms) do
+        {:ok, {:returned, result}} -> result
+        {:ok, {:raised, kind, reason, stack}} -> :erlang.raise(kind, reason, stack)
+        nil -> throw(:turn_timeout)
+      end
+    after
+      Task.shutdown(task, :brutal_kill)
+    end
   end
 
   defp port_exit_reason(75), do: :session_heartbeat_expired
   defp port_exit_reason(status), do: {:port_exit, status}
 
-  defp receive_loop(port, on_message, timeout_ms, pending_line, tool_executor, auto_approve_requests) do
+  defp receive_loop(port, on_message, deadline, pending_line, tool_executor, auto_approve_requests) do
+    remaining_ms = deadline - System.monotonic_time(:millisecond)
+
+    if remaining_ms <= 0 do
+      {:error, :turn_timeout}
+    else
+      receive_turn_message(port, on_message, deadline, pending_line, tool_executor, auto_approve_requests, remaining_ms)
+    end
+  end
+
+  defp receive_turn_message(port, on_message, deadline, pending_line, tool_executor, auto_approve_requests, remaining_ms) do
     receive do
       {^port, {:data, {:eol, chunk}}} ->
         complete_line = pending_line <> to_string(chunk)
-        handle_incoming(port, on_message, complete_line, timeout_ms, tool_executor, auto_approve_requests)
+        handle_incoming(port, on_message, complete_line, deadline, tool_executor, auto_approve_requests)
 
       {^port, {:data, {:noeol, chunk}}} ->
         receive_loop(
           port,
           on_message,
-          timeout_ms,
+          deadline,
           pending_line <> to_string(chunk),
           tool_executor,
           auto_approve_requests
@@ -604,12 +651,12 @@ defmodule SymphonyElixir.Codex.AppServer do
       {^port, {:exit_status, status}} ->
         {:error, port_exit_reason(status)}
     after
-      timeout_ms ->
+      remaining_ms ->
         {:error, :turn_timeout}
     end
   end
 
-  defp handle_incoming(port, on_message, data, timeout_ms, tool_executor, auto_approve_requests) do
+  defp handle_incoming(port, on_message, data, deadline, tool_executor, auto_approve_requests) do
     payload_string = to_string(data)
 
     case Jason.decode(payload_string) do
@@ -648,7 +695,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           payload,
           payload_string,
           method,
-          timeout_ms,
+          deadline,
           tool_executor,
           auto_approve_requests
         )
@@ -664,7 +711,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           metadata_from_message(port, payload)
         )
 
-        receive_loop(port, on_message, timeout_ms, "", tool_executor, auto_approve_requests)
+        receive_loop(port, on_message, deadline, "", tool_executor, auto_approve_requests)
 
       {:error, _reason} ->
         log_non_json_stream_line(payload_string, "turn stream")
@@ -681,7 +728,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           )
         end
 
-        receive_loop(port, on_message, timeout_ms, "", tool_executor, auto_approve_requests)
+        receive_loop(port, on_message, deadline, "", tool_executor, auto_approve_requests)
     end
   end
 
@@ -739,7 +786,7 @@ defmodule SymphonyElixir.Codex.AppServer do
          payload,
          payload_string,
          method,
-         timeout_ms,
+         deadline,
          tool_executor,
          auto_approve_requests
        ) do
@@ -766,7 +813,7 @@ defmodule SymphonyElixir.Codex.AppServer do
         {:error, {:turn_input_required, payload}}
 
       :approved ->
-        receive_loop(port, on_message, timeout_ms, "", tool_executor, auto_approve_requests)
+        receive_loop(port, on_message, deadline, "", tool_executor, auto_approve_requests)
 
       :approval_required ->
         emit_message(
@@ -800,7 +847,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           )
 
           Logger.debug("Codex notification: #{inspect(method)}")
-          receive_loop(port, on_message, timeout_ms, "", tool_executor, auto_approve_requests)
+          receive_loop(port, on_message, deadline, "", tool_executor, auto_approve_requests)
         end
     end
   end
