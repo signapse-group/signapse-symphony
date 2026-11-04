@@ -119,6 +119,32 @@ defmodule SymphonyElixir.Jira.AdapterTest do
     assert issue.url == "https://team.example.test/jira/browse/SYM-1"
   end
 
+  test "client resolves browser links from saved identifiers without reading Jira" do
+    settings = tracker_settings(%{"site_url" => "https://team.atlassian.net/"})
+
+    assert JiraClient.issue_url("SYM-1 /?", settings) ==
+             "https://team.atlassian.net/browse/SYM-1%20%2F%3F"
+
+    for identifier <- [nil, "", " ", 123] do
+      assert JiraClient.issue_url(identifier, settings) == nil
+    end
+
+    assert JiraClient.issue_url("SYM-1", tracker_settings(%{"site_url" => nil})) == nil
+  end
+
+  test "tracker resolves saved Jira links and retains the saved URL when resolution is unavailable" do
+    System.put_env("JIRA_SITE_URL", "https://team.atlassian.net/")
+    write_jira_workflow!(Workflow.workflow_file_path(), "test-token")
+    stored_url = "https://api.atlassian.com/ex/jira/cloud-id/browse/SYM-1"
+
+    assert Tracker.issue_url("SYM-1", stored_url) == "https://team.atlassian.net/browse/SYM-1"
+    assert Tracker.issue_url(nil, stored_url) == stored_url
+    assert Tracker.issue_url(" ", nil) == nil
+
+    System.put_env("JIRA_SITE_URL", "http://invalid.atlassian.net")
+    assert Tracker.issue_url("SYM-1", stored_url) == stored_url
+  end
+
   test "client rejects an explicitly invalid Jira site URL" do
     for site_url <- [
           nil,

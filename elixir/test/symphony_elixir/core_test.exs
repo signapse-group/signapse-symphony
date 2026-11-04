@@ -1314,8 +1314,30 @@ defmodule SymphonyElixir.CoreTest do
     assert :sys.get_state(orchestrator).running[issue_id].workspace_path == persisted_workspace
   end
 
-  test "orchestrator restores durable retries after runtime database reconnects" do
+  test "orchestrator restores durable Jira retry links while paused after the database reconnects" do
     alias SymphonyElixir.RuntimeControl
+
+    previous_client = Application.get_env(:symphony_elixir, :jira_client_module)
+    Application.put_env(:symphony_elixir, :jira_client_module, SymphonyElixir.Tracker.Memory)
+    on_exit(fn -> restore_app_env(:jira_client_module, previous_client) end)
+
+    File.write!(Workflow.workflow_file_path(), """
+    ---
+    tracker:
+      kind: jira
+      provider:
+        base_url: https://api.atlassian.com/ex/jira/cloud-id
+        site_url: https://team.atlassian.net
+        email: bot@example.test
+        api_token: test-token
+        project_key: SIGN
+      active_states: [Progress]
+      terminal_states: [Done]
+    ---
+    Retry restore fixture.
+    """)
+
+    assert :ok = WorkflowStore.force_reload()
 
     test_root = Path.join(System.tmp_dir!(), "symphony-retry-restore-#{System.unique_integer([:positive])}")
     File.mkdir_p!(test_root)
@@ -1335,8 +1357,8 @@ defmodule SymphonyElixir.CoreTest do
                runtime_id,
                %{
                  issue_id: "in-progress-retry",
-                 identifier: "MT-RESTORE",
-                 issue_url: "https://example.org/MT-RESTORE",
+                 identifier: "SIGN-498",
+                 issue_url: "https://api.atlassian.com/ex/jira/cloud-id/browse/SIGN-498",
                  attempt: 3,
                  error: "worker exited during restart",
                  workspace_path: Path.join(test_root, "workspaces/MT-RESTORE")
@@ -1388,11 +1410,18 @@ defmodule SymphonyElixir.CoreTest do
 
     assert MapSet.member?(restored.claimed, "in-progress-retry")
 
-    assert %{attempt: 3, identifier: "MT-RESTORE", issue_url: "https://example.org/MT-RESTORE", workspace_path: workspace_path} =
+    assert %{attempt: 3, identifier: "SIGN-498", issue_url: "https://team.atlassian.net/browse/SIGN-498", workspace_path: workspace_path} =
              restored.retry_attempts["in-progress-retry"]
 
     assert workspace_path == Path.join(test_root, "workspaces/MT-RESTORE")
     refute Map.has_key?(restored.running, "in-progress-retry")
+    assert {:ok, %{mode: :paused}} = RuntimeControl.status(runtime_control)
+
+    assert %{running: [], retrying: [%{issue_url: "https://team.atlassian.net/browse/SIGN-498"}]} =
+             GenServer.call(orchestrator, :snapshot)
+
+    assert {:ok, [%{"issue_url" => "https://team.atlassian.net/browse/SIGN-498"}]} =
+             RuntimeControl.pending_retries(runtime_id, runtime_control)
   end
 
   defmodule PauseDuringRefreshTracker do

@@ -440,6 +440,8 @@ Jira browser-link extension:
   Explicitly blank, invalid or unresolved values MUST fail validation. Deployments using the
   Atlassian REST gateway MUST set the tenant browser URL separately; changing `site_url` MUST NOT
   change API request targets.
+- Restoring saved Jira retries MUST refresh their browser URLs from the configured site without a
+  tracker request or worker dispatch, including while paused.
 
 Jira routed-Subtask extension:
 

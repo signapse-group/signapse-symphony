@@ -27,6 +27,18 @@ defmodule SymphonyElixir.Jira.Client do
     with {:ok, _settings} <- settings(tracker_settings), do: :ok
   end
 
+  @spec issue_url(term(), map()) :: String.t() | nil
+  def issue_url(identifier, tracker_settings) when is_binary(identifier) do
+    with true <- present_string?(identifier),
+         {:ok, jira_settings} <- settings(tracker_settings) do
+      browser_issue_url(identifier, jira_settings.site_url)
+    else
+      _ -> nil
+    end
+  end
+
+  def issue_url(_identifier, _tracker_settings), do: nil
+
   @spec secret_environment_names(map()) :: [String.t()]
   def secret_environment_names(tracker_settings) do
     provider = provider_settings(tracker_settings)
@@ -258,7 +270,7 @@ defmodule SymphonyElixir.Jira.Client do
         priority: nil,
         state: state,
         branch_name: nil,
-        url: "#{settings.site_url}/browse/#{URI.encode(key, &URI.char_unreserved?/1)}",
+        url: browser_issue_url(key, settings.site_url),
         assignee_id: get_in(fields, ["assignee", "accountId"]),
         labels: labels,
         blocked_by: blockers,
@@ -271,6 +283,10 @@ defmodule SymphonyElixir.Jira.Client do
   end
 
   defp normalize_issue(_issue, _settings), do: nil
+
+  defp browser_issue_url(identifier, site_url) do
+    "#{site_url}/browse/#{URI.encode(identifier, &URI.char_unreserved?/1)}"
+  end
 
   defp log_selection_error(nil, _id, _key), do: :ok
 

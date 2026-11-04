@@ -301,6 +301,8 @@ codex:
   invalid or unresolved values fail validation. When `base_url` uses the
   `https://api.atlassian.com/ex/jira/<cloud-id>` REST gateway, set `site_url` or `JIRA_SITE_URL` to
   the tenant URL, such as `https://your-site.atlassian.net`. API requests continue to use `base_url`.
+  Restored retry entries rebuild their browser links from the configured Jira site without a
+  tracker request or worker dispatch, including while paused.
 - Issues and reads: candidates stay scoped to the configured project and requested statuses.
   ID refreshes read the current state within the project, including ownership changes;
   `issue.id` is Jira's immutable ID and `issue.identifier` is the issue key. `native_ref.issue_type`

@@ -22,6 +22,9 @@ defmodule SymphonyElixir.Jira.Adapter do
   @spec fetch_issues_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_ids(ids), do: client_module().fetch_issues_by_ids(ids)
 
+  @spec issue_url(term(), map()) :: String.t() | nil
+  def issue_url(identifier, tracker_settings), do: Client.issue_url(identifier, tracker_settings)
+
   @spec agent_tool_specs() :: [map()]
   def agent_tool_specs, do: AgentTool.tool_specs()
 
