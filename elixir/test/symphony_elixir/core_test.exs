@@ -1099,6 +1099,48 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "retry refreshes the issue URL while waiting for capacity" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+
+    issue = %Issue{
+      id: "retry-site-url",
+      identifier: "SIGN-498",
+      title: "Refresh Jira link",
+      state: "In Progress",
+      url: "https://team.atlassian.net/browse/SIGN-498",
+      dispatchable: true
+    }
+
+    metadata = %{
+      identifier: issue.identifier,
+      issue_url: "https://api.atlassian.com/ex/jira/cloud-id/browse/SIGN-498",
+      error: "previous worker error",
+      worker_host: "worker.example",
+      workspace_path: "/tmp/retry-site-url/SIGN-498",
+      retry_priority: 123
+    }
+
+    state = %Orchestrator.State{max_concurrent_agents: 0, claimed: MapSet.new([issue.id])}
+    updated = Orchestrator.handle_retry_issue_lookup_for_test(issue, state, issue.id, 2, metadata)
+    retry = updated.retry_attempts[issue.id]
+    Process.cancel_timer(retry.timer_ref)
+
+    assert retry.issue_url == issue.url
+    assert retry.identifier == issue.identifier
+    assert retry.attempt == 2
+    assert retry.worker_host == metadata.worker_host
+    assert retry.workspace_path == metadata.workspace_path
+    assert retry.retry_priority == metadata.retry_priority
+    assert MapSet.member?(updated.claimed, issue.id)
+    assert updated.running == %{}
+
+    without_url = %{issue | url: nil}
+    updated = Orchestrator.handle_retry_issue_lookup_for_test(without_url, state, issue.id, 2, metadata)
+    retry = updated.retry_attempts[issue.id]
+    Process.cancel_timer(retry.timer_ref)
+    assert retry.issue_url == metadata.issue_url
+  end
+
   test "agent runner does not continue after a required label is removed" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_required_labels: ["symphony"])
 
@@ -1346,7 +1388,7 @@ defmodule SymphonyElixir.CoreTest do
 
     assert MapSet.member?(restored.claimed, "in-progress-retry")
 
-    assert %{attempt: 3, identifier: "MT-RESTORE", workspace_path: workspace_path} =
+    assert %{attempt: 3, identifier: "MT-RESTORE", issue_url: "https://example.org/MT-RESTORE", workspace_path: workspace_path} =
              restored.retry_attempts["in-progress-retry"]
 
     assert workspace_path == Path.join(test_root, "workspaces/MT-RESTORE")

@@ -431,6 +431,16 @@ Fields:
   - REQUIRED unless the selected adapter profile documents a default.
   - Values are provider-native state names compared case-insensitively by the scheduler.
 
+Jira browser-link extension:
+
+- Optional `provider.site_url` supplies the HTTPS browser base for `/browse/<issue-key>` links,
+  independently of the REST `provider.base_url`. It accepts a literal URL or `$VAR_NAME`; the URL
+  MUST have a nonempty host and no credentials, query or fragment.
+- If omitted, it uses `JIRA_SITE_URL` when set, otherwise `base_url` for direct-site configurations.
+  Explicitly blank, invalid or unresolved values MUST fail validation. Deployments using the
+  Atlassian REST gateway MUST set the tenant browser URL separately; changing `site_url` MUST NOT
+  change API request targets.
+
 Jira routed-Subtask extension:
 
 - `provider.issue_types` optionally selects a nonempty list of type names or IDs.

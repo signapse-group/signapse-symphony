@@ -1621,6 +1621,7 @@ defmodule SymphonyElixir.Orchestrator do
          attempt,
          Map.merge(metadata, %{
            identifier: issue.identifier,
+           issue_url: issue.url || metadata[:issue_url],
            error: retry_error(metadata, "no available orchestrator slots")
          })
        )}

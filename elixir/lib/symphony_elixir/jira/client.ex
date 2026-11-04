@@ -258,7 +258,7 @@ defmodule SymphonyElixir.Jira.Client do
         priority: nil,
         state: state,
         branch_name: nil,
-        url: "#{settings.base_url}/browse/#{URI.encode(key, &URI.char_unreserved?/1)}",
+        url: "#{settings.site_url}/browse/#{URI.encode(key, &URI.char_unreserved?/1)}",
         assignee_id: get_in(fields, ["assignee", "accountId"]),
         labels: labels,
         blocked_by: blockers,
@@ -530,6 +530,7 @@ defmodule SymphonyElixir.Jira.Client do
   defp settings(tracker_settings) when is_map(tracker_settings) do
     provider = provider_settings(tracker_settings)
     base_url = resolve_setting(provider["base_url"], System.get_env("JIRA_BASE_URL"))
+    site_url = resolve_setting(Map.get(provider, "site_url", System.get_env("JIRA_SITE_URL") || base_url), nil)
     email = resolve_setting(provider["email"], System.get_env("JIRA_EMAIL"))
     api_token = resolve_setting(provider["api_token"], System.get_env("JIRA_API_TOKEN"))
     project_key = resolve_setting(provider["project_key"], nil)
@@ -537,6 +538,9 @@ defmodule SymphonyElixir.Jira.Client do
     cond do
       not valid_base_url?(base_url) ->
         {:error, :invalid_jira_base_url}
+
+      not valid_site_url?(site_url) ->
+        {:error, :invalid_jira_site_url}
 
       not present_string?(email) ->
         {:error, :missing_jira_email}
@@ -557,6 +561,7 @@ defmodule SymphonyElixir.Jira.Client do
           {:ok,
            %{
              base_url: String.trim_trailing(base_url, "/"),
+             site_url: String.trim_trailing(site_url, "/"),
              email: email,
              api_token: api_token,
              project_key: project_key,
@@ -642,6 +647,18 @@ defmodule SymphonyElixir.Jira.Client do
   end
 
   defp valid_base_url?(_value), do: false
+
+  defp valid_site_url?(value) when is_binary(value) do
+    case URI.new(value) do
+      {:ok, %URI{scheme: "https", host: host, userinfo: nil, query: nil, fragment: nil}} when host not in [nil, ""] ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_site_url?(_value), do: false
 
   defp jira_headers(email, api_token) do
     [

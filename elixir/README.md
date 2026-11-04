@@ -295,6 +295,12 @@ codex:
 - Config: use `tracker.kind: jira` with provider `base_url`, `email`, `api_token`, and required
   `project_key`; the first three default to `JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_API_TOKEN`
   and accept `$VAR`. Set explicit Jira-native `active_states` and `terminal_states`.
+- Browser links: optional provider `site_url` accepts an HTTPS URL without credentials, query or
+  fragment, or `$VAR`, and supplies the base for `/browse/<issue-key>` links. If omitted, it uses
+  `JIRA_SITE_URL` when set, otherwise `base_url` for direct-site configurations. Explicitly blank,
+  invalid or unresolved values fail validation. When `base_url` uses the
+  `https://api.atlassian.com/ex/jira/<cloud-id>` REST gateway, set `site_url` or `JIRA_SITE_URL` to
+  the tenant URL, such as `https://your-site.atlassian.net`. API requests continue to use `base_url`.
 - Issues and reads: candidates stay scoped to the configured project and requested statuses.
   ID refreshes read the current state within the project, including ownership changes;
   `issue.id` is Jira's immutable ID and `issue.identifier` is the issue key. `native_ref.issue_type`
@@ -329,6 +335,7 @@ tracker:
   kind: jira
   provider:
     base_url: $JIRA_BASE_URL
+    site_url: https://your-site.atlassian.net
     email: $JIRA_EMAIL
     api_token: $JIRA_API_TOKEN
     project_key: SIGN
