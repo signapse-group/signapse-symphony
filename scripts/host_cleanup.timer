@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Signapse host cleanup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 Asia/Bangkok
+RandomizedDelaySec=10m
+Persistent=true
+Unit=signapse-cleanup.service
+
+[Install]
+WantedBy=timers.target

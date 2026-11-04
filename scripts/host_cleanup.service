@@ -1,0 +1,20 @@
+[Unit]
+Description=Signapse bounded host cleanup (images, logs, managed cache)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/signapse-cleanup/host_cleanup.py --apply
+TimeoutStartSec=5min
+Nice=19
+CPUQuota=20%
+MemoryMax=256M
+IOWeight=10
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+CacheDirectory=signapse-cleanup
+CacheDirectoryMode=0755
+Environment=XDG_CACHE_HOME=/var/cache/signapse-cleanup/gh
+UMask=0077
