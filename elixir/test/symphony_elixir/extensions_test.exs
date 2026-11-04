@@ -203,6 +203,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:error, {:missing_workflow_file, ^missing_path, :enoent}} =
              WorkflowStore.settings()
 
+    assert SymphonyElixir.Tracker.issue_url("MT-1", "https://tracker.test/MT-1") == "https://tracker.test/MT-1"
+
     assert {:error, {:missing_workflow_file, ^missing_path, :enoent}} =
              WorkflowStore.force_reload()
 
@@ -251,6 +253,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert SymphonyElixir.Tracker.adapter() == Memory
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issues_by_states([" in progress ", 42])
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issues_by_ids(["issue-1"])
+    assert SymphonyElixir.Tracker.issue_url("MT-1", "https://tracker.test/MT-1") == "https://tracker.test/MT-1"
+    assert SymphonyElixir.Tracker.issue_url(nil, nil) == nil
 
     binding = SymphonyElixir.Tracker.bind_agent_tools()
     assert binding.adapter == Memory

@@ -550,7 +550,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     schedule_issue_retry(state, issue_id, max(retry["attempt"] || 0, 1), %{
       identifier: retry["identifier"],
-      issue_url: retry["issue_url"],
+      issue_url: Tracker.issue_url(retry["identifier"], retry["issue_url"]),
       error: retry["error"],
       worker_host: retry["worker_host"],
       workspace_path: retry["workspace_path"],
@@ -1621,6 +1621,7 @@ defmodule SymphonyElixir.Orchestrator do
          attempt,
          Map.merge(metadata, %{
            identifier: issue.identifier,
+           issue_url: issue.url || metadata[:issue_url],
            error: retry_error(metadata, "no available orchestrator slots")
          })
        )}

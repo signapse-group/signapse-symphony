@@ -2,9 +2,9 @@ defmodule SymphonyElixir.Tracker do
   @moduledoc """
   Adapter boundary for issue tracker reads and provider-native agent tools.
 
-  The orchestrator only depends on the read callbacks. Agent-side mutations stay
-  behind optional provider-native tools so tracker-specific capabilities do not
-  leak into scheduler policy.
+  The orchestrator depends on reads and optional local URL projection. Agent-side
+  mutations stay behind optional provider-native tools so tracker-specific
+  capabilities do not leak into scheduler policy.
   """
 
   alias SymphonyElixir.Config
@@ -21,12 +21,14 @@ defmodule SymphonyElixir.Tracker do
 
   @callback fetch_issues_by_states([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   @callback fetch_issues_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+  @callback issue_url(term(), map()) :: String.t() | nil
   @callback agent_tool_specs() :: [map()]
   @callback execute_agent_tool(String.t(), term(), keyword()) :: map()
   @callback secret_environment_names(map()) :: [String.t()]
   @callback validate_config(map()) :: :ok | {:error, term()}
 
-  @optional_callbacks agent_tool_specs: 0,
+  @optional_callbacks issue_url: 2,
+                      agent_tool_specs: 0,
                       execute_agent_tool: 3,
                       validate_config: 1
 
@@ -38,6 +40,17 @@ defmodule SymphonyElixir.Tracker do
   @spec fetch_issues_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_ids(issue_ids) do
     adapter().fetch_issues_by_ids(issue_ids)
+  end
+
+  @spec issue_url(term(), String.t() | nil) :: String.t() | nil
+  def issue_url(identifier, stored_url) do
+    with {:ok, %{tracker: tracker_settings}} <- Config.settings(),
+         {:ok, adapter} <- adapter_for_kind(tracker_settings.kind),
+         true <- Code.ensure_loaded?(adapter) and function_exported?(adapter, :issue_url, 2) do
+      adapter.issue_url(identifier, tracker_settings) || stored_url
+    else
+      _ -> stored_url
+    end
   end
 
   @doc """

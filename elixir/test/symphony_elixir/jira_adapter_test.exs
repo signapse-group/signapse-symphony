@@ -19,8 +19,12 @@ defmodule SymphonyElixir.Jira.AdapterTest do
 
   setup do
     jira_client_module = Application.get_env(:symphony_elixir, :jira_client_module)
+    previous_site_url = System.get_env("JIRA_SITE_URL")
+    System.delete_env("JIRA_SITE_URL")
 
     on_exit(fn ->
+      restore_env("JIRA_SITE_URL", previous_site_url)
+
       if is_nil(jira_client_module) do
         Application.delete_env(:symphony_elixir, :jira_client_module)
       else
@@ -84,6 +88,118 @@ defmodule SymphonyElixir.Jira.AdapterTest do
              JiraClient.validate_settings(tracker_settings(%{"project_key" => 123}))
 
     assert JiraClient.secret_environment_names(tracker_settings(%{"api_token" => "$SYMPHONY_JIRA_TOKEN"})) == ["JIRA_API_TOKEN", "SYMPHONY_JIRA_TOKEN"]
+  end
+
+  test "client separates Jira browser links from the REST gateway" do
+    gateway_url = "https://api.atlassian.com/ex/jira/cloud-id"
+
+    settings =
+      tracker_settings(%{
+        "base_url" => gateway_url,
+        "site_url" => " https://team.atlassian.net/ "
+      })
+
+    issue = JiraClient.normalize_issue_for_test(raw_issue("10001", "SYM-1 /?"), settings)
+
+    assert issue.url == "https://team.atlassian.net/browse/SYM-1%20%2F%3F"
+
+    assert {:ok, %{status: 200, body: %{}}} =
+             JiraClient.request("GET", "/rest/api/3/myself", %{}, nil,
+               tracker_settings: settings,
+               request_fun: fn "GET", "/rest/api/3/myself", %{}, nil, jira_settings ->
+                 send(self(), {:jira_request_base_url, jira_settings.base_url})
+                 {:ok, %{status: 200, body: %{}}}
+               end
+             )
+
+    assert_receive {:jira_request_base_url, ^gateway_url}
+
+    context_settings = tracker_settings(%{"site_url" => "https://team.example.test/jira/"})
+    issue = JiraClient.normalize_issue_for_test(raw_issue("10001", "SYM-1"), context_settings)
+    assert issue.url == "https://team.example.test/jira/browse/SYM-1"
+  end
+
+  test "client resolves browser links from saved identifiers without reading Jira" do
+    settings = tracker_settings(%{"site_url" => "https://team.atlassian.net/"})
+
+    assert JiraClient.issue_url("SYM-1 /?", settings) ==
+             "https://team.atlassian.net/browse/SYM-1%20%2F%3F"
+
+    for identifier <- [nil, "", " ", 123] do
+      assert JiraClient.issue_url(identifier, settings) == nil
+    end
+
+    assert JiraClient.issue_url("SYM-1", tracker_settings(%{"site_url" => nil})) == nil
+  end
+
+  test "tracker resolves saved Jira links and retains the saved URL when resolution is unavailable" do
+    System.put_env("JIRA_SITE_URL", "https://team.atlassian.net/")
+    write_jira_workflow!(Workflow.workflow_file_path(), "test-token")
+    stored_url = "https://api.atlassian.com/ex/jira/cloud-id/browse/SYM-1"
+
+    assert Tracker.issue_url("SYM-1", stored_url) == "https://team.atlassian.net/browse/SYM-1"
+    assert Tracker.issue_url(nil, stored_url) == stored_url
+    assert Tracker.issue_url(" ", nil) == nil
+
+    System.put_env("JIRA_SITE_URL", "http://invalid.atlassian.net")
+    assert Tracker.issue_url("SYM-1", stored_url) == stored_url
+  end
+
+  test "client rejects an explicitly invalid Jira site URL" do
+    for site_url <- [
+          nil,
+          "",
+          " ",
+          123,
+          "http://team.atlassian.net",
+          "https://",
+          "https:///team.atlassian.net",
+          "https://team atlassian.net",
+          "https://team.atlassian.net:bad",
+          "javascript:alert('nope')",
+          "https://user:password@team.atlassian.net",
+          "https://team.atlassian.net?query=value",
+          "https://team.atlassian.net#fragment"
+        ] do
+      assert {:error, :invalid_jira_site_url} =
+               JiraClient.validate_settings(tracker_settings(%{"site_url" => site_url}))
+    end
+  end
+
+  test "client uses the Jira site URL environment default unless the provider overrides it" do
+    System.put_env("JIRA_SITE_URL", "https://default.atlassian.net/")
+    issue = JiraClient.normalize_issue_for_test(raw_issue("10001", "SYM-1"), tracker_settings())
+    assert issue.url == "https://default.atlassian.net/browse/SYM-1"
+
+    settings = tracker_settings(%{"site_url" => "https://override.atlassian.net"})
+    issue = JiraClient.normalize_issue_for_test(raw_issue("10001", "SYM-1"), settings)
+    assert issue.url == "https://override.atlassian.net/browse/SYM-1"
+
+    assert {:error, :invalid_jira_site_url} =
+             JiraClient.validate_settings(tracker_settings(%{"site_url" => nil}))
+
+    System.put_env("JIRA_SITE_URL", "http://invalid.atlassian.net")
+    assert {:error, :invalid_jira_site_url} = JiraClient.validate_settings(tracker_settings())
+    assert :ok = JiraClient.validate_settings(settings)
+
+    System.put_env("JIRA_SITE_URL", "")
+    assert {:error, :invalid_jira_site_url} = JiraClient.validate_settings(tracker_settings())
+  end
+
+  test "client resolves an explicit Jira site URL environment reference without falling back when unset" do
+    site_env = "SYMPHONY_JIRA_SITE_URL_#{System.unique_integer([:positive])}"
+    previous_site = System.get_env(site_env)
+    on_exit(fn -> restore_env(site_env, previous_site) end)
+    System.delete_env(site_env)
+    System.put_env("JIRA_SITE_URL", "https://default.atlassian.net")
+    settings = tracker_settings(%{"site_url" => "$#{site_env}"})
+
+    assert {:error, :invalid_jira_site_url} = JiraClient.validate_settings(settings)
+
+    System.put_env(site_env, "https://team.atlassian.net/")
+    issue = JiraClient.normalize_issue_for_test(raw_issue("10001", "SYM-1"), settings)
+
+    assert issue.url == "https://team.atlassian.net/browse/SYM-1"
   end
 
   test "client normalizes Jira issue fields and projects ADF description text" do
