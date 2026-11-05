@@ -1,4 +1,5 @@
 """A leased main process lets systemd reap every tool when the session owner disappears."""
+import errno
 import json
 import os
 from pathlib import Path
@@ -100,8 +101,10 @@ def unit_state(props):
             for value in [props.get(key, "unknown")]}
 
 
-def stop_failure(unit, reason, props=None, kill=None):
+def stop_failure(unit, reason, props=None, kill=None, error_number=None):
     diagnostic = {"unit": unit, "reason": reason}
+    if isinstance(error_number, int):
+        diagnostic["errno"] = error_number
     if kill is not None:
         diagnostic["kill"] = kill
     if props is not None:
@@ -134,6 +137,8 @@ def stop_failure(unit, reason, props=None, kill=None):
     if len(message) > 4096:
         diagnostic = {"unit": unit if re.fullmatch(UNIT_PATTERN, unit) else "unknown", "reason": reason,
                       "snapshot": "unknown", "snapshot_reason": "size_limit"}
+        if isinstance(error_number, int):
+            diagnostic["errno"] = error_number
         message = ("SYMPHONY_SESSION_STOP " + json.dumps(diagnostic, separators=(",", ":")) + "\n").encode()
     try:
         os.set_blocking(2, False)
@@ -168,13 +173,20 @@ def stop(unit, invocation):
     except (OSError, subprocess.SubprocessError):
         return stop_failure(unit, "kill_failed", props, {"outcome": "unavailable"})
     deadline = time.monotonic() + 5
+    last_errno = None
     while time.monotonic() < deadline:
         try:
             if empty_group(group):
                 return 0
-        except OSError:
-            return stop_failure(unit, "cgroup_query_failed", props, kill)
+            last_errno = None
+        except OSError as error:
+            if error.errno != errno.ENODEV:
+                return stop_failure(unit, "cgroup_query_failed", props, kill, error.errno)
+            # Removing a cgroup between open and read invalidates its kernfs descriptor.
+            last_errno = error.errno
         time.sleep(0.02)
+    if last_errno is not None:
+        return stop_failure(unit, "cgroup_query_failed", props, kill, last_errno)
     return stop_failure(unit, "cgroup_populated_timeout", props, kill)
 
 

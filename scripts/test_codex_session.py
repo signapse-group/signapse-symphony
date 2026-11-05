@@ -1,5 +1,6 @@
 """Real cgroup tests: reparented writers, independent sessions, lost leases and SSH."""
 import base64
+import errno
 import importlib.util
 import json
 import os
@@ -208,6 +209,52 @@ class StopDiagnosticsTests(unittest.TestCase):
                 mock.patch.object(self.module.os, "write") as write:
             self.assertEqual(self.module.stop(self.unit, self.invocation), 0)
         write.assert_not_called()
+
+    def test_removed_cgroup_read_race_requires_a_fresh_missing_confirmation(self):
+        clock = SimpleNamespace(monotonic=mock.Mock(side_effect=[0, 0, 0.02]), sleep=mock.Mock())
+        with mock.patch.object(self.module, "properties", return_value=self.props), \
+                mock.patch.object(self.module.Path, "read_text", side_effect=[
+                    OSError(errno.ENODEV, "private-path"), FileNotFoundError("private-path")]) as read, \
+                mock.patch.object(self.module, "time", clock), \
+                mock.patch.object(self.module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), \
+                mock.patch.object(self.module.os, "set_blocking", create=True), \
+                mock.patch.object(self.module.os, "write") as write:
+            self.assertEqual(self.module.stop(self.unit, self.invocation), 0)
+        self.assertEqual(read.call_count, 2)
+        self.assertEqual(clock.sleep.call_args_list, [mock.call(0.02)])
+        write.assert_not_called()
+
+    def test_unconfirmed_or_unreadable_cgroup_still_fails_closed_with_safe_errno(self):
+        for number in (errno.ENODEV, errno.EACCES, errno.EIO):
+            clock = SimpleNamespace(monotonic=mock.Mock(side_effect=[0, 0, 1, 5]), sleep=mock.Mock())
+            with self.subTest(errno=number), \
+                    mock.patch.object(self.module, "properties", return_value=self.props), \
+                    mock.patch.object(self.module.Path, "read_text", side_effect=OSError(number, "private-path")) as read, \
+                    mock.patch.object(self.module, "time", clock), \
+                    mock.patch.object(self.module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), \
+                    mock.patch.object(self.module.os, "set_blocking", create=True), \
+                    mock.patch.object(self.module.os, "write") as write:
+                self.assertEqual(self.module.stop(self.unit, self.invocation), 3)
+            message = write.call_args.args[1]
+            diagnostic = json.loads(message.decode().removeprefix("SYMPHONY_SESSION_STOP "))
+            self.assertEqual(diagnostic["reason"], "cgroup_query_failed")
+            self.assertEqual(diagnostic["errno"], number)
+            self.assertNotIn(b"private", message)
+            self.assertEqual(read.call_count, 2 if number == errno.ENODEV else 1)
+
+    def test_removed_descriptor_followed_by_live_population_is_not_success(self):
+        clock = SimpleNamespace(monotonic=mock.Mock(side_effect=[0, 0, 1, 5]), sleep=mock.Mock())
+        with mock.patch.object(self.module, "properties", return_value=self.props), \
+                mock.patch.object(self.module.Path, "read_text", side_effect=[
+                    OSError(errno.ENODEV, "private-path"), "populated 1\n"]), \
+                mock.patch.object(self.module, "time", clock), \
+                mock.patch.object(self.module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), \
+                mock.patch.object(self.module.os, "set_blocking", create=True), \
+                mock.patch.object(self.module.os, "write") as write:
+            self.assertEqual(self.module.stop(self.unit, self.invocation), 3)
+        diagnostic = json.loads(write.call_args.args[1].decode().removeprefix("SYMPHONY_SESSION_STOP "))
+        self.assertEqual(diagnostic["reason"], "cgroup_populated_timeout")
+        self.assertNotIn("errno", diagnostic)
 
 
 class Session:
