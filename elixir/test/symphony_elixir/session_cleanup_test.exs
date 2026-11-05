@@ -146,6 +146,8 @@ defmodule SymphonyElixir.SessionCleanupTest do
     assert log =~ "runtime_control_unavailable"
     refute log =~ "Codex session failed"
     requests = workspace |> Path.dirname() |> Path.dirname() |> Path.join("requests") |> File.read!()
+    assert requests =~ "shell:-lc"
+    assert requests =~ "shell:-c"
     assert requests =~ "thread/start"
     refute requests =~ "turn/start"
     send(control, :heartbeat)
@@ -217,19 +219,22 @@ defmodule SymphonyElixir.SessionCleanupTest do
     File.mkdir_p!(bin)
     File.mkdir_p!(workspace)
     previous_path = System.get_env("PATH")
-    previous_bash_env = System.get_env("BASH_ENV")
     fixture_path = bin <> ":" <> previous_path
-    shell_env = Path.join(root, "shell-env")
     requests = "'" <> String.replace(Path.join(root, "requests"), "'", "'\"'\"'") <> "'"
-    File.write!(shell_env, "export PATH='" <> String.replace(fixture_path, "'", "'\"'\"'") <> "'\n")
     System.put_env("PATH", fixture_path)
-    System.put_env("BASH_ENV", shell_env)
 
     on_exit(fn ->
       restore_env("PATH", previous_path)
-      restore_env("BASH_ENV", previous_bash_env)
       File.rm_rf!(root)
     end)
+
+    # The stdio fixture must not depend on the host's login profile or BASH_ENV.
+    File.write!(Path.join(bin, "bash"), """
+    #!/bin/sh
+    unset BASH_ENV
+    printf '%s\\n' "shell:$1" >> #{requests}
+    exec /bin/bash -c "$2"
+    """)
 
     initialize = if failure == :initialize, do: ~s({"error":{"message":"fixture initialization failed"}}), else: ~s({"result":{}})
     initialize = String.replace_prefix(initialize, "{", ~s({"id":1,))
@@ -250,7 +255,7 @@ defmodule SymphonyElixir.SessionCleanupTest do
     done
     """)
 
-    for executable <- ["systemctl", "systemd-run"], do: File.chmod!(Path.join(bin, executable), 0o755)
+    for executable <- ["bash", "systemctl", "systemd-run"], do: File.chmod!(Path.join(bin, executable), 0o755)
 
     write_workflow_file!(
       Workflow.workflow_file_path(),

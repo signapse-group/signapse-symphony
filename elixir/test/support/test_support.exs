@@ -26,11 +26,14 @@ defmodule SymphonyElixir.TestSupport do
           write_workflow_file!: 1,
           write_workflow_file!: 2,
           restore_env: 2,
+          stop_default_orchestrator: 0,
           stop_default_http_server: 0,
           drain_tracker_reads: 1
         ]
 
       setup do
+        stop_default_orchestrator()
+
         workflow_root =
           Path.join(
             System.tmp_dir!(),
@@ -87,6 +90,20 @@ defmodule SymphonyElixir.TestSupport do
 
   def restore_env(key, nil), do: System.delete_env(key)
   def restore_env(key, value), do: System.put_env(key, value)
+
+  def stop_default_orchestrator do
+    case Process.whereis(SymphonyElixir.AgentRuntimeSupervisor) do
+      nil ->
+        :ok
+
+      runtime ->
+        # Tests drive their own scheduler state; the application dispatcher must not consume fixtures.
+        case Supervisor.terminate_child(runtime, SymphonyElixir.Orchestrator) do
+          :ok -> :ok
+          {:error, :not_found} -> :ok
+        end
+    end
+  end
 
   def stop_default_http_server do
     case Enum.find(Supervisor.which_children(SymphonyElixir.Supervisor), fn
