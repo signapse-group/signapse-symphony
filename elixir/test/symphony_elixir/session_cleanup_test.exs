@@ -239,6 +239,7 @@ defmodule SymphonyElixir.SessionCleanupTest do
     previous_path = System.get_env("PATH")
     fixture_path = bin <> ":" <> previous_path
     requests = "'" <> String.replace(Path.join(root, "requests"), "'", "'\"'\"'") <> "'"
+    target_unit = "'" <> String.replace(Path.join(root, "target-unit"), "'", "'\"'\"'") <> "'"
     System.put_env("PATH", fixture_path)
 
     on_exit(fn ->
@@ -261,20 +262,26 @@ defmodule SymphonyElixir.SessionCleanupTest do
 
     File.write!(Path.join(bin, "systemctl"), """
     #!/bin/sh
-    case "$3" in
-      symphony-session-*.service)
-        printf '%s\\n' 'systemctl:session' >> #{requests}
-        #{stop}
-        ;;
-      *)
-        printf '%s\\n' 'systemctl:owner' >> #{requests}
-        printf '%s\\n' 'LoadState=not-found'
-        ;;
-    esac
+    target=""
+    if [ -f #{target_unit} ]; then
+      IFS= read -r target < #{target_unit}
+    fi
+    if [ -n "$target" ] && [ "$3" = "$target" ]; then
+      printf '%s\\n' 'systemctl:session' >> #{requests}
+      #{stop}
+    else
+      printf '%s\\n' 'systemctl:owner' >> #{requests}
+      printf '%s\\n' 'LoadState=not-found'
+    fi
     """)
 
     File.write!(Path.join(bin, "systemd-run"), """
     #!/bin/sh
+    for argument in "$@"; do
+      case "$argument" in
+        --unit=*) printf '%s\\n' "${argument#--unit=}" > #{target_unit} ;;
+      esac
+    done
     printf '%s\\n' 'systemd-run:started' >> #{requests}
     printf '%s\\n' 'SYMPHONY_CGROUP:11111111111111111111111111111111'
     while IFS= read -r line; do
