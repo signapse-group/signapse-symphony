@@ -489,7 +489,8 @@ Fields:
   - Failure aborts the current attempt.
 - `after_run` (multiline shell script string, OPTIONAL)
   - Runs after each agent attempt (success, failure, timeout, or cancellation) once the workspace
-    exists.
+    exists and any started session has a confirmed stop. An unconfirmed stop skips this hook
+    and retains ownership under Section 9.4.
   - Failure is logged but ignored.
 - `before_remove` (multiline shell script string, OPTIONAL)
   - Runs before workspace deletion if the directory exists.
@@ -1022,6 +1023,11 @@ Failure semantics:
 - `before_run` failure or timeout is fatal to the current run attempt.
 - `after_run` failure or timeout is logged and ignored.
 - `before_remove` failure or timeout is logged and ignored.
+
+Capture the primary session result or exception and stack before cleanup. If stopping the session
+cannot be confirmed, preserve both the primary failure and the cleanup failure, retain ownership
+and recovery, and skip `after_run`. Cleanup or metadata callbacks must not replace the primary
+failure. A confirmed stop preserves the original return value or exception and stack.
 
 ### 9.5 Safety Invariants
 
@@ -2063,6 +2069,9 @@ function dispatch_issue(issue, state, attempt):
 
 ### 16.5 Worker Attempt (Workspace + Prompt + Agent)
 
+Every session-stop path below follows Section 9.4: preserve the primary failure first, and do not
+run `after_run` or release ownership if the stop is unconfirmed.
+
 ```text
 function run_agent_attempt(issue, attempt, orchestrator_channel):
   workspace = workspace_manager.create_for_issue(issue.identifier)
@@ -2225,7 +2234,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - OPTIONAL workspace population/synchronization errors are surfaced
 - `after_create` hook runs only on new workspace creation
 - `before_run` hook runs before each attempt and failure/timeouts abort the current attempt
-- `after_run` hook runs after each attempt and failure/timeouts are logged and ignored
+- `after_run` hook runs after confirmed session cleanup; an unconfirmed stop skips it and retains
+  ownership and both failure causes. Hook failure/timeouts are logged and ignored
 - `before_remove` hook runs on cleanup and failures/timeouts are ignored
 - Workspace path sanitization, stable original-identifier-hash collision resistance, and root
   containment invariants are enforced before agent launch

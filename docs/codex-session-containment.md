@@ -50,6 +50,22 @@ Polling does not repeatedly retry an uncertain stop. The API exposes handoff_err
 and last_error while the dashboard shows operator intervention; the issue remains
 in running ownership rather than moving to the distinct blocked collection.
 
+Session cleanup preserves the preceding failure before attempting the stop. When
+both execution and cleanup fail, the typed `session_stop_unconfirmed` error retains
+both causes; a confirmed stop preserves the original return value or exception and
+stack. After-run hooks do not run while containment remains uncertain.
+
+A stop timeout also emits a bounded diagnostic record with unit/invocation identity,
+the kill outcome, cgroup population and a limited snapshot of matching process
+states. Missing or inaccessible process data is reported as unavailable. Diagnostics
+exclude command lines, environment values and raw command output; they do not prove
+the cause of a stalled process or permit releasing an unconfirmed session.
+The population check keeps its five-second window. An `ENODEV` read during concurrent
+cgroup removal is retried within that window; a fresh read must still confirm an
+empty or missing cgroup. Unresolved read failures retain their numeric errno in
+diagnostics. Snapshot collection has a 0.2-second wait budget. The caller allows at
+least 17 seconds for the unit query, kill, population check and diagnostics to complete.
+
 The initial ownership callback runs before any host launch. If that callback fails or times out,
 the worker exits with `session_not_started`; this positive prelaunch proof permits normal retry
 even if a late registration stored an empty placeholder. After-run hooks cannot replace this exit.

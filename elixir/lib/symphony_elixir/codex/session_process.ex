@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.Codex.SessionProcess do
   @moduledoc false
 
+  require Logger
   alias SymphonyElixir.{Config, SSH}
 
   @external_resource Path.expand("../../../priv/codex_session.py", __DIR__)
@@ -62,14 +63,36 @@ defmodule SymphonyElixir.Codex.SessionProcess do
         end
       end)
 
-    timeout = max(Config.settings!().codex.read_timeout_ms, 15_000)
+    # Query, kill and population checks each allow 5s; leave room for bounded diagnostics.
+    timeout = max(Config.settings!().codex.read_timeout_ms, 17_000)
     result = Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill)
 
     case result do
-      {:ok, {:ok, {_, 0}}} -> :ok
-      other -> {:error, {:session_stop_unconfirmed, other}}
+      {:ok, {:ok, {_, 0}}} ->
+        :ok
+
+      other ->
+        Logger.error("Codex session stop unconfirmed session_unit=#{identity.unit} diagnostic=#{stop_diagnostic(other, identity.unit)}")
+        {:error, {:session_stop_unconfirmed, other}}
     end
   end
+
+  defp stop_diagnostic({:ok, {:ok, {output, _status}}}, unit) when is_binary(output) do
+    output
+    |> String.split("\n")
+    |> Enum.find_value("unavailable", fn
+      <<"SYMPHONY_SESSION_STOP ", json::binary>> when byte_size(json) <= 4_096 ->
+        case Jason.decode(json) do
+          {:ok, %{"unit" => ^unit}} -> json
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp stop_diagnostic(_result, _unit), do: "unavailable"
 
   defp command(mode, identity, args) do
     ["python3", "-u", "-c", @decoder, @script, mode, identity.unit | args]

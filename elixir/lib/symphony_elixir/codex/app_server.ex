@@ -30,16 +30,91 @@ defmodule SymphonyElixir.Codex.AppServer do
   @spec run(Path.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def run(workspace, prompt, issue, opts \\ []) do
     with {:ok, session} <- start_session(workspace, opts) do
-      try do
-        run_turn(session, prompt, issue, opts)
-      after
-        case stop_session(session) do
-          :ok -> :ok
-          {:error, reason} -> exit({:session_stop_unconfirmed, reason})
-        end
-      end
+      with_session(session, fn -> run_turn(session, prompt, issue, opts) end, issue: issue)
     end
   end
+
+  @doc false
+  @spec with_session(map(), (-> term()), keyword()) :: term()
+  def with_session(session, run, opts \\ []) do
+    result = capture_session_result(run)
+    primary_error = session_failure(result)
+    if primary_error, do: log_primary_failure(primary_error, session, opts)
+
+    cleanup =
+      capture_session_result(fn ->
+        with :ok <- stop_session(session) do
+          Keyword.get(opts, :on_stopped, fn -> :ok end).()
+          :ok
+        end
+      end)
+
+    finish_session_cleanup(result, cleanup)
+  end
+
+  defp capture_session_result(run) do
+    {:return, run.()}
+  catch
+    kind, reason -> {:raise, kind, reason, __STACKTRACE__}
+  end
+
+  defp session_failure({:return, {:error, reason}}), do: %{kind: :error, reason: reason, stacktrace: []}
+  defp session_failure({:raise, kind, reason, stacktrace}), do: %{kind: kind, reason: reason, stacktrace: stacktrace}
+  defp session_failure(_result), do: nil
+
+  defp restore_session_result({:return, result}), do: result
+  defp restore_session_result({:raise, kind, reason, stacktrace}), do: :erlang.raise(kind, reason, stacktrace)
+
+  defp finish_session_cleanup(result, {:return, :ok}), do: restore_session_result(result)
+
+  defp finish_session_cleanup(result, cleanup) do
+    failure = %{primary_error: session_failure(result), stop_error: session_failure(cleanup)}
+    exit({:session_stop_unconfirmed, failure})
+  end
+
+  defp finish_failed_start(error, opts) do
+    cleanup =
+      capture_session_result(fn ->
+        Keyword.get(opts, :on_stopped, fn -> :ok end).()
+        :ok
+      end)
+
+    finish_session_cleanup({:return, error}, cleanup)
+  end
+
+  defp log_primary_failure(failure, session, opts) do
+    context =
+      case Keyword.get(opts, :issue) do
+        %{id: id, identifier: identifier} when is_binary(id) and is_binary(identifier) ->
+          "issue_id=#{log_identifier(id)} issue_identifier=#{log_identifier(identifier)}"
+
+        _ ->
+          "issue_id=n/a issue_identifier=n/a"
+      end
+
+    # Error payloads can contain prompts or request data; log the code, retain detail for recovery.
+    code = primary_failure_code(failure.reason)
+
+    Logger.error(
+      "Codex operation failed before session cleanup #{context} thread_id=#{log_identifier(session[:thread_id])} session_unit=#{log_identifier(get_in(session, [:containment, :unit]))} kind=#{failure.kind} reason=#{inspect(code)}"
+    )
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  defp primary_failure_code(%{__exception__: true, __struct__: module}), do: module
+  defp primary_failure_code(reason) when is_atom(reason), do: reason
+
+  defp primary_failure_code(reason) when is_tuple(reason) and tuple_size(reason) > 0 and is_atom(elem(reason, 0)),
+    do: elem(reason, 0)
+
+  defp primary_failure_code(_reason), do: :unclassified
+
+  defp log_identifier(value) when is_binary(value), do: inspect(value, printable_limit: 128)
+  defp log_identifier(nil), do: "n/a"
+  defp log_identifier(_value), do: "invalid"
 
   @spec start_session(Path.t(), keyword()) :: {:ok, session()} | {:error, term()}
   def start_session(workspace, opts \\ []) do
@@ -72,21 +147,16 @@ defmodule SymphonyElixir.Codex.AppServer do
       else
         {:error, reason} ->
           error = stop_failed_start(session_process, reason)
-          Keyword.get(opts, :on_stopped, fn -> :ok end).()
-          error
+          finish_failed_start(error, opts)
       end
     else
       {:error, _} = error ->
-        Keyword.get(opts, :on_stopped, fn -> :ok end).()
-        error
+        finish_failed_start(error, opts)
     end
   end
 
   defp stop_failed_start(session, reason) do
-    case stop_session(session) do
-      :ok -> {:error, reason}
-      {:error, stop_reason} -> exit({:session_stop_unconfirmed, stop_reason})
-    end
+    with_session(session, fn -> {:error, reason} end)
   end
 
   @spec read_rate_limits() :: {:ok, map()} | {:error, term()}

@@ -25,6 +25,12 @@ When logging Codex execution lifecycle events, include:
 - Prefer deterministic wording for recurring lifecycle events.
 - Include the action outcome (`completed`, `failed`, `retrying`) and the reason/error when available.
 - Avoid logging large payloads unless required for debugging.
+- Before cleanup, log a bounded primary reason code and session context. If cleanup
+  also fails, retain the detailed primary failure and stack in the typed cleanup
+  error; existing task/orchestrator error logs can inspect that failure. Successful
+  model output is omitted from cleanup errors.
+- Stop-timeout diagnostics are bounded and contain unit/cgroup identity and process
+  state, never process command lines, environment values or raw command stderr.
 
 ## Scope Guidance
 
