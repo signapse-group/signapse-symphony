@@ -35,6 +35,10 @@ issue claimed and exposes it as blocked in the runtime state, JSON API, and dash
 entries are in memory only; restarting the orchestrator clears that blocked map, so any still-active
 tracker issue can become a dispatch candidate again after restart.
 
+An unconfirmed containment stop instead retains durable recovery and ownership.
+Cleanup preserves the preceding failure and captures bounded PID/cgroup diagnostics;
+see [session containment and recovery](../docs/codex-session-containment.md).
+
 ## How to use it
 
 1. Make sure your codebase is set up to work well with agents: see

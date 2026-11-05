@@ -131,6 +131,8 @@ defmodule SymphonyElixir.ReviewTaskTest do
     @host host
     @tag skip: transport == "ssh" and is_nil(host)
     test "#{transport} reconcile interrupts #{@before} → #{@next_phase} and dispatches a fresh thread" do
+      refute Process.whereis(Orchestrator)
+      assert is_pid(Process.whereis(SymphonyElixir.TaskSupervisor))
       {test_root, trace_file, codex_binary} = fake_codex_fixture!()
       File.write!(Path.join(test_root, "hold-turn"), "")
 

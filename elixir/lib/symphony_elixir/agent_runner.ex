@@ -68,6 +68,9 @@ defmodule SymphonyElixir.AgentRunner do
             :exit, {:session_not_started, _} = reason ->
               exit(reason)
 
+            :exit, {:session_stop_unconfirmed, _} = reason ->
+              exit(reason)
+
             kind, reason ->
               finish_after_run_hook(workspace, issue, worker_host, opts)
               :erlang.raise(kind, reason, __STACKTRACE__)
@@ -144,14 +147,14 @@ defmodule SymphonyElixir.AgentRunner do
     ]
 
     with {:ok, session} <- AppServer.start_session(workspace, session_opts) do
-      try do
-        do_run_codex_turns(session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, max_turns)
-      after
-        case AppServer.stop_session(session) do
-          :ok -> on_stopped.()
-          {:error, reason} -> exit({:session_stop_unconfirmed, reason})
-        end
-      end
+      AppServer.with_session(
+        session,
+        fn ->
+          do_run_codex_turns(session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, max_turns)
+        end,
+        issue: issue,
+        on_stopped: on_stopped
+      )
     end
   end
 
