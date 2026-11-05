@@ -43,6 +43,7 @@ defmodule SymphonyElixir.Orchestrator do
       retry_attempts: %{},
       retry_restore_pending: true,
       tracker_tasks: %{},
+      candidate_snapshot: nil,
       codex_totals: nil,
       codex_rate_limits: nil
     ]
@@ -383,10 +384,12 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp finish_tracker_read(state, {:poll, _, _}, error) do
     Logger.warning("Tracker poll failed: #{inspect(error)}")
-    finish_poll(state)
+    finish_poll(%{state | candidate_snapshot: nil})
   end
 
   defp finish_tracker_read(state, {:dispatch, issue, attempt, metadata}, result) do
+    state = update_candidate(state, issue.id, result)
+
     case result do
       {:ok, %Issue{} = refreshed} ->
         if admission_ready?(state, refreshed, attempt, metadata) do
@@ -418,12 +421,34 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp apply_candidate_read(state, {:ok, issues}) do
+    state = %{
+      state
+      | candidate_snapshot: %{tracker: Config.settings!().tracker, issues: issues, updated_at: DateTime.utc_now()}
+    }
+
     if dispatch_ready?(state), do: choose_issues(issues, state), else: state
   end
 
   defp apply_candidate_read(state, {:error, reason}) do
     Logger.warning("Tracker candidate read failed: #{inspect(reason)}")
-    state
+    %{state | candidate_snapshot: nil}
+  end
+
+  defp update_candidate(%{candidate_snapshot: nil} = state, _id, _result), do: state
+
+  defp update_candidate(state, id, {:ok, %Issue{} = refreshed}) do
+    snapshot = state.candidate_snapshot
+    issues = Enum.map(snapshot.issues, fn issue -> if issue.id == id, do: refreshed, else: issue end)
+    %{state | candidate_snapshot: %{snapshot | issues: issues}}
+  end
+
+  defp update_candidate(state, id, _result), do: remove_candidate(state, id)
+
+  defp remove_candidate(%{candidate_snapshot: nil} = state, _id), do: state
+
+  defp remove_candidate(state, id) do
+    snapshot = state.candidate_snapshot
+    %{state | candidate_snapshot: %{snapshot | issues: Enum.reject(snapshot.issues, &(&1.id == id))}}
   end
 
   defp admission_ready?(state, issue, nil, _metadata),
@@ -1164,6 +1189,16 @@ defmodule SymphonyElixir.Orchestrator do
   defp issue_created_at_sort_key(_issue), do: 9_223_372_036_854_775_807
 
   defp should_dispatch_issue?(
+         issue,
+         state,
+         active_states,
+         terminal_states
+       ) do
+    eligible_for_dispatch?(issue, state, active_states, terminal_states) and
+      dispatch_capacity_available?(issue, state)
+  end
+
+  defp eligible_for_dispatch?(
          %Issue{} = issue,
          %State{running: running, claimed: claimed, blocked: blocked} = state,
          active_states,
@@ -1173,13 +1208,56 @@ defmodule SymphonyElixir.Orchestrator do
       !MapSet.member?(claimed, issue.id) and
       !Map.has_key?(running, issue.id) and
       !Map.has_key?(blocked, issue.id) and
-      not pending_dispatch?(state, issue.id) and
-      available_slots(state) > map_size(state.retry_attempts) + pending_retry_reads(state) and
-      state_slots_available?(issue, running) and
-      worker_slots_available?(state)
+      not pending_dispatch?(state, issue.id)
   end
 
-  defp should_dispatch_issue?(_issue, _state, _active_states, _terminal_states), do: false
+  defp eligible_for_dispatch?(_issue, _state, _active_states, _terminal_states), do: false
+
+  defp dispatch_capacity_available?(issue, state) do
+    available_slots(state) > map_size(state.retry_attempts) + pending_retry_reads(state) and
+      state_slots_available?(issue, state.running) and worker_slots_available?(state)
+  end
+
+  defp waiting_for_slots(state) do
+    case state.candidate_snapshot do
+      %{issues: issues, updated_at: updated_at} ->
+        ready? = dispatch_ready?(state)
+        dispatch_states = dispatch_state_set()
+        terminal_states = terminal_state_set()
+
+        waiting =
+          issues
+          |> sort_issues_for_dispatch()
+          |> Enum.filter(fn issue ->
+            ready? and eligible_for_dispatch?(issue, state, dispatch_states, terminal_states) and
+              not retrying_issue?(state, issue.id) and
+              not dispatch_capacity_available?(issue, state)
+          end)
+          |> Enum.map(fn issue ->
+            %{
+              issue_id: issue.id,
+              identifier: issue.identifier,
+              issue_url: issue.url,
+              title: issue.title,
+              state: issue.state,
+              priority: issue.priority
+            }
+          end)
+
+        {waiting, updated_at}
+
+      _ ->
+        {[], nil}
+    end
+  end
+
+  defp retrying_issue?(state, issue_id) do
+    Map.has_key?(state.retry_attempts, issue_id) or
+      Enum.any?(state.tracker_tasks, fn
+        {_ref, %{purpose: {:retry, ^issue_id, _, _}}} -> true
+        _ -> false
+      end)
+  end
 
   defp state_slots_available?(%Issue{state: issue_state}, running) when is_map(running) do
     limit = Config.max_concurrent_agents_for_state(issue_state)
@@ -1659,6 +1737,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp release_issue_claim(%State{} = state, issue_id) do
     RuntimeControl.delete_retry(RuntimeControl.runtime_id(), issue_id)
+    state = remove_candidate(state, issue_id)
 
     %{
       state
@@ -1910,6 +1989,7 @@ defmodule SymphonyElixir.Orchestrator do
     state = refresh_runtime_config(state)
     now = DateTime.utc_now()
     now_ms = System.monotonic_time(:millisecond)
+    {waiting, waiting_updated_at} = waiting_for_slots(state)
 
     running =
       state.running
@@ -1992,6 +2072,8 @@ defmodule SymphonyElixir.Orchestrator do
        running: running,
        retrying: retrying,
        blocked: blocked,
+       waiting: waiting,
+       waiting_updated_at: waiting_updated_at,
        runtime_control: runtime_control,
        codex_totals: state.codex_totals,
        rate_limits: Map.get(state, :codex_rate_limits),
@@ -2186,10 +2268,17 @@ defmodule SymphonyElixir.Orchestrator do
   defp refresh_runtime_config(%State{} = state) do
     config = Config.settings!()
 
+    candidate_snapshot =
+      case state.candidate_snapshot do
+        %{tracker: tracker} = snapshot when tracker == config.tracker -> snapshot
+        _ -> nil
+      end
+
     %{
       state
       | poll_interval_ms: config.polling.interval_ms,
-        max_concurrent_agents: config.agent.max_concurrent_agents
+        max_concurrent_agents: config.agent.max_concurrent_agents,
+        candidate_snapshot: candidate_snapshot
     }
   end
 

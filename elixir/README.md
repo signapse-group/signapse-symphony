@@ -501,6 +501,20 @@ The observability UI now runs on a minimal Phoenix stack:
 - Phoenix dependency static assets for the LiveView client bootstrap
 - Tracker issue identifiers link to the tracker-provided URL when it uses `http` or `https`
 
+**Waiting for slots** shows new tasks that pass the current runtime's routing, state and dependency
+admission checks but cannot start because global, per-state or worker-host capacity is exhausted,
+including capacity reserved for retries. It excludes running, retrying, blocked and pending-admission
+tasks, and shows no slot waiters while dispatch is paused. The list follows scheduler dispatch order.
+Each repository route, including QA, is shown in its own runtime's dashboard.
+
+The list uses the latest successful tracker poll and displays its timestamp; tracker changes appear
+on the next poll. A failed poll or tracker configuration change clears the list until a successful
+poll, and a restart begins without waiting data. `GET /api/v1/state` adds `waiting`,
+`waiting_updated_at` and `counts.waiting`; the count is `null` (displayed as `n/a`) when no valid poll
+data is available, and `0` when there are no eligible tasks waiting for slots. Waiting rows contain
+the issue ID, identifier, URL, title, state and priority. Issue detail endpoints continue to cover
+running, retrying and blocked sessions.
+
 ### Workflow updates
 
 **Update workflow** updates only the repository containing this service's root `WORKFLOW.md`.

@@ -208,6 +208,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </article>
 
           <article class="metric-card">
+            <p class="metric-label">Waiting for slots</p>
+            <p id="waiting-count" class="metric-value numeric"><%= @payload.counts.waiting || "n/a" %></p>
+            <p class="metric-detail">Eligible tasks from the latest successful tracker poll.</p>
+          </article>
+
+          <article class="metric-card">
             <p class="metric-label">Retrying</p>
             <p class="metric-value numeric"><%= @payload.counts.retrying %></p>
             <p class="metric-detail">Issues waiting for the next retry window.</p>
@@ -232,6 +238,46 @@ defmodule SymphonyElixirWeb.DashboardLive do
             <p class="metric-value numeric"><%= format_runtime_seconds(total_runtime_seconds(@payload, @now)) %></p>
             <p class="metric-detail">Total Codex runtime across completed and active sessions.</p>
           </article>
+        </section>
+
+        <section id="waiting-queue" class="section-card">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Waiting for slots</h2>
+              <p class="section-copy">Eligible tasks cached from the latest successful tracker poll, in dispatch order.</p>
+              <p :if={@payload.waiting_updated_at} class="section-copy">
+                Last successful poll: <span class="mono numeric"><%= @payload.waiting_updated_at %></span>
+              </p>
+            </div>
+          </div>
+
+          <%= cond do %>
+            <% is_nil(@payload.counts.waiting) -> %>
+              <p class="empty-state">Waiting tasks unavailable until a successful tracker poll.</p>
+            <% @payload.waiting == [] -> %>
+              <p class="empty-state">No eligible tasks waiting for slots.</p>
+            <% true -> %>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Issue</th>
+                      <th>Title</th>
+                      <th>State</th>
+                      <th>Priority</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr :for={entry <- @payload.waiting}>
+                      <td><.issue_identifier identifier={entry.issue_identifier} url={entry.issue_url} /></td>
+                      <td><%= entry.title %></td>
+                      <td><span class={state_badge_class(entry.state)}><%= entry.state %></span></td>
+                      <td class="numeric"><%= entry.priority || "n/a" %></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+          <% end %>
         </section>
 
         <section class="section-card">

@@ -67,6 +67,26 @@ defmodule SymphonyElixir.RetryContinuityTest do
     assert Orchestrator.should_dispatch_issue_for_test(issue, %{state | retry_attempts: %{}})
   end
 
+  test "waiting for slots is hidden during a shared pause and returns after resume" do
+    issue = %Issue{id: "waiting", identifier: "SIGN-WAITING", title: "Waiting work", state: "Todo", dispatchable: true}
+
+    state = %Orchestrator.State{
+      retry_restore_pending: false,
+      candidate_snapshot: %{tracker: Config.settings!().tracker, issues: [issue], updated_at: DateTime.utc_now()},
+      retry_attempts: %{
+        "old" => %{attempt: 1, due_at_ms: System.monotonic_time(:millisecond) + 10_000}
+      }
+    }
+
+    assert {:reply, %{waiting: [%{issue_id: "waiting"}]}, _} = Orchestrator.handle_call(:snapshot, nil, state)
+    assert {:ok, _} = RuntimeControl.pause("test pause", "manual")
+    {:reply, paused_snapshot, _} = Orchestrator.handle_call(:snapshot, nil, state)
+    assert %{waiting: [], waiting_updated_at: %DateTime{}} = paused_snapshot
+    assert {:ok, %{resume_version: version}} = RuntimeControl.begin_resume()
+    assert {:ok, _} = RuntimeControl.complete_resume(version, {:ok, %{available?: true, summary: "test"}})
+    assert {:reply, %{waiting: [%{issue_id: "waiting"}]}, _} = Orchestrator.handle_call(:snapshot, nil, state)
+  end
+
   test "later retry cannot steal a slot or increase its failure attempt while waiting" do
     issue = %Issue{id: "later", identifier: "SIGN-LATER", title: "Later work", state: "In Progress", dispatchable: true}
     ref = make_ref()

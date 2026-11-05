@@ -1493,6 +1493,11 @@ SHOULD return:
 - `running` (list of running session rows)
 - each running row SHOULD include `turn_count`
 - `retrying` (list of retry queue rows)
+- `waiting` (eligible new tasks held only by global, per-state or worker-host capacity, including
+  capacity reserved for retries; excludes owned tasks, pending admissions and dependency-blocked
+  tasks, and is empty while dispatch is paused)
+- `waiting_updated_at` (timestamp of the cached candidate poll; `null` before a successful poll or
+  after a poll failure or tracker configuration change; refreshed on the next successful poll)
 - session and retry rows SHOULD include the tracker-provided issue URL when available
 - `codex_totals`
   - `input_tokens`
@@ -1622,6 +1627,11 @@ Minimum endpoints:
 - `GET /api/v1/state`
   - Returns a summary view of the current system state (running sessions, retry queue/delays,
     aggregate token/runtime totals, latest rate limits, and any additional tracked summary fields).
+  - The Elixir implementation also returns `waiting` rows in dispatch order with `issue_id`,
+    `issue_identifier`, `issue_url`, `title`, `state` and `priority`, and `waiting_updated_at` as an
+    ISO 8601 timestamp. `counts.waiting` is `null` when waiting data is unavailable, otherwise the
+    number of tasks currently held by capacity according to the cached poll and live scheduler
+    state. The dashboard displays the count, task list and poll timestamp.
   - Suggested response shape:
 
     ```json

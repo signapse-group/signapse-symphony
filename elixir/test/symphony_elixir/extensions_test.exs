@@ -308,7 +308,18 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert state_payload == %{
              "generated_at" => state_payload["generated_at"],
-             "counts" => %{"running" => 1, "retrying" => 1, "blocked" => 1},
+             "counts" => %{"running" => 1, "retrying" => 1, "blocked" => 1, "waiting" => 1},
+             "waiting" => [
+               %{
+                 "issue_id" => "issue-waiting",
+                 "issue_identifier" => "MT-WAITING",
+                 "issue_url" => "https://example.org/issues/MT-WAITING",
+                 "title" => "Execute QA checks",
+                 "state" => "Ready",
+                 "priority" => 2
+               }
+             ],
+             "waiting_updated_at" => DateTime.to_iso8601(snapshot.waiting_updated_at),
              "running" => [
                %{
                  "issue_id" => "issue-http",
@@ -635,6 +646,11 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "MT-HTTP"
     assert html =~ "MT-RETRY"
     assert html =~ "MT-BLOCKED"
+    assert has_element?(view, "#waiting-count", "1")
+    assert has_element?(view, "#waiting-queue", "Execute QA checks")
+    assert has_element?(view, "#waiting-queue", "Last successful poll:")
+    assert has_element?(view, "#waiting-queue a[href='https://example.org/issues/MT-WAITING']", "MT-WAITING")
+    refute has_element?(view, "#waiting-queue a[href='/api/v1/MT-WAITING']")
     assert html =~ ~s(href="https://example.org/issues/MT-HTTP")
     assert html =~ ~s(href="https://example.org/issues/MT-RETRY")
     assert html =~ ~s(href="https://example.org/issues/MT-BLOCKED")
@@ -708,6 +724,35 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "snapshot_unavailable"
   end
 
+  test "waiting queue distinguishes an empty tracker result from unavailable data" do
+    snapshot = %{static_snapshot() | waiting: []}
+    name = __MODULE__.WaitingQueueOrchestrator
+    pid = start_supervised!({StaticOrchestrator, name: name, snapshot: snapshot})
+    start_test_endpoint(orchestrator: name)
+
+    payload = json_response(get(build_conn(), "/api/v1/state"), 200)
+    assert payload["counts"]["waiting"] == 0
+    assert payload["waiting"] == []
+    assert payload["waiting_updated_at"] == DateTime.to_iso8601(snapshot.waiting_updated_at)
+
+    {:ok, view, _html} = live(build_conn(), "/")
+    assert has_element?(view, "#waiting-count", "0")
+    assert has_element?(view, "#waiting-queue", "No eligible tasks waiting for slots.")
+
+    for unavailable <- [Map.put(snapshot, :waiting_updated_at, nil), Map.drop(snapshot, [:waiting, :waiting_updated_at])] do
+      :sys.replace_state(pid, &Keyword.put(&1, :snapshot, unavailable))
+      send(view.pid, :observability_updated)
+
+      payload = json_response(get(build_conn(), "/api/v1/state"), 200)
+      assert payload["counts"]["waiting"] == nil
+      assert payload["waiting"] == []
+      assert payload["waiting_updated_at"] == nil
+      assert has_element?(view, "#waiting-count", "n/a")
+      assert has_element?(view, "#waiting-queue", "Waiting tasks unavailable until a successful tracker poll.")
+      refute has_element?(view, "#waiting-queue", "No eligible tasks waiting for slots.")
+    end
+  end
+
   test "http server serves embedded assets, accepts form posts, and rejects invalid hosts" do
     spec = HttpServer.child_spec(port: 0)
     assert spec.id == HttpServer
@@ -742,7 +787,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     response = Req.get!("http://127.0.0.1:#{port}/api/v1/state")
     assert response.status == 200
-    assert response.body["counts"] == %{"running" => 1, "retrying" => 1, "blocked" => 1}
+    assert response.body["counts"] == %{"running" => 1, "retrying" => 1, "blocked" => 1, "waiting" => 1}
 
     dashboard_css = Req.get!("http://127.0.0.1:#{port}/dashboard.css")
     assert dashboard_css.status == 200
@@ -786,6 +831,17 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   defp static_snapshot do
     %{
+      waiting: [
+        %{
+          issue_id: "issue-waiting",
+          identifier: "MT-WAITING",
+          issue_url: "https://example.org/issues/MT-WAITING",
+          title: "Execute QA checks",
+          state: "Ready",
+          priority: 2
+        }
+      ],
+      waiting_updated_at: DateTime.utc_now() |> DateTime.truncate(:second),
       running: [
         %{
           issue_id: "issue-http",
