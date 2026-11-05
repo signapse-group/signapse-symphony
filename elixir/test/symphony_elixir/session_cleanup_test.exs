@@ -104,6 +104,7 @@ defmodule SymphonyElixir.SessionCleanupTest do
       end)
 
     assert_receive {:DOWN, ^ref, :process, ^worker, {:session_stop_unconfirmed, failure}}, 5_000
+    assert_fixture_request(workspace, "initialize")
     assert failure.primary_error.reason == {:response_error, %{"message" => "fixture initialization failed"}}
     assert failure.stop_error.reason != nil
     refute_receive :stopped
@@ -115,6 +116,7 @@ defmodule SymphonyElixir.SessionCleanupTest do
     {worker, ref} = spawn_monitor(fn -> AppServer.run(workspace, "test", issue) end)
 
     assert_receive {:DOWN, ^ref, :process, ^worker, {:session_stop_unconfirmed, failure}}, 5_000
+    assert_fixture_request(workspace, "turn/start")
     assert failure.primary_error.reason == {:response_error, %{"message" => "fixture turn failed"}}
     assert failure.stop_error.reason != nil
   end
@@ -135,6 +137,7 @@ defmodule SymphonyElixir.SessionCleanupTest do
       try do
         capture_log(fn ->
           assert_receive {:DOWN, ^ref, :process, ^worker, {:session_stop_unconfirmed, failure}}, 15_000
+          assert_fixture_request(workspace, "thread/start")
           assert {:runtime_control_unavailable, {:timeout, _}} = failure.primary_error.reason
           assert failure.stop_error.reason != nil
         end)
@@ -163,6 +166,7 @@ defmodule SymphonyElixir.SessionCleanupTest do
       end)
 
     assert_receive {:DOWN, ^ref, :process, ^worker, {:session_stop_unconfirmed, failure}}, 5_000
+    assert_fixture_request(workspace, "initialize")
     assert failure.primary_error.reason == {:response_error, %{"message" => "fixture initialization failed"}}
     assert %{reason: %RuntimeError{message: "startup metadata cleanup failed"}} = failure.stop_error
   end
@@ -183,6 +187,7 @@ defmodule SymphonyElixir.SessionCleanupTest do
       end)
 
     assert_receive {:DOWN, ^ref, :process, ^worker, {:session_stop_unconfirmed, failure} = reason}, 5_000
+    assert_fixture_request(workspace, "thread/start")
     assert %{kind: :error, reason: %Solid.RenderError{}, stacktrace: [_ | _]} = failure.primary_error
     refute_receive :after_run_called
 
@@ -204,6 +209,19 @@ defmodule SymphonyElixir.SessionCleanupTest do
   end
 
   defp primary_exception!, do: raise("primary exception")
+
+  defp assert_fixture_request(workspace, method) do
+    path = workspace |> Path.dirname() |> Path.dirname() |> Path.join("requests")
+
+    trace =
+      case File.read(path) do
+        {:ok, trace} -> trace
+        {:error, reason} -> "unavailable: #{reason}"
+      end
+
+    assert trace =~ "systemd-run:started" and trace =~ method,
+           "Fixture did not reach #{method}; requests=#{inspect(trace)}"
+  end
 
   defp plain_session! do
     port = Port.open({:spawn_executable, System.find_executable("cat")}, [:binary])
@@ -239,11 +257,25 @@ defmodule SymphonyElixir.SessionCleanupTest do
     initialize = if failure == :initialize, do: ~s({"error":{"message":"fixture initialization failed"}}), else: ~s({"result":{}})
     initialize = String.replace_prefix(initialize, "{", ~s({"id":1,))
 
-    systemctl = if stop_result == :ok, do: "#!/bin/sh\nprintf '%s\\n' 'LoadState=not-found'\n", else: "#!/bin/sh\nexit 1\n"
-    File.write!(Path.join(bin, "systemctl"), systemctl)
+    stop = if stop_result == :ok, do: "printf '%s\\n' 'LoadState=not-found'", else: "exit 1"
+
+    File.write!(Path.join(bin, "systemctl"), """
+    #!/bin/sh
+    case "$3" in
+      symphony-session-*.service)
+        printf '%s\\n' 'systemctl:session' >> #{requests}
+        #{stop}
+        ;;
+      *)
+        printf '%s\\n' 'systemctl:owner' >> #{requests}
+        printf '%s\\n' 'LoadState=not-found'
+        ;;
+    esac
+    """)
 
     File.write!(Path.join(bin, "systemd-run"), """
     #!/bin/sh
+    printf '%s\\n' 'systemd-run:started' >> #{requests}
     printf '%s\\n' 'SYMPHONY_CGROUP:11111111111111111111111111111111'
     while IFS= read -r line; do
       printf '%s\\n' "$line" >> #{requests}
