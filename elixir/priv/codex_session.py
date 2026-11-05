@@ -22,11 +22,11 @@ def exit_guard(code, message):
     os._exit(code)
 
 
-def properties(unit):
+def properties(unit, timeout=5):
     result = subprocess.run(
         ["systemctl", "--user", "show", unit,
-         "--property=LoadState,ActiveState,ControlGroup,InvocationID,Description"],
-        capture_output=True, text=True, timeout=5, check=False,
+         "--property=LoadState,ActiveState,SubState,Result,ControlGroup,InvocationID,Description"],
+        capture_output=True, text=True, timeout=timeout, check=False,
     )
     props = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
     if result.returncode and props.get("LoadState") != "not-found":
@@ -48,26 +48,134 @@ def empty_group(group):
         return True
 
 
+def read_limited(path, size):
+    with path.open(encoding="utf-8") as stream:
+        return stream.read(size)
+
+
+def process_snapshot(pid, group):
+    root = Path(f"/proc/{pid}")
+    try:
+        before = read_limited(root / "stat", 2048).rpartition(")")[2].split()
+        member = read_limited(root / "cgroup", 2048).strip() == "0::" + group
+        wchan = read_limited(root / "wchan", 128).strip()
+        after = read_limited(root / "stat", 2048).rpartition(")")[2].split()
+        member = member and read_limited(root / "cgroup", 2048).strip() == "0::" + group
+        if not member or before[19] != after[19]:
+            return {"pid": pid, "state": "unknown", "reason": "identity_changed"}
+        if len(after[0]) != 1 or after[0] not in "RSDZTtXxKWPI" or not after[1].isdigit() or not after[19].isdigit():
+            raise ValueError("Invalid process stat")
+        return {"pid": pid, "state": after[0], "ppid": int(after[1]), "starttime": int(after[19]),
+                "wchan": wchan if re.fullmatch(r"[A-Za-z0-9_]{1,64}", wchan) else "unknown"}
+    except (OSError, ValueError, IndexError):
+        return {"pid": pid, "state": "unknown", "reason": "unavailable"}
+
+
+def stop_snapshot(unit, props):
+    current = properties(unit, timeout=0.1)
+    group = props.get("ControlGroup", "")
+    if (len(group) > 1024 or not group.startswith("/") or ".." in group.split("/")
+            or any(ord(char) < 32 for char in group)
+            or not re.fullmatch(r"[0-9a-f]{32}", props.get("InvocationID", "")) or not identity(unit, current)
+            or current.get("InvocationID") != props.get("InvocationID")
+            or current.get("ControlGroup") != group):
+        return {"snapshot": "unknown", "snapshot_reason": "identity_changed"}
+    root = Path("/sys/fs/cgroup" + group)
+    events = {}
+    for line in read_limited(root / "cgroup.events", 128).splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] in ("populated", "frozen") and parts[1] in ("0", "1"):
+            events[parts[0]] = int(parts[1])
+    raw_pids = read_limited(root / "cgroup.procs", 1024)
+    pids = [int(value) for value in raw_pids.split()[:8] if re.fullmatch(r"[1-9][0-9]{0,9}", value)]
+    return {"snapshot": "sampled", "unit_state": unit_state(current), "cgroup_events": events,
+            "pids": [process_snapshot(pid, group) for pid in pids],
+            "pid_scope": "direct_cgroup_only", "descendants": "unknown",
+            "pids_truncated": len(raw_pids.split()) > 8 or len(raw_pids) == 1024}
+
+
+def unit_state(props):
+    return {key: value if re.fullmatch(r"[a-z-]{1,32}", value) else "unknown"
+            for key in ("LoadState", "ActiveState", "SubState", "Result")
+            for value in [props.get(key, "unknown")]}
+
+
+def stop_failure(unit, reason, props=None, kill=None):
+    diagnostic = {"unit": unit, "reason": reason}
+    if kill is not None:
+        diagnostic["kill"] = kill
+    if props is not None:
+        diagnostic["unit_state"] = unit_state(props)
+        group = props.get("ControlGroup", "")
+        invocation = props.get("InvocationID", "")
+        if (identity(unit, props) and re.fullmatch(r"[0-9a-f]{32}", invocation)
+                and len(group) <= 1024 and group.startswith("/") and ".." not in group.split("/")
+                and not any(ord(char) < 32 for char in group)):
+            diagnostic.update(invocation=invocation, cgroup=group)
+        else:
+            diagnostic["identity"] = "unknown"
+        snapshot = []
+
+        def collect():
+            try:
+                snapshot.append(stop_snapshot(unit, props))
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+                snapshot.append({"snapshot": "unknown", "snapshot_reason": "unavailable"})
+
+        # Diagnostics must not extend a failed stop indefinitely on a blocked procfs read.
+        try:
+            worker = threading.Thread(target=collect, daemon=True)
+            worker.start()
+            worker.join(0.2)
+        except RuntimeError:
+            snapshot.append({"snapshot": "unknown", "snapshot_reason": "unavailable"})
+        diagnostic.update(snapshot[0] if snapshot else {"snapshot": "unknown", "snapshot_reason": "timeout"})
+    message = ("SYMPHONY_SESSION_STOP " + json.dumps(diagnostic, separators=(",", ":")) + "\n").encode()
+    if len(message) > 4096:
+        diagnostic = {"unit": unit if re.fullmatch(UNIT_PATTERN, unit) else "unknown", "reason": reason,
+                      "snapshot": "unknown", "snapshot_reason": "size_limit"}
+        message = ("SYMPHONY_SESSION_STOP " + json.dumps(diagnostic, separators=(",", ":")) + "\n").encode()
+    try:
+        os.set_blocking(2, False)
+        os.write(2, message)
+    except OSError:
+        pass
+    return 3
+
+
 def stop(unit, invocation):
-    props = properties(unit)
+    try:
+        props = properties(unit)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        return stop_failure(unit, "unit_query_failed")
     if props.get("LoadState") == "not-found":
-        return 0 if invocation else 3
+        return 0 if invocation else stop_failure(unit, "unverified_missing_unit")
     if invocation and props.get("InvocationID") != invocation:
-        return 3
+        return stop_failure(unit, "invocation_mismatch")
     group = props.get("ControlGroup", "")
     if not identity(unit, props):
         return (0 if invocation and props.get("InvocationID") == invocation
-                and props.get("ActiveState") in ("inactive", "failed") and not group else 3)
-    subprocess.run(
-        ["systemctl", "--user", "kill", "--signal=SIGKILL", "--kill-whom=all", unit],
-        capture_output=True, timeout=5, check=False,
-    )
+                and props.get("ActiveState") in ("inactive", "failed") and not group
+                else stop_failure(unit, "unit_identity_unverified"))
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "kill", "--signal=SIGKILL", "--kill-whom=all", unit],
+            capture_output=True, timeout=5, check=False,
+        )
+        kill = {"returncode": result.returncode}
+    except subprocess.TimeoutExpired:
+        return stop_failure(unit, "kill_timeout", props, {"outcome": "timeout"})
+    except (OSError, subprocess.SubprocessError):
+        return stop_failure(unit, "kill_failed", props, {"outcome": "unavailable"})
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        if empty_group(group):
-            return 0
+        try:
+            if empty_group(group):
+                return 0
+        except OSError:
+            return stop_failure(unit, "cgroup_query_failed", props, kill)
         time.sleep(0.02)
-    return 3
+    return stop_failure(unit, "cgroup_populated_timeout", props, kill)
 
 
 def launch(source, unit, command, workspace):
