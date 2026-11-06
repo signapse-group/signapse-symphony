@@ -1566,7 +1566,8 @@ defmodule SymphonyElixir.Orchestrator do
 
     updated_state = %{
       state
-      | retry_attempts:
+      | claimed: MapSet.put(state.claimed, issue_id),
+        retry_attempts:
           Map.put(state.retry_attempts, issue_id, %{
             attempt: next_attempt,
             timer_ref: timer_ref,
