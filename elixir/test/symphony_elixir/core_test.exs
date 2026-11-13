@@ -1232,7 +1232,7 @@ defmodule SymphonyElixir.CoreTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "linear",
       workspace_root: Path.join(test_root, "workspaces"),
-      max_retry_backoff_ms: 0,
+      max_retry_backoff_ms: 60_000,
       hook_before_run: "sleep 2; exit 1"
     )
 
