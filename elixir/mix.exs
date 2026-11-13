@@ -1,3 +1,45 @@
+defmodule SymphonyElixir.BurritoLinuxRuntime do
+  @moduledoc false
+
+  @loader_sha256 "71c35316aff45bbfd243d8eb9bfc4a58b6eb97cee09514cd2030e145b68107fb"
+
+  @spec execute(map()) :: map()
+  def execute(%{target: %{alias: :linux_x86_64, erts_source: {:local, _}} = target} = context) do
+    # Burrito only embeds its musl loader automatically for precompiled targets.
+    context =
+      context
+      |> Map.put(:target, %{target | erts_source: {:precompiled, []}})
+      |> Burrito.Steps.Fetch.FetchMusl.execute()
+
+    digest = :crypto.hash(:sha256, File.read!(Path.join(context.self_dir, "src/musl-runtime.so")))
+
+    unless Base.encode16(digest, case: :lower) == @loader_sha256 do
+      raise "Unexpected Burrito Linux x86_64 musl loader"
+    end
+
+    %{context | target: target}
+  end
+
+  def execute(%{target: %{alias: :linux_x86_64, erts_source: {:local_unpacked, [path: path]}}} = context) do
+    if System.get_env("SYMPHONY_BURRITO_X86_64_ERTS") do
+      otp_release = :erlang.system_info(:otp_release) |> List.to_string()
+      version_file = Path.join(["releases", otp_release, "OTP_VERSION"])
+      [target_version] = path |> Path.join("otp*/#{version_file}") |> Path.wildcard()
+      version = File.read!(target_version)
+
+      unless String.trim(version) == String.trim(File.read!(Path.join(List.to_string(:code.root_dir()), version_file))) do
+        raise "Burrito target OTP and build OTP versions must match"
+      end
+
+      File.write!(Path.join(context.work_dir, "OTP_VERSION"), version)
+    end
+
+    context
+  end
+
+  def execute(context), do: context
+end
+
 defmodule SymphonyElixir.MixProject do
   use Mix.Project
 
@@ -117,11 +159,12 @@ defmodule SymphonyElixir.MixProject do
       symphony: [
         steps: [:assemble, &Burrito.wrap/1],
         burrito: [
+          extra_steps: [fetch: [pre: [SymphonyElixir.BurritoLinuxRuntime]], patch: [post: [SymphonyElixir.BurritoLinuxRuntime]]],
           targets: [
             macos_arm64: [os: :darwin, cpu: :aarch64],
             macos_x86_64: [os: :darwin, cpu: :x86_64],
             linux_arm64: [os: :linux, cpu: :aarch64],
-            linux_x86_64: [os: :linux, cpu: :x86_64]
+            linux_x86_64: [os: :linux, cpu: :x86_64, custom_erts: System.get_env("SYMPHONY_BURRITO_X86_64_ERTS")]
           ]
         ]
       ]

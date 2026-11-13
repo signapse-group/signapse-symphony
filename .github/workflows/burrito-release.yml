@@ -47,6 +47,13 @@ jobs:
       - name: Install xz
         run: sudo apt-get update && sudo apt-get install -y xz-utils
 
+      - name: Prepare patched Linux x86_64 runtime
+        if: matrix.target == 'linux_x86_64'
+        run: |
+          sudo apt-get install -y patchelf
+          bash ../scripts/prepare_burrito_linux_x86_64.sh "$RUNNER_TEMP/burrito-linux-x86_64-erts.tar.gz"
+          echo "SYMPHONY_BURRITO_X86_64_ERTS=$RUNNER_TEMP/burrito-linux-x86_64-erts.tar.gz" >> "$GITHUB_ENV"
+
       - name: Install Mix dependencies
         run: |
           mix local.hex --force
@@ -70,7 +77,17 @@ jobs:
           sed -i -E 's/(version: "[^"]+)"/\1-nightly"/' mix.exs
 
       - name: Build Burrito executable
-        run: BURRITO_TARGET=${{ matrix.target }} MIX_ENV=prod mise exec zig@0.15.2 -- mix release symphony --overwrite
+        env:
+          BURRITO_TARGET: ${{ matrix.target }}
+          MIX_ENV: prod
+        run: |
+          tools=(zig@0.15.2)
+          if [[ "$BURRITO_TARGET" == linux_x86_64 ]]; then
+            test -f "$SYMPHONY_BURRITO_X86_64_ERTS"
+            MISE_ERLANG_COMPILE=false mise install erlang@28.5.0.8
+            tools+=(erlang@28.5.0.8)
+          fi
+          mise exec "${tools[@]}" -- mix release symphony --overwrite
 
       - name: Stage release assets
         env:
@@ -90,6 +107,14 @@ jobs:
           cd dist
 
           sha256sum "$artifact" > "$artifact.sha256"
+          echo "RELEASE_ARTIFACT=$artifact" >> "$GITHUB_ENV"
+
+      - name: Record the verified Linux x86_64 OTP version
+        if: matrix.target == 'linux_x86_64'
+        run: |
+          artifact="dist/$RELEASE_ARTIFACT"
+          chmod +x "$artifact"
+          bash ../scripts/smoke_burrito_linux_x86_64.sh "$artifact" > "$artifact.otp-version"
 
       - name: Upload release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -116,6 +141,10 @@ jobs:
             runner: macos-15
 
     steps:
+      - name: Checkout Linux x86_64 smoke script
+        if: matrix.target == 'linux_x86_64'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
       - name: Download release assets
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -123,6 +152,7 @@ jobs:
           path: dist
 
       - name: Smoke test executable
+        if: matrix.target != 'linux_x86_64'
         run: |
           artifact="$(find dist -type f ! -name '*.sha256' -print -quit)"
           test -n "$artifact"
@@ -135,6 +165,25 @@ jobs:
 
           test "$status" -eq 1
           grep -F "This Symphony implementation is a low key engineering preview." <<<"$output"
+
+      - name: Verify the packaged Linux x86_64 OTP version
+        if: matrix.target == 'linux_x86_64'
+        shell: bash
+        env:
+          NIGHTLY: ${{ inputs.nightly }}
+        run: |
+          if [[ "$NIGHTLY" == true ]]; then
+            version=nightly
+          elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="${GITHUB_SHA::7}"
+          fi
+          name="symphony-$version-linux_x86_64"
+          artifact="dist/$name"
+          (cd dist && sha256sum --check "$name.sha256")
+          chmod +x "$artifact"
+          bash scripts/smoke_burrito_linux_x86_64.sh "$artifact" | cmp - "$artifact.otp-version"
 
   release:
     if: inputs.nightly || startsWith(github.ref, 'refs/tags/v')
