@@ -143,6 +143,7 @@ defmodule SymphonyElixir.InstructionsTest do
 
     assert {:error, :invalid_instructions_git_revision} =
              Instructions.prepare("fe", "missing-instructions-ref", source, "WORKFLOW.md", [])
+
     previous_path = System.get_env("PATH")
     System.put_env("PATH", root)
 
