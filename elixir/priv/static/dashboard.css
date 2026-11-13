@@ -138,6 +138,73 @@ pre,
   gap: 1rem;
 }
 
+.profile-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  min-width: 0;
+}
+
+.profile-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.profile-tabs a {
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.6rem 0.95rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.profile-tabs a[aria-current="page"] {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-color: var(--accent-ink);
+}
+
+.profile-tabs a:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 3px;
+}
+
+.profile-unavailable-list {
+  margin: 0.5rem 0 0;
+  padding-inline-start: 1.5rem;
+}
+
+.profile-revisions {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.4rem 1rem;
+}
+
+.profile-revisions dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.profile-update-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.profile-update-form input[type="text"] {
+  box-sizing: border-box;
+  min-width: 0;
+  flex: 1 1 12rem;
+  padding: 0.55rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  font: inherit;
+}
+
 .hero-card,
 .section-card,
 .metric-card,

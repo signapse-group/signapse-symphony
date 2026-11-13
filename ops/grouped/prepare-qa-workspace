@@ -1,0 +1,66 @@
+#!/usr/bin/python3
+"""Validate pinned QA instructions and keep raw artifacts outside issue clones."""
+
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+
+APP = Path('/opt/apps/symphony')
+
+
+def instructions_root(workspace):
+    profile = os.environ.get('SYMPHONY_PROFILE_ID')
+    if profile is None:
+        return workspace
+    if profile != 'qa':
+        raise ValueError('Use the QA prepare hook only for the QA profile.')
+    root = Path(os.environ.get('SYMPHONY_INSTRUCTIONS_ROOT', ''))
+    revision = os.environ.get('SYMPHONY_INSTRUCTIONS_REVISION')
+    if not revision or not root.is_absolute() or root.resolve(strict=True) != root:
+        raise ValueError('Pinned QA instructions are unavailable.')
+    manifest = json.loads((root / 'instructions.json').read_text())
+    if (manifest.get('profile_id') != 'qa' or manifest.get('revision') != revision
+            or root.name != revision or root.parent.name != 'revisions'):
+        raise ValueError('Pinned instructions do not match the QA profile and revision.')
+    return root
+
+
+def prepare(workspace):
+    root = Path(os.environ.get('SYMPHONY_WORKSPACE_ROOT', APP / 'workspaces-qa-jira')).resolve(strict=True)
+    stable = (APP / 'runtime/repos/signapse-qa').resolve(strict=True)
+    if workspace != stable and not (workspace.parent == root and re.fullmatch(r'[A-Za-z0-9_-]+', workspace.name)):
+        raise ValueError('Use the stable QA checkout or a direct child of the QA workspace root.')
+    if not (workspace / 'playwright.config.mjs').is_file():
+        raise ValueError('QA Playwright config is missing.')
+    checker = stable / 'scripts/check-local-instructions.mjs'
+    reference = APP / 'runtime/README-qa-testing.md'
+    if not checker.is_file() or not reference.is_file():
+        raise ValueError('QA local instruction deployment is incomplete; operator must reconcile the published context.')
+    subprocess.run([str(APP / 'runtime/node-v24.21.0-linux-x64/bin/node'),
+                    str(checker), str(instructions_root(workspace))], check=True, stdout=subprocess.DEVNULL)
+    durable = APP / 'logs-qa/evidence' / workspace.name
+    durable.mkdir(mode=0o700, exist_ok=True)
+    if durable.is_symlink() or durable.resolve() != durable:
+        raise ValueError('Durable evidence path must not redirect through a symlink.')
+    artifacts = workspace / 'artifacts'
+    if artifacts.is_symlink():
+        if artifacts.resolve(strict=True) != durable:
+            raise ValueError('Existing artifacts link points elsewhere; preserve and reconcile it.')
+    elif artifacts.exists():
+        raise ValueError('Existing artifacts directory must be preserved and migrated explicitly.')
+    else:
+        artifacts.symlink_to(durable, target_is_directory=True)
+    print(durable)
+
+
+if __name__ == '__main__':
+    os.umask(0o077)
+    try:
+        prepare(Path(sys.argv[1] if len(sys.argv) == 2 else os.getcwd()).resolve(strict=True))
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)

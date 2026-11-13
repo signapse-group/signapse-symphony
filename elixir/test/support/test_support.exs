@@ -1,4 +1,9 @@
 defmodule SymphonyElixir.TestSupport do
+  import ExUnit.Assertions
+  import ExUnit.Callbacks, only: [on_exit: 1]
+
+  alias SymphonyElixir.PathSafety
+
   @workflow_prompt "You are an agent for this repository."
 
   defmacro __using__(_opts) do
@@ -57,6 +62,42 @@ defmodule SymphonyElixir.TestSupport do
         :ok
       end
     end
+  end
+
+  def instructions_probe_root(default) do
+    if bind_instructions?() do
+      {output, 0} = System.cmd("mktemp", ["-d", Path.join(System.tmp_dir!(), "symphony-instructions-ci.XXXXXXXX")])
+      root = String.trim(output)
+      on_exit(fn -> File.rm_rf!(root) end)
+      root
+    else
+      default
+    end
+  end
+
+  def mount_instruction_fixture(root, path) do
+    if bind_instructions?() do
+      assert {:ok, ^root} = PathSafety.canonicalize(root)
+      assert {:ok, ^path} = PathSafety.canonicalize(path)
+      assert String.starts_with?(path, root <> "/") and File.dir?(path)
+
+      # Match the host's read-only mount when the CI user manager cannot mount it.
+      sudo!(["mount", "--bind", "--", path, path])
+
+      on_exit(fn ->
+        assert {:ok, ^path} = PathSafety.canonicalize(path)
+        sudo!(["umount", "--", path])
+      end)
+
+      sudo!(["mount", "-o", "remount,bind,ro", "--", path])
+    end
+  end
+
+  defp bind_instructions?, do: System.get_env("SYMPHONY_TEST_BIND_INSTRUCTIONS") == "1"
+
+  defp sudo!(args) do
+    {output, status} = System.cmd("sudo", ["-n" | args], stderr_to_stdout: true)
+    assert status == 0, output
   end
 
   def drain_tracker_reads(%{tracker_tasks: tasks} = state) when map_size(tasks) == 0, do: state

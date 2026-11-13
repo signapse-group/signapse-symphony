@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.RuntimeControlTest do
   use ExUnit.Case, async: false
   import ExUnit.CaptureLog
-  alias SymphonyElixir.RuntimeControl
+  alias SymphonyElixir.{Profile, RuntimeControl}
 
   setup do
     root = Path.join(System.tmp_dir!(), "symphony-control-#{System.unique_integer([:positive])}")
@@ -35,6 +35,41 @@ defmodule SymphonyElixir.RuntimeControlTest do
     stop_control(first)
     restarted = start_control(path, "be", members: members)
     assert {:ok, %{mode: :paused, reason: "Quota exhausted", source: "quota"}} = RuntimeControl.status(restarted)
+  end
+
+  test "grouped status counts workers while drain waits for every permit", %{path: path} do
+    # Start from a valid running state before reopening the same database as a grouped profile.
+    legacy = start_control(path, "be")
+    resume(legacy)
+    assert {:ok, first} = RuntimeControl.acquire_turn(legacy)
+    assert {:ok, second} = RuntimeControl.acquire_turn(legacy)
+    assert {:ok, %{active_turns: 2}} = RuntimeControl.status(legacy)
+    stop_control(legacy)
+
+    start_supervised!({Profile, []})
+    grouped = start_control(path, "be", profile_id: "be")
+    assert {:ok, %{mode: :running, active_turns: 1}} = RuntimeControl.status(grouped)
+
+    parent = self()
+
+    worker =
+      spawn_link(fn ->
+        {:ok, permit} = RuntimeControl.acquire_turn(grouped)
+        send(parent, :worker_acquired)
+
+        receive do
+          :release -> send(parent, {:worker_released, RuntimeControl.release_turn(permit, grouped)})
+        end
+      end)
+
+    assert_receive :worker_acquired
+    assert {:ok, %{mode: :running, active_turns: 2}} = RuntimeControl.status(grouped)
+    assert {:ok, %{mode: :pausing, active_turns: 2}} = RuntimeControl.pause("Manual pause", "manual", grouped)
+    send(worker, :release)
+    assert_receive {:worker_released, {:ok, %{mode: :pausing, active_turns: 1}}}
+    assert {:ok, %{mode: :pausing, active_turns: 1}} = RuntimeControl.release_turn(first, grouped)
+    assert {:ok, %{mode: :pausing, active_turns: 1}} = RuntimeControl.status(grouped)
+    assert {:ok, %{mode: :paused, active_turns: 0}} = RuntimeControl.release_turn(second, grouped)
   end
 
   test "isolated FE control can pause without stopping BE or landing", %{path: path} do

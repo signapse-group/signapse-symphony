@@ -68,7 +68,7 @@ defmodule SymphonyElixir.LogFile do
   defp disk_log_handler_config(path, max_bytes, max_files) do
     %{
       level: :all,
-      formatter: {:logger_formatter, %{single_line: true}},
+      formatter: {:logger_formatter, %{single_line: true, template: log_template()}},
       config: %{
         file: String.to_charlist(path),
         type: :wrap,
@@ -76,5 +76,19 @@ defmodule SymphonyElixir.LogFile do
         max_no_files: max_files
       }
     }
+  end
+
+  defp log_template do
+    [
+      :time,
+      " ",
+      :level,
+      " ",
+      {:profile_id, ["profile_id=", :profile_id, " "], []},
+      {:workflow_revision, ["workflow_revision=", :workflow_revision, " "], []},
+      {:instructions_revision, ["instructions_revision=", :instructions_revision, " "], []},
+      :msg,
+      "\n"
+    ]
   end
 end

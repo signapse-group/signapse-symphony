@@ -19,8 +19,14 @@ defmodule SymphonyElixir.Jira.Adapter do
   @spec fetch_issues_by_states([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_states(states), do: client_module().fetch_issues_by_states(states)
 
+  @spec fetch_issues_by_states([String.t()], map()) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_states(states, tracker_settings), do: client_module().fetch_issues_by_states(states, tracker_settings)
+
   @spec fetch_issues_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_ids(ids), do: client_module().fetch_issues_by_ids(ids)
+
+  @spec fetch_issues_by_ids([String.t()], map()) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_ids(ids, tracker_settings), do: client_module().fetch_issues_by_ids(ids, tracker_settings)
 
   @spec issue_url(term(), map()) :: String.t() | nil
   def issue_url(identifier, tracker_settings), do: Client.issue_url(identifier, tracker_settings)

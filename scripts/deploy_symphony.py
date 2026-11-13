@@ -1,4 +1,4 @@
-"""Deploy the verified main artifact to the existing four user services."""
+"""Deploy a verified artifact to the active Symphony topology."""
 
 import fcntl
 import hashlib
@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
 import subprocess
 import sys
 import tempfile
@@ -16,13 +15,12 @@ import urllib.request
 
 ROOT = Path('/opt/apps/symphony')
 UNITS = Path.home() / '.config/systemd/user'
-WORKERS = (
-    ('be', 'symphony.service', 'signapse', 4000, 'logs', {'be', 'landing'}),
-    ('fe', 'symphony-fe.service', 'signapse-ui', 4001, 'logs-fe', {'fe'}),
-    ('landing', 'symphony-landing.service', 'signapse-landing', 4002, 'logs-landing', {'be', 'landing'}),
-    ('qa', 'symphony-qa.service', 'signapse-qa', 4003, 'logs-qa', {'qa'}),
+GROUPED_SERVICE = 'symphony-grouped.service'
+PROFILES = {'fe': 2, 'be': 1, 'qa': 2, 'landing': 1, 'planning': 1}
+LEGACY_SERVICES = (
+    'symphony.service', 'symphony-fe.service', 'symphony-landing.service',
+    'symphony-qa.service', 'symphony-planning.service',
 )
-SERVICES = [worker[1] for worker in WORKERS]
 
 
 def systemctl(*args):
@@ -38,11 +36,6 @@ def properties(service):
     # systemd includes changing PID/timestamps in ExecStart; compare only its executable.
     props['ExecStart'] = re.search(r'\{ path=(.*?) ;', props['ExecStart'])[1]
     return props
-
-
-def process_environment(pid):
-    return dict(entry.split('=', 1) for entry in
-                Path(f'/proc/{pid}/environ').read_bytes().decode().split('\0') if '=' in entry)
 
 
 def atomic_write(path, data, mode=0o600):
@@ -63,24 +56,28 @@ def dropin(service):
 
 
 def health(expected):
-    pids = []
-    for identity, service, _, port, _, members in WORKERS:
-        props = properties(service)
-        if (props['ActiveState'] != 'active' or props['MainPID'] == '0'
-                or props['ExecStart'] != expected[service]):
-            raise RuntimeError(f'{service}: process or executable is not ready')
-        with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/v1/state', timeout=5) as response:
-            state = json.load(response)
-        control = state.get('runtime_control', {})
+    props = properties(GROUPED_SERVICE)
+    if (props['ActiveState'] != 'active' or props['MainPID'] == '0'
+            or props['ExecStart'] != expected[GROUPED_SERVICE]):
+        raise RuntimeError('Grouped Symphony process or executable is not ready')
+    with urllib.request.urlopen('http://127.0.0.1:4000/api/v1/state', timeout=5) as response:
+        state = json.load(response)
+    profiles = state.get('profiles', [])
+    if (state.get('mode') != 'profiles' or state.get('health') != 'healthy'
+            or len(profiles) != len(PROFILES)
+            or {profile.get('profile_id') for profile in profiles} != set(PROFILES)):
+        raise RuntimeError('Grouped Symphony does not report five healthy profiles')
+    for profile in profiles:
+        identity = profile['profile_id']
+        control = profile.get('runtime_control', {})
         services = control.get('services', {})
-        if (state.get('error') or not isinstance(state.get('counts'), dict)
+        if (profile.get('health') != 'healthy' or profile.get('max_concurrent_agents') != PROFILES[identity]
+                or not profile.get('workflow_revision') or not profile.get('instructions_revision')
                 or not control.get('enabled') or control.get('database_error')
                 or control.get('mode') not in {'running', 'paused', 'pausing', 'checking_quota'}
-                or set(services) != members
-                or any(item.get('status') != 'online' for item in services.values())):
-            raise RuntimeError(f'{identity}: runtime snapshot or heartbeat is not healthy')
-        pids.append(props['MainPID'])
-    return pids
+                or set(services) != {identity} or services[identity].get('status') != 'online'):
+            raise RuntimeError(f'{identity}: grouped runtime, revision or heartbeat is not healthy')
+    return [props['MainPID']]
 
 
 def await_healthy(expected):
@@ -99,7 +96,7 @@ def await_healthy(expected):
     raise RuntimeError('Services did not become healthy within 120 seconds')
 
 
-def prepare(sha, candidate, release):
+def install_binary(candidate, release):
     artifact = candidate / 'symphony-nightly-linux_x86_64'
     checksum = Path(f'{artifact}.sha256').read_text().split()
     if (len(checksum) != 2 or not re.fullmatch(r'[0-9a-f]{64}', checksum[0])
@@ -114,68 +111,60 @@ def prepare(sha, candidate, release):
     else:
         atomic_write(binary, artifact.read_bytes(), 0o700)
 
-    before, configs = {}, {}
-    for identity, service, repo, port, logs, _ in WORKERS:
-        props = properties(service)
+    return binary
+
+
+def prepare_grouped(sha, candidate, release, *, initial=False):
+    runtime = ROOT / 'runtime'
+    manifest = runtime / 'grouped/profiles.json'
+    environment = runtime / 'grouped/service.env'
+    sys_config = runtime / 'grouped/sys.config'
+    if not all(path.is_file() for path in (manifest, environment, sys_config)):
+        raise RuntimeError('Grouped deployment inputs are incomplete')
+    before = {}
+    if not initial:
+        props = properties(GROUPED_SERVICE)
         if props['ActiveState'] != 'active' or props['MainPID'] == '0':
-            raise RuntimeError(f'{service} must be running before deployment')
-        before[service] = props['ExecStart']
-        env = process_environment(props['MainPID'])
-        flags = shlex.split(env.get('ERL_FLAGS', ''))
-        if flags.count('-config') != 1:
-            raise ValueError(f'{service}: expected one existing ERL_FLAGS -config')
-        index = flags.index('-config') + 1
-        config = Path(flags[index])
-        if config.suffix != '.config':
-            config = Path(f'{config}.config')
-        config_bytes = config.read_bytes()
-        config_base = release / f'{identity}-sys'
-        flags[index] = str(config_base)
-        install = ROOT / f'runtime/install-{sha}/{identity}'
-        install.mkdir(mode=0o700, parents=True, exist_ok=True)
-        env_path = release / f'{identity}.env'
-        # EnvironmentFile has its own quoting rules; preserve the existing Erlang arguments.
-        erl_flags = shlex.join(flags).replace('\\', '\\\\').replace('"', '\\"')
-        env_bytes = f'SYMPHONY_INSTALL_DIR={install}\nERL_FLAGS="{erl_flags}"\n'.encode()
-        config_path = Path(f'{config_base}.config')
-        for path, data in [(config_path, config_bytes), (env_path, env_bytes)]:
-            if path.exists() and path.read_bytes() != data:
-                raise ValueError(f'{path.name}: existing release configuration differs')
-            if not path.exists():
-                atomic_write(path, data)
-        configs[service] = (
-            '[Service]\n'
-            f'EnvironmentFile={env_path}\n'
-            'UMask=0077\nExecStart=\n'
-            f'ExecStart={binary} {ROOT}/runtime/repos/{repo}/WORKFLOW.md '
-            f'--logs-root {ROOT}/{logs} --port {port} '
-            '--i-understand-that-this-will-be-running-without-the-usual-guardrails\n'
-        ).encode()
-    return before, configs
+            raise RuntimeError('Grouped deployment requires an active grouped service')
+        before[GROUPED_SERVICE] = props['ExecStart']
+    binary = install_binary(candidate, release)
+    install = runtime / f'install-{sha}/grouped'
+    install.mkdir(mode=0o700, parents=True, exist_ok=True)
+    config = (
+        '[Service]\n'
+        f'EnvironmentFile={environment}\n'
+        f'Environment="SYMPHONY_INSTALL_DIR={install}"\n'
+        f'Environment="ERL_FLAGS=-config {sys_config.with_suffix("")}"\n'
+        'UMask=0077\nExecStart=\n'
+        f'ExecStart={binary} --profiles {manifest} --logs-root {ROOT}/logs-grouped --port 4000 '
+        '--i-understand-that-this-will-be-running-without-the-usual-guardrails\n'
+    ).encode()
+    return before, {GROUPED_SERVICE: config}
 
 
 def activate(configs, before, backup, binary):
+    services = tuple(configs)
     previous = {service: dropin(service).read_bytes() if dropin(service).exists() else None
-                for service in SERVICES}
+                for service in services}
     backup.mkdir(mode=0o700)
     atomic_write(backup / 'before.json', json.dumps(before, indent=2).encode())
     for service, data in previous.items():
         if data is not None:
             atomic_write(backup / f'{service}.conf', data)
     try:
-        systemctl('stop', *SERVICES)
+        systemctl('stop', *services)
         for service, data in configs.items():
             atomic_write(dropin(service), data)
         systemctl('daemon-reload')
-        expected = dict.fromkeys(SERVICES, str(binary))
-        systemctl('start', *SERVICES)
+        expected = dict.fromkeys(services, str(binary))
+        systemctl('start', *services)
         await_healthy(expected)
     except BaseException:
         print('Deploy failed; restoring the previous service configuration.', flush=True)
         try:
             # Try restoration even when stopping an unhealthy candidate reports an error.
             try:
-                systemctl('stop', *SERVICES)
+                systemctl('stop', *services)
             except subprocess.SubprocessError:
                 pass
             for service, data in previous.items():
@@ -184,7 +173,7 @@ def activate(configs, before, backup, binary):
                 else:
                     atomic_write(dropin(service), data)
             systemctl('daemon-reload')
-            systemctl('start', *SERVICES)
+            systemctl('start', *services)
             await_healthy(before)
         except Exception as rollback_error:
             raise RuntimeError(f'Rollback failed; manual recovery required: {rollback_error}') from rollback_error
@@ -193,14 +182,25 @@ def activate(configs, before, backup, binary):
 
 
 def main():
-    if len(sys.argv) != 3 or not re.fullmatch(r'[0-9a-f]{40}', sys.argv[1]):
-        raise ValueError('Usage: deploy_symphony.py <40-character SHA> <candidate directory>')
-    sha, candidate = sys.argv[1], Path(sys.argv[2]).resolve()
+    if len(sys.argv) == 4 and sys.argv[1] == '--prepare-grouped':
+        sha, candidate = parse_candidate(sys.argv[2:])
+        _, configs = prepare_grouped(sha, candidate, ROOT / 'runtime/releases' / sha, initial=True)
+        atomic_write(candidate / 'grouped-90-cd.conf', configs[GROUPED_SERVICE])
+        print(f'Prepared {sha} and grouped-90-cd.conf; service configuration unchanged.', flush=True)
+        return
+    sha, candidate = parse_candidate(sys.argv[1:])
     runtime = ROOT / 'runtime'
+    if not (runtime / 'grouped/cutover-complete').is_file():
+        print('Grouped cutover has not been verified; automatic deployment skipped.', flush=True)
+        return
     (runtime / 'locks').mkdir(mode=0o700, exist_ok=True)
     with (runtime / 'locks/cd.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        before, configs = prepare(sha, candidate, runtime / 'releases' / sha)
+        if not (runtime / 'grouped/cutover-complete').is_file():
+            print('Grouped cutover has not been verified; automatic deployment skipped.', flush=True)
+            return
+        assert_legacy_stopped()
+        before, configs = prepare_grouped(sha, candidate, runtime / 'releases' / sha)
         binary = runtime / 'releases' / sha / 'symphony'
         # shortcut: retain old releases/install directories; add pruning when disk usage requires it.
         if all(path == str(binary) for path in before.values()):
@@ -208,7 +208,20 @@ def main():
             print(f'{sha} is already deployed and healthy; no restart needed.', flush=True)
             return
         activate(configs, before, candidate / 'backup', binary)
-        print(f'Deployed {sha}; all four services are healthy.', flush=True)
+        print(f'Deployed {sha}; five profiles are healthy.', flush=True)
+
+
+def parse_candidate(args):
+    if len(args) != 2 or not re.fullmatch(r'[0-9a-f]{40}', args[0]):
+        raise ValueError('Usage: deploy_symphony.py [--prepare-grouped] <40-character SHA> <candidate directory>')
+    return args[0], Path(args[1]).resolve()
+
+
+def assert_legacy_stopped():
+    for service in LEGACY_SERVICES:
+        state = systemctl('show', service, '-p', 'ActiveState', '--value')
+        if state != 'inactive':
+            raise RuntimeError(f'{service}: expected inactive; found {state}')
 
 
 if __name__ == '__main__':

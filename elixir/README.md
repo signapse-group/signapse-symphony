@@ -120,6 +120,11 @@ Pass a custom workflow file path to `./bin/symphony` when starting the service:
 
 If no path is passed, Symphony defaults to `./WORKFLOW.md`.
 
+Use `--profiles <manifest.json>` to run the named Jira profiles described in the
+[profile runtime contract](docs/profiles.md). Each scheduler keeps independent
+admission, quota and pause state. The [shared dashboard](docs/profile-dashboard.md)
+serves all profiles through a single loopback listener.
+
 Optional flags:
 
 - `--logs-root` tells Symphony to write logs under a different directory (default: `./log`)
@@ -489,6 +494,8 @@ consumer's rollout procedure; do not reset tracker states or restart other route
   credentials and provider authentication aliases out of the Codex child.
 
 ## Web dashboard
+
+For the grouped runtime, see the [five-profile dashboard and API](docs/profile-dashboard.md).
 
 Tracker polling, retry lookups and final admission refreshes run in supervised tasks so slow tracker
 responses cannot block worker session registration. Results are applied to current scheduler state;

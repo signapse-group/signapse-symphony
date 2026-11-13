@@ -1,3 +1,4 @@
 [tools]
-erlang = "28"
+# Burrito needs prebuilt ERTS for this exact OTP version.
+erlang = "28.5.0.6"
 elixir = "1.19.5-otp-28"

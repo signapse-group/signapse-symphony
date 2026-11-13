@@ -1,0 +1,75 @@
+{
+  "assignment_owners_path": "$ASSIGNMENT_OWNERS_DB",
+  "profiles": [
+    {
+      "id": "fe",
+      "workflow": "fe.md",
+      "instructions_root": "instructions/fe",
+      "env": {
+        "JIRA_API_TOKEN": "$FE_TOKEN",
+        "JIRA_EMAIL": "fe@example.invalid",
+        "JIRA_BASE_URL": "https://jira.example.invalid",
+        "SYMPHONY_WORKSPACE_ROOT": "$FE_ROOT",
+        "CONTROL_DB": "$FE_DB",
+        "CODEX_HOME": "$FE_HOME"
+      },
+      "control_path": "$FE_DB"
+    },
+    {
+      "id": "be",
+      "workflow": "be.md",
+      "instructions_root": "instructions/be",
+      "env": {
+        "JIRA_API_TOKEN": "$BE_TOKEN",
+        "JIRA_EMAIL": "be@example.invalid",
+        "JIRA_BASE_URL": "https://jira.example.invalid",
+        "SYMPHONY_WORKSPACE_ROOT": "$BE_ROOT",
+        "CONTROL_DB": "$BE_DB",
+        "CODEX_HOME": "$BE_HOME"
+      },
+      "control_path": "$BE_DB"
+    },
+    {
+      "id": "qa",
+      "workflow": "qa.md",
+      "instructions_root": "instructions/qa",
+      "env": {
+        "JIRA_API_TOKEN": "$QA_TOKEN",
+        "JIRA_EMAIL": "qa@example.invalid",
+        "JIRA_BASE_URL": "https://jira.example.invalid",
+        "SYMPHONY_WORKSPACE_ROOT": "$QA_ROOT",
+        "CONTROL_DB": "$QA_DB",
+        "CODEX_HOME": "$QA_HOME"
+      },
+      "control_path": "$QA_DB"
+    },
+    {
+      "id": "landing",
+      "workflow": "landing.md",
+      "instructions_root": "instructions/landing",
+      "env": {
+        "JIRA_API_TOKEN": "$LANDING_TOKEN",
+        "JIRA_EMAIL": "landing@example.invalid",
+        "JIRA_BASE_URL": "https://jira.example.invalid",
+        "SYMPHONY_WORKSPACE_ROOT": "$LANDING_ROOT",
+        "CONTROL_DB": "$LANDING_DB",
+        "CODEX_HOME": "$LANDING_HOME"
+      },
+      "control_path": "$LANDING_DB"
+    },
+    {
+      "id": "planning",
+      "workflow": "planning.md",
+      "instructions_root": "instructions/planning",
+      "env": {
+        "JIRA_API_TOKEN": "$PLANNING_TOKEN",
+        "JIRA_EMAIL": "planning@example.invalid",
+        "JIRA_BASE_URL": "https://jira.example.invalid",
+        "SYMPHONY_WORKSPACE_ROOT": "$PLANNING_ROOT",
+        "CONTROL_DB": "$PLANNING_DB",
+        "CODEX_HOME": "$PLANNING_HOME"
+      },
+      "control_path": "$PLANNING_DB"
+    }
+  ]
+}

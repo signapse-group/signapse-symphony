@@ -37,15 +37,36 @@ defmodule SymphonyElixir.Tracker do
     adapter().fetch_issues_by_states(states)
   end
 
+  @spec fetch_issues_by_states([String.t()], map()) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_states(states, %{kind: "jira"} = tracker_settings) do
+    SymphonyElixir.Jira.Adapter.fetch_issues_by_states(states, tracker_settings)
+  end
+
+  def fetch_issues_by_states(_states, _tracker_settings), do: {:error, :unsupported_scoped_tracker}
+
   @spec fetch_issues_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_ids(issue_ids) do
     adapter().fetch_issues_by_ids(issue_ids)
   end
 
+  @spec fetch_issues_by_ids([String.t()], map()) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_ids(issue_ids, %{kind: "jira"} = tracker_settings) do
+    SymphonyElixir.Jira.Adapter.fetch_issues_by_ids(issue_ids, tracker_settings)
+  end
+
+  def fetch_issues_by_ids(_issue_ids, _tracker_settings), do: {:error, :unsupported_scoped_tracker}
+
   @spec issue_url(term(), String.t() | nil) :: String.t() | nil
   def issue_url(identifier, stored_url) do
-    with {:ok, %{tracker: tracker_settings}} <- Config.settings(),
-         {:ok, adapter} <- adapter_for_kind(tracker_settings.kind),
+    case Config.settings() do
+      {:ok, %{tracker: tracker_settings}} -> issue_url(identifier, stored_url, tracker_settings)
+      {:error, _reason} -> stored_url
+    end
+  end
+
+  @spec issue_url(term(), String.t() | nil, map()) :: String.t() | nil
+  def issue_url(identifier, stored_url, tracker_settings) do
+    with {:ok, adapter} <- adapter_for_kind(tracker_settings.kind),
          true <- Code.ensure_loaded?(adapter) and function_exported?(adapter, :issue_url, 2) do
       adapter.issue_url(identifier, tracker_settings) || stored_url
     else
@@ -60,7 +81,11 @@ defmodule SymphonyElixir.Tracker do
   """
   @spec bind_agent_tools() :: map()
   def bind_agent_tools do
-    tracker_settings = Config.settings!().tracker
+    bind_agent_tools(Config.settings!().tracker)
+  end
+
+  @spec bind_agent_tools(map()) :: map()
+  def bind_agent_tools(tracker_settings) do
     adapter = adapter_for_settings!(tracker_settings)
 
     %{

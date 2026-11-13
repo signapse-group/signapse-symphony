@@ -18,34 +18,54 @@ defmodule SymphonyElixir.HttpServer do
 
   @spec start_link(keyword()) :: GenServer.on_start() | :ignore
   def start_link(opts \\ []) do
-    case Keyword.get(opts, :port, Config.server_port()) do
+    case Keyword.get(opts, :mode, :legacy) do
+      :profiles -> start_profiles(opts)
+      :legacy -> start_legacy(opts)
+    end
+  end
+
+  defp start_profiles(opts) do
+    port = Keyword.get_lazy(opts, :port, fn -> Application.get_env(:symphony_elixir, :server_port_override, 4000) end)
+    config = Application.get_env(:symphony_elixir, Endpoint, [])
+
+    start_endpoint(
+      server: true,
+      http: [ip: {127, 0, 0, 1}, port: port],
+      https: false,
+      observability_mode: :profiles,
+      snapshot_timeout_ms: Keyword.get(opts, :snapshot_timeout_ms, 500),
+      secret_key_base: configured_secret(Keyword.get(config, :secret_key_base))
+    )
+  end
+
+  defp start_legacy(opts) do
+    case Keyword.get_lazy(opts, :port, &Config.server_port/0) do
       port when is_integer(port) and port >= 0 ->
-        host = Keyword.get(opts, :host, Config.settings!().server.host)
+        host = Keyword.get_lazy(opts, :host, fn -> Config.settings!().server.host end)
         orchestrator = Keyword.get(opts, :orchestrator, Orchestrator)
         snapshot_timeout_ms = Keyword.get(opts, :snapshot_timeout_ms, 15_000)
 
         with {:ok, ip} <- parse_host(host) do
-          endpoint_opts = [
+          start_endpoint(
             server: true,
             http: [ip: ip, port: port],
             url: [host: normalize_host(host)],
+            observability_mode: :legacy,
             orchestrator: orchestrator,
             snapshot_timeout_ms: snapshot_timeout_ms,
             secret_key_base: secret_key_base()
-          ]
-
-          endpoint_config =
-            :symphony_elixir
-            |> Application.get_env(Endpoint, [])
-            |> Keyword.merge(endpoint_opts)
-
-          Application.put_env(:symphony_elixir, Endpoint, endpoint_config)
-          Endpoint.start_link()
+          )
         end
 
       _ ->
         :ignore
     end
+  end
+
+  defp start_endpoint(opts) do
+    config = :symphony_elixir |> Application.get_env(Endpoint, []) |> Keyword.merge(opts)
+    Application.put_env(:symphony_elixir, Endpoint, config)
+    Endpoint.start_link()
   end
 
   @spec bound_port(term()) :: non_neg_integer() | nil
@@ -81,6 +101,11 @@ defmodule SymphonyElixir.HttpServer do
   defp normalize_host(host) when host in ["", nil], do: "127.0.0.1"
   defp normalize_host(host) when is_binary(host), do: host
   defp normalize_host(host), do: to_string(host)
+
+  @default_secret String.duplicate("s", 64)
+
+  defp configured_secret(key) when is_binary(key) and key != @default_secret, do: key
+  defp configured_secret(_key), do: secret_key_base()
 
   defp secret_key_base do
     Base.encode64(:crypto.strong_rand_bytes(@secret_key_bytes), padding: false)

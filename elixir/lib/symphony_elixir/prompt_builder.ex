@@ -3,23 +3,43 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from normalized tracker work item data.
   """
 
-  alias SymphonyElixir.{Config, Workflow}
+  alias SymphonyElixir.{Config, Instructions, Workflow}
+  alias SymphonyElixir.Tracker.Issue
 
   @render_opts [strict_variables: true, strict_filters: true]
 
-  @spec build_prompt(SymphonyElixir.Tracker.Issue.t(), keyword()) :: String.t()
+  @spec build_prompt(Issue.t(), keyword()) :: String.t()
   def build_prompt(issue, opts \\ []) do
-    template =
-      Workflow.current()
-      |> prompt_template!()
-      |> parse_template!()
+    template = Workflow.current() |> prompt_template!() |> parse_template!()
+    render(template, issue, Keyword.get(opts, :attempt), %{})
+  end
 
+  @spec build_prompt(Issue.t(), non_neg_integer() | nil, Instructions.pin()) :: String.t()
+  def build_prompt(issue, attempt, pin) do
+    """
+    Symphony profile #{pin.profile_id} uses instructions revision #{pin.revision}.
+    Read AGENTS.md and the required phase instructions from #{pin.root}.
+    Resolve instructions links in the following workflow relative to #{pin.workflow_path}.
+    The issue workspace is the working directory for task code and outputs.
+
+    """ <> render_instructions(issue, attempt, pin)
+  end
+
+  @doc false
+  @spec render_instructions(Issue.t(), non_neg_integer() | nil, Instructions.prompt_pin()) :: String.t()
+  def render_instructions(issue, attempt, pin) do
+    template = parse_template!(pin.workflow.prompt_template)
+
+    render(template, issue, attempt, %{
+      "profile" => %{"id" => pin.profile_id},
+      "instructions" => %{"root" => pin.root, "revision" => pin.revision}
+    })
+  end
+
+  defp render(template, issue, attempt, context) do
     template
     |> Solid.render!(
-      %{
-        "attempt" => Keyword.get(opts, :attempt),
-        "issue" => issue |> Map.from_struct() |> to_solid_map()
-      },
+      Map.merge(context, %{"attempt" => attempt, "issue" => issue |> Map.from_struct() |> to_solid_map()}),
       @render_opts
     )
     |> IO.iodata_to_binary()

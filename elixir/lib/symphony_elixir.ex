@@ -35,14 +35,7 @@ defmodule SymphonyElixir.Application do
   def start_runtime do
     :ok = SymphonyElixir.LogFile.configure()
 
-    children = [
-      {Phoenix.PubSub, name: SymphonyElixir.PubSub},
-      SymphonyElixir.WorkflowStore,
-      SymphonyElixir.RuntimeControl,
-      SymphonyElixir.AgentRuntimeSupervisor,
-      SymphonyElixir.HttpServer,
-      SymphonyElixir.StatusDashboard
-    ]
+    children = [{Phoenix.PubSub, name: SymphonyElixir.PubSub} | runtime_children()]
 
     Supervisor.start_link(
       children,
@@ -53,8 +46,27 @@ defmodule SymphonyElixir.Application do
 
   @impl true
   def stop(_state) do
-    SymphonyElixir.StatusDashboard.render_offline_status()
+    unless Application.get_env(:symphony_elixir, :profiles) do
+      SymphonyElixir.StatusDashboard.render_offline_status()
+    end
+
     :ok
+  end
+
+  defp runtime_children do
+    case Application.get_env(:symphony_elixir, :profiles) do
+      nil ->
+        [
+          SymphonyElixir.WorkflowStore,
+          SymphonyElixir.RuntimeControl,
+          SymphonyElixir.AgentRuntimeSupervisor,
+          SymphonyElixir.HttpServer,
+          SymphonyElixir.StatusDashboard
+        ]
+
+      profiles ->
+        [{SymphonyElixir.Profile, profiles}, {SymphonyElixir.HttpServer, mode: :profiles}]
+    end
   end
 
   defp start_burrito_cli do

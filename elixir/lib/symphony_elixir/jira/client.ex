@@ -27,6 +27,34 @@ defmodule SymphonyElixir.Jira.Client do
     with {:ok, _settings} <- settings(tracker_settings), do: :ok
   end
 
+  @doc false
+  @spec assignment_scope(map()) ::
+          {:ok,
+           %{
+             base_url: String.t(),
+             project_key: String.t(),
+             issue_types: [String.t()],
+             routing_labels: [String.t()],
+             worker_routes: [String.t()]
+           }}
+          | {:error, term()}
+  def assignment_scope(tracker_settings) do
+    with {:ok, settings} <- settings(tracker_settings),
+         {:ok, %URI{userinfo: nil, host: host} = base_uri} when host not in [nil, ""] <- URI.new(settings.base_url) do
+      {:ok,
+       %{
+         base_url: URI.to_string(%{base_uri | host: String.downcase(host)}),
+         project_key: String.upcase(settings.project_key),
+         issue_types: settings.issue_types |> Enum.map(&normalize_state/1) |> Enum.uniq() |> Enum.sort(),
+         routing_labels: Enum.sort(settings.routing_labels),
+         worker_routes: Enum.sort(settings.worker_routes)
+       }}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_jira_base_url}
+    end
+  end
+
   @spec issue_url(term(), map()) :: String.t() | nil
   def issue_url(identifier, tracker_settings) when is_binary(identifier) do
     with true <- present_string?(identifier),
@@ -49,12 +77,22 @@ defmodule SymphonyElixir.Jira.Client do
 
   @spec fetch_issues_by_states([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_states(states) when is_list(states) do
-    fetch_issues_by_states(states, Config.settings!().tracker, &perform_request/5)
+    fetch_issues_by_states(states, Config.settings!().tracker)
+  end
+
+  @spec fetch_issues_by_states([String.t()], map()) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_states(states, tracker_settings) when is_list(states) do
+    fetch_issues_by_states(states, tracker_settings, &perform_request/5)
   end
 
   @spec fetch_issues_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_ids(ids) when is_list(ids) do
-    fetch_issues_by_ids(ids, Config.settings!().tracker, &perform_request/5)
+    fetch_issues_by_ids(ids, Config.settings!().tracker)
+  end
+
+  @spec fetch_issues_by_ids([String.t()], map()) :: {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_issues_by_ids(ids, tracker_settings) when is_list(ids) do
+    fetch_issues_by_ids(ids, tracker_settings, &perform_request/5)
   end
 
   @spec request(String.t(), String.t(), map(), term(), keyword()) ::
@@ -545,11 +583,12 @@ defmodule SymphonyElixir.Jira.Client do
 
   defp settings(tracker_settings) when is_map(tracker_settings) do
     provider = provider_settings(tracker_settings)
-    base_url = resolve_setting(provider["base_url"], System.get_env("JIRA_BASE_URL"))
-    site_url = resolve_setting(Map.get(provider, "site_url", System.get_env("JIRA_SITE_URL") || base_url), nil)
-    email = resolve_setting(provider["email"], System.get_env("JIRA_EMAIL"))
-    api_token = resolve_setting(provider["api_token"], System.get_env("JIRA_API_TOKEN"))
-    project_key = resolve_setting(provider["project_key"], nil)
+    env = Map.get(tracker_settings, :env)
+    base_url = resolve_setting(provider["base_url"], environment(env, "JIRA_BASE_URL"), env)
+    site_url = resolve_setting(Map.get(provider, "site_url", environment(env, "JIRA_SITE_URL") || base_url), nil, env)
+    email = resolve_setting(provider["email"], environment(env, "JIRA_EMAIL"), env)
+    api_token = resolve_setting(provider["api_token"], environment(env, "JIRA_API_TOKEN"), env)
+    project_key = resolve_setting(provider["project_key"], nil, env)
 
     cond do
       not valid_base_url?(base_url) ->
@@ -611,17 +650,20 @@ defmodule SymphonyElixir.Jira.Client do
   defp provider_settings(%{provider: provider}) when is_map(provider), do: provider
   defp provider_settings(_tracker_settings), do: %{}
 
-  defp resolve_setting(nil, fallback), do: normalize_string(fallback)
+  defp resolve_setting(nil, fallback, _env), do: normalize_string(fallback)
 
-  defp resolve_setting("$" <> env_name, fallback) do
+  defp resolve_setting("$" <> env_name, fallback, env) do
     if valid_env_name?(env_name) do
-      normalize_string(System.get_env(env_name) || fallback)
+      normalize_string(environment(env, env_name) || if(is_nil(env), do: fallback))
     else
       nil
     end
   end
 
-  defp resolve_setting(value, _fallback), do: normalize_string(value)
+  defp resolve_setting(value, _fallback, _env), do: normalize_string(value)
+
+  defp environment(nil, name), do: System.get_env(name)
+  defp environment(env, name) when is_map(env), do: Map.get(env, name)
 
   defp normalize_string(value) when is_binary(value) do
     case String.trim(value) do

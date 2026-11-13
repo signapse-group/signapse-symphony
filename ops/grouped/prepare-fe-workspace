@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+umask 077
+
+workspace_dir=$(pwd -P)
+workspace_root=$(realpath -e "${SYMPHONY_WORKSPACE_ROOT:-/opt/apps/symphony/workspaces-fe-jira}")
+case "$workspace_dir" in
+  "$workspace_root"/*) ;;
+  *) echo 'FE environment preparation requires a workspace under the FE workspace root.' >&2; exit 1 ;;
+esac
+
+: "${SIGNAPSE_UI_APP_ENV:?SIGNAPSE_UI_APP_ENV must reference the shared app environment file}"
+case "$SIGNAPSE_UI_APP_ENV" in
+  /*) ;;
+  *) echo 'SIGNAPSE_UI_APP_ENV must be an absolute path.' >&2; exit 1 ;;
+esac
+if [ ! -f "$SIGNAPSE_UI_APP_ENV" ] || [ ! -r "$SIGNAPSE_UI_APP_ENV" ]; then
+  echo 'The shared FE app environment file is not readable.' >&2
+  exit 1
+fi
+
+env_snapshot=$(mktemp "$workspace_dir/.env.local.XXXXXX")
+trap 'rm -f "$env_snapshot"' EXIT HUP INT TERM
+install -m 600 "$SIGNAPSE_UI_APP_ENV" "$env_snapshot"
+mv -Tf "$env_snapshot" "$workspace_dir/.env.local"

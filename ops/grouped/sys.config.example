@@ -1,0 +1,13 @@
+[
+ {symphony_elixir, [
+  {'Elixir.SymphonyElixirWeb.Endpoint', [
+   {adapter, 'Elixir.Bandit.PhoenixAdapter'},
+   {render_errors, [{formats, [{html, 'Elixir.SymphonyElixirWeb.ErrorHTML'}, {json, 'Elixir.SymphonyElixirWeb.ErrorJSON'}]}, {layout, false}]},
+   {pubsub_server, 'Elixir.SymphonyElixir.PubSub'},
+   {live_view, [{signing_salt, <<"REPLACE_WITH_A_RANDOM_LIVE_VIEW_SALT">>}]},
+   {url, [{scheme, <<"https">>}, {host, <<"symphony.example.invalid">>}, {port, 443}]},
+   {check_origin, [<<"https://symphony.example.invalid">>]},
+   {secret_key_base, <<"REPLACE_WITH_A_RANDOM_SECRET_OF_AT_LEAST_64_BYTES">>}
+  ]}
+ ]}
+].

@@ -1,15 +1,16 @@
 defmodule SymphonyElixir.CLI do
   @moduledoc """
-  Escript entrypoint for running Symphony with an explicit WORKFLOW.md path.
+  Escript entrypoint for running Symphony with a workflow or a profile manifest.
   """
 
-  alias SymphonyElixir.LogFile
+  alias SymphonyElixir.{LogFile, Profile}
 
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
-  @switches [{@acknowledgement_switch, :boolean}, logs_root: :string, port: :integer]
+  @switches [{@acknowledgement_switch, :boolean}, logs_root: :string, port: :integer, profiles: :string]
 
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
   @type deps :: %{
+          optional(:set_profile_manifest) => (Path.t() -> :ok | {:error, term()}),
           file_regular?: (String.t() -> boolean()),
           set_workflow_file_path: (String.t() -> :ok | {:error, term()}),
           set_logs_root: (String.t() -> :ok | {:error, term()}),
@@ -38,22 +39,42 @@ defmodule SymphonyElixir.CLI do
   @spec evaluate([String.t()], deps()) :: :ok | {:error, String.t()}
   def evaluate(args, deps \\ runtime_deps()) do
     case OptionParser.parse(args, strict: @switches) do
-      {opts, [], []} ->
+      {opts, paths, []} when length(paths) <= 1 ->
         with :ok <- require_guardrails_acknowledgement(opts),
+             {:ok, source} <- source(opts, paths),
              :ok <- maybe_set_logs_root(opts, deps),
              :ok <- maybe_set_server_port(opts, deps) do
-          run(Path.expand("WORKFLOW.md"), deps)
-        end
-
-      {opts, [workflow_path], []} ->
-        with :ok <- require_guardrails_acknowledgement(opts),
-             :ok <- maybe_set_logs_root(opts, deps),
-             :ok <- maybe_set_server_port(opts, deps) do
-          run(workflow_path, deps)
+          run_source(source, deps)
         end
 
       _ ->
         {:error, usage_message()}
+    end
+  end
+
+  defp source(opts, paths) do
+    case {Keyword.get_values(opts, :profiles), paths} do
+      {[], []} -> {:ok, {:workflow, "WORKFLOW.md"}}
+      {[], [workflow]} -> {:ok, {:workflow, workflow}}
+      {[manifest], []} when manifest != "" -> {:ok, {:profiles, manifest}}
+      _ -> {:error, usage_message()}
+    end
+  end
+
+  defp run_source({:workflow, path}, deps), do: run(path, deps)
+
+  defp run_source({:profiles, manifest}, deps) do
+    path = Path.expand(manifest)
+
+    with :ok <- Map.get(deps, :set_profile_manifest, &set_profile_manifest/1).(path),
+         {:ok, _started} <- deps.ensure_all_started.() do
+      :ok
+    else
+      {:error, reason} when is_atom(reason) ->
+        {:error, "Failed to start Symphony with profile manifest #{path}: #{reason}"}
+
+      {:error, _reason} ->
+        {:error, "Failed to start Symphony with profile manifest #{path}"}
     end
   end
 
@@ -78,7 +99,7 @@ defmodule SymphonyElixir.CLI do
 
   @spec usage_message() :: String.t()
   defp usage_message do
-    "Usage: symphony [--logs-root <path>] [--port <port>] [path-to-WORKFLOW.md]"
+    "Usage: symphony [--logs-root <path>] [--port <port>] [path-to-WORKFLOW.md | --profiles <manifest.json>]"
   end
 
   @spec runtime_deps() :: deps()
@@ -86,10 +107,17 @@ defmodule SymphonyElixir.CLI do
     %{
       file_regular?: &File.regular?/1,
       set_workflow_file_path: &SymphonyElixir.Workflow.set_workflow_file_path/1,
+      set_profile_manifest: &set_profile_manifest/1,
       set_logs_root: &set_logs_root/1,
       set_server_port_override: &set_server_port_override/1,
       ensure_all_started: ensure_all_started
     }
+  end
+
+  defp set_profile_manifest(path) do
+    with {:ok, profiles} <- Profile.load_runtime(path) do
+      Application.put_env(:symphony_elixir, :profiles, profiles)
+    end
   end
 
   defp maybe_set_logs_root(opts, deps) do

@@ -27,6 +27,17 @@ defmodule SymphonyElixirWeb.Endpoint do
 
   plug(Plug.MethodOverride)
   plug(Plug.Head)
-  plug(Plug.Session, @session_options)
+  @session Plug.Session.init(@session_options)
+  @secure_session Plug.Session.init(Keyword.put(@session_options, :secure, true))
+
+  plug(:session)
   plug(SymphonyElixirWeb.Router)
+
+  defp session(conn, _opts) do
+    if config(:observability_mode) == :profiles and config(:url)[:scheme] == "https" do
+      Plug.Session.call(conn, @secure_session)
+    else
+      Plug.Session.call(conn, @session)
+    end
+  end
 end
