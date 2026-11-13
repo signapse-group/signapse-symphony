@@ -99,7 +99,8 @@ defmodule SymphonyElixir.HostResourcesTest do
     high = timeline(now, 3, 500_000, 0)
     :ets.insert(HostResources, {:samples, high})
     assert :pressured = HostResources.pressure(nil, 17_000)
-    assert {:ok, %{delta: %{interval_ms: 5_000, memory_events_high: 3, memory_some_us: 500_000}}} = HostResources.snapshot(nil)
+    assert {:ok, %{delta: delta}} = HostResources.snapshot(nil)
+    assert %{interval_ms: 5_000, memory_events_high: 3, memory_some_us: 500_000} = delta
 
     :ets.insert(HostResources, {:samples, timeline(now, 0, 500_000, 999_999)})
     assert :clear = HostResources.pressure(nil, 17_000)

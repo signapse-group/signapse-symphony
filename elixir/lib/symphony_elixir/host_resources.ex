@@ -90,46 +90,46 @@ defmodule SymphonyElixir.HostResources do
   defp classify(recent, baseline, since) do
     recent
     |> Enum.zip(tl(recent) ++ [baseline])
-    |> Enum.reduce_while({0, 0, 0, 0}, fn {sample, previous}, {measured_ms, memory_us, io_us, oom} = totals ->
-      case interval(sample, previous) do
-        nil ->
-          {:halt, :unknown}
+    |> Enum.reduce_while({0, 0, 0, 0}, &accumulate_interval(&1, &2, since))
+    |> classify_totals()
+  end
 
-        delta when previous.sampled_at_ms >= since ->
-          reclaimed_us = if delta.memory_events_high > 0, do: delta.memory_some_us, else: 0
-          {:cont, {measured_ms + delta.interval_ms, memory_us + reclaimed_us, io_us + delta.io_full_us, oom + delta.oom_kill}}
+  defp accumulate_interval({sample, previous}, {ms, memory_us, io_us, oom} = totals, since) do
+    case interval(sample, previous) do
+      nil ->
+        {:halt, :unknown}
 
-        _ ->
-          {:cont, totals}
-      end
-    end)
-    |> case do
-      {measured_ms, memory_us, io_us, oom} when measured_ms > 0 ->
-        if oom > 0 or memory_us * 100 >= measured_ms * 1_000 * @memory_stall_percent or io_us * 100 >= measured_ms * 1_000 * @io_stall_percent do
-          :pressured
-        else
-          :clear
-        end
+      delta when previous.sampled_at_ms >= since ->
+        reclaim_us = if delta.memory_events_high > 0, do: delta.memory_some_us, else: 0
+        {:cont, {ms + delta.interval_ms, memory_us + reclaim_us, io_us + delta.io_full_us, oom + delta.oom_kill}}
 
       _ ->
-        :unknown
+        {:cont, totals}
     end
   end
+
+  defp classify_totals({ms, memory_us, io_us, oom}) when ms > 0 do
+    memory_pressured = memory_us >= ms * 10 * @memory_stall_percent
+    io_pressured = io_us >= ms * 10 * @io_stall_percent
+    if oom > 0 or memory_pressured or io_pressured, do: :pressured, else: :clear
+  end
+
+  defp classify_totals(_), do: :unknown
 
   defp interval(sample, previous) do
     with %{sampled_at_ms: previous_ms, cgroup: cgroup, runtime_cgroup: runtime_cgroup} <- previous,
          %{cgroup: ^cgroup, runtime_cgroup: ^runtime_cgroup} <- sample,
          true <- Map.get(sample, :cgroup_inode) == Map.get(previous, :cgroup_inode),
-         true <- (sample.sampled_at_ms - previous_ms) in 1..@max_gap_ms do
-      delta = Map.new(@counters, &{&1, Map.fetch!(sample, &1) - Map.fetch!(previous, &1)})
-
-      if Enum.all?(delta, fn {_key, count} -> count >= 0 end) do
-        Map.put(delta, :interval_ms, sample.sampled_at_ms - previous_ms)
-      end
+         ms when ms in 1..@max_gap_ms <- sample.sampled_at_ms - previous_ms,
+         delta = Map.new(@counters, &{&1, Map.fetch!(sample, &1) - Map.fetch!(previous, &1)}),
+         true <- Enum.all?(delta, &nonnegative_counter?/1) do
+      Map.put(delta, :interval_ms, ms)
     else
       _ -> nil
     end
   end
+
+  defp nonnegative_counter?({_key, count}), do: count >= 0
 
   defp read_sample(proc_root, cgroup_root, browser_lock) do
     started = System.monotonic_time(:millisecond)
@@ -258,8 +258,9 @@ defmodule SymphonyElixir.HostResources do
          {minor, ""} <- Integer.parse(minor, 16),
          {^inode, ""} <- Integer.parse(file_inode) do
       # Linux File.Stat reports the encoded dev_t in major_device.
-      encoded = (major &&& 0xFFF) <<< 8 ||| (major &&& 0xFFFFF000) <<< 32 ||| (minor &&& 0xFF) ||| (minor &&& 0xFFFFFF00) <<< 12
-      encoded == device
+      major_bits = (major &&& 0xFFF) <<< 8 ||| (major &&& 0xFFFFF000) <<< 32
+      minor_bits = (minor &&& 0xFF) ||| (minor &&& 0xFFFFFF00) <<< 12
+      (major_bits ||| minor_bits) == device
     else
       _ -> false
     end
