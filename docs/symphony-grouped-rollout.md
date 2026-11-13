@@ -208,11 +208,15 @@ HTTPS mapping, remove it with `tailscale serve --https=PORT off` for
 with the corresponding saved target. Do not reset Serve globally.
 
 The automated deploy script skips until the operator creates
-`runtime/grouped/cutover-complete` after those checks. It then requires all
-legacy units inactive, changes only `symphony-grouped.service`, and rolls back
-its drop-in and binary if any profile's health fails. Remove the marker under
-the deployment lock before rolling back topology. Keep an authenticated
-operator session for the entire handoff.
+`runtime/grouped/cutover-complete` after those checks. Before creating the
+marker, confirm the nightly from the reviewed main revision passed its native
+Linux x86-64 smoke test and contains the expected OTP version receipt. The
+deploy workflow checks that receipt and the artifact checksum before it
+connects to the host. Deployment requires all legacy units inactive, changes
+only `symphony-grouped.service`, and restores its previous drop-in and binary
+if any profile's health fails. Remove the marker under the deployment lock
+before rolling back topology. Keep an authenticated operator session for the
+entire handoff.
 
 Rollback reverses the ownership handoff: record latest desired states, drain
 the grouped runtime, reconcile writes/sessions, stop it, and restore the legacy
