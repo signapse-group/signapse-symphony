@@ -138,7 +138,7 @@ jobs:
           - target: macos_x86_64
             runner: macos-15-intel
           - target: macos_arm64
-            runner: macos-15
+            runner: macos-26
 
     steps:
       - name: Checkout Linux x86_64 smoke script
