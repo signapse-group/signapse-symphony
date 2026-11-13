@@ -1,2 +1,3 @@
 ops/grouped/prepare-fe-workspace text eol=lf
 ops/grouped/prepare-qa-workspace text eol=lf
+scripts/configure_user_slice.py text eol=lf
