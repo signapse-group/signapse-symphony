@@ -169,7 +169,11 @@ defmodule SymphonyElixirWeb.Presenter do
       worker_host: Map.get(entry, :worker_host),
       workspace_path: Map.get(entry, :workspace_path)
     }
+    |> put_retry_reason(entry[:reason_code])
   end
+
+  defp put_retry_reason(payload, nil), do: payload
+  defp put_retry_reason(payload, reason), do: Map.put(payload, :reason_code, reason)
 
   defp blocked_entry_payload(entry) do
     %{

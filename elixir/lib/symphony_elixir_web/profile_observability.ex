@@ -1,11 +1,19 @@
 defmodule SymphonyElixirWeb.ProfileObservability do
   @moduledoc false
 
-  alias SymphonyElixir.{Instructions, Profile, RuntimeControl, WorkflowStore}
+  alias SymphonyElixir.{HostResources, Instructions, Profile, RuntimeControl, WorkflowStore}
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   @control_keys ~w(enabled mode desired_state changed_at version active_turns quota_checked_at)a
   @session_inspection "Session cleanup requires inspection"
+  @retry_messages %{
+    "session_heartbeat_expired" => "Session heartbeat expired",
+    "host_pressure_stall" => "Worker stalled during host resource pressure",
+    "stalled" => "Worker stalled without Codex activity",
+    "provider_quota_exhausted" => "Codex provider quota exhausted",
+    "provider_quota_unavailable" => "Could not read Codex provider quota",
+    "resource_busy" => "Waiting for shared browser resources"
+  }
 
   @spec mode() :: :profiles | :legacy
   def mode, do: Endpoint.config(:observability_mode, :legacy)
@@ -19,7 +27,7 @@ defmodule SymphonyElixirWeb.ProfileObservability do
 
   @spec overview() :: map()
   def overview do
-    profiles = Profile.ids() |> Task.async_stream(&summary/1, max_concurrency: 5) |> Enum.map(fn {:ok, summary} -> summary end)
+    profiles = read_profiles(Profile.ids(), &read_summary/1)
 
     health =
       case Enum.count(profiles, &(&1.health == "healthy")) do
@@ -32,12 +40,16 @@ defmodule SymphonyElixirWeb.ProfileObservability do
   end
 
   @spec summary(String.t()) :: map()
-  def summary(id), do: summary(id, scheduler_call(id, :snapshot))
+  def summary(id), do: hd(read_profiles([id], &read_summary/1))
+
+  defp read_summary(id), do: summary(id, scheduler_call(id, :snapshot))
 
   @spec state(String.t()) :: map()
-  def state(id) do
+  def state(id), do: hd(read_profiles([id], &read_state/1))
+
+  defp read_state(id) do
     snapshot = scheduler_call(id, :snapshot)
-    generated_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    generated_at = generated_at()
     summary = summary(id, snapshot)
 
     payload =
@@ -48,6 +60,49 @@ defmodule SymphonyElixirWeb.ProfileObservability do
 
     Map.merge(payload, summary)
   end
+
+  defp read_profiles(ids, read) do
+    SymphonyElixirWeb.ProfileTasks
+    |> Task.Supervisor.async_stream_nolink(ids, &safe_read_profile(&1, read),
+      max_concurrency: 5,
+      timeout: 3 * snapshot_timeout(),
+      on_timeout: :kill_task,
+      zip_input_on_exit: true
+    )
+    |> Enum.map(fn
+      {:ok, result} -> result
+      {:exit, {id, reason}} -> unavailable_profile(id, reason)
+    end)
+  catch
+    :exit, _reason -> Enum.map(ids, &unavailable_profile(&1, :unavailable))
+  end
+
+  defp safe_read_profile(id, read) do
+    read.(id)
+  rescue
+    _error -> unavailable_profile(id, :unavailable)
+  catch
+    :exit, {:timeout, _} -> unavailable_profile(id, :timeout)
+    _kind, _reason -> unavailable_profile(id, :unavailable)
+  end
+
+  defp unavailable_profile(id, reason) do
+    error = snapshot_error(reason)
+
+    %{
+      profile_id: id,
+      health: "unavailable",
+      reason: error.code,
+      error: error,
+      workflow_revision: nil,
+      instructions_revision: nil,
+      max_concurrent_agents: nil,
+      generated_at: generated_at(),
+      runtime_control: public_control(id, %{database_error: true})
+    }
+  end
+
+  defp generated_at, do: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
   @spec issue(String.t(), String.t()) :: {:ok, map()} | {:error, :issue_not_found}
   def issue(id, identifier) do
@@ -128,6 +183,7 @@ defmodule SymphonyElixirWeb.ProfileObservability do
       profile_id: id,
       health: if(reason, do: "unavailable", else: "healthy"),
       reason: reason,
+      browser_lock: browser_lock(id),
       admission_error: admission_error(snapshot),
       workflow_revision: config.revision,
       workflow_reload_error: config.reload_error,
@@ -136,6 +192,15 @@ defmodule SymphonyElixirWeb.ProfileObservability do
       runtime_control: control
     }
   end
+
+  defp browser_lock(id) when id in ["fe", "qa"] do
+    case HostResources.snapshot(nil) do
+      {:ok, %{browser_lock: lock}} when lock in [:locked, :unlocked] -> Atom.to_string(lock)
+      _ -> nil
+    end
+  end
+
+  defp browser_lock(_id), do: nil
 
   defp admission_error(%{admission_error: reason}) when reason in [:provider_quota_exhausted, :provider_quota_unavailable], do: Atom.to_string(reason)
   defp admission_error(_snapshot), do: nil
@@ -210,7 +275,7 @@ defmodule SymphonyElixirWeb.ProfileObservability do
       mode: mode,
       desired_state: Map.get(control, :desired_state, desired_state(mode)),
       source: safe_source(Map.get(control, :source)),
-      reason: public_control_reason(mode),
+      reason: public_control_reason(mode, control[:source]),
       services: if(health, do: %{id => %{status: health}}, else: %{}),
       database_error: if(control[:database_error], do: "runtime_control_unavailable"),
       quota_summary: if(control[:quota_summary], do: "Quota check completed"),
@@ -222,12 +287,13 @@ defmodule SymphonyElixirWeb.ProfileObservability do
   defp desired_state(mode) when mode in [:pausing, :paused, :checking_quota], do: "paused"
   defp desired_state(_mode), do: "unknown"
 
-  defp safe_source(source) when source in ["manual", "quota", "quota_check", "resume"], do: source
+  defp safe_source(source) when source in ["manual", "quota", "quota_check", "resume", "infrastructure"], do: source
   defp safe_source(_source), do: nil
 
-  defp public_control_reason(:checking_quota), do: "Checking Codex quota"
-  defp public_control_reason(:pausing), do: "Waiting for active workers to finish"
-  defp public_control_reason(_mode), do: nil
+  defp public_control_reason(:checking_quota, _source), do: "Checking Codex quota"
+  defp public_control_reason(mode, "infrastructure") when mode in [:paused, :pausing], do: "Infrastructure retry limit reached"
+  defp public_control_reason(:pausing, _source), do: "Waiting for active workers to finish"
+  defp public_control_reason(_mode, _source), do: nil
 
   defp scheduler_call(id, request) do
     # The scoped servers use Registry names. Bound this read so a slow profile cannot stall the dashboard.
@@ -261,9 +327,12 @@ defmodule SymphonyElixirWeb.ProfileObservability do
   end
 
   defp sanitize_entry(entry) do
+    message = Map.get(@retry_messages, entry[:reason_code])
+
     entry
     |> Map.update(:handoff_error, nil, fn reason -> if reason, do: @session_inspection end)
-    |> Map.update(:error, nil, fn reason -> if reason, do: "See service logs for details" end)
+    |> Map.update(:error, message, fn reason -> message || if(reason, do: "See service logs for details") end)
+    |> Map.put(:reason_code, if(message, do: entry[:reason_code]))
     |> Map.put(:last_codex_message, nil)
   end
 end

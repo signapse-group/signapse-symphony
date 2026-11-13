@@ -57,6 +57,9 @@ Important boundary:
 - Create deterministic per-issue workspaces and preserve them across runs.
 - Stop active runs when issue state changes make them ineligible.
 - Recover from transient failures with exponential backoff.
+- Grouped runtimes can pause a profile after repeated infrastructure failures while retaining
+  its retry records and leaving other profiles available. Pressure-based stall classification
+  requires fresh measurements from the worker's own host.
 - Load runtime behavior from a repository-owned `WORKFLOW.md` contract.
 - Expose operator-visible observability (at minimum structured logs).
 - Support tracker/filesystem-driven restart recovery without requiring a persistent database; exact

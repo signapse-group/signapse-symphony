@@ -21,6 +21,7 @@ defmodule SymphonyElixir.RuntimeControl do
           source: String.t() | nil,
           changed_at: String.t() | nil,
           version: non_neg_integer(),
+          retry_generation: non_neg_integer(),
           active_turns: non_neg_integer(),
           quota_summary: String.t() | nil,
           quota_checked_at: String.t() | nil,
@@ -68,6 +69,11 @@ defmodule SymphonyElixir.RuntimeControl do
   @spec persist_retry(String.t(), map(), GenServer.server()) :: :ok | {:error, term()}
   def persist_retry(runtime_id, retry, server \\ __MODULE__) when is_binary(runtime_id) and is_map(retry) do
     call(server, {:persist_retry, runtime_id, retry})
+  end
+
+  @spec pause_with_retry(String.t(), map(), String.t(), GenServer.server()) :: :ok | {:error, term()}
+  def pause_with_retry(runtime_id, retry, reason, server) do
+    call(server, {:pause_with_retry, runtime_id, retry, reason})
   end
 
   @spec delete_retry(String.t(), String.t(), GenServer.server()) :: :ok | {:error, term()}
@@ -241,6 +247,19 @@ defmodule SymphonyElixir.RuntimeControl do
     {:reply, clean_reply(reply), state}
   end
 
+  def handle_call({:pause_with_retry, runtime_id, retry, reason}, _from, state) do
+    previous_version = current_version(state)
+
+    reply =
+      with_connection(state, fn conn ->
+        transaction(conn, fn -> pause_with_retry_in_transaction(conn, state.profile_id, runtime_id, retry, reason) end)
+      end)
+
+    state = log_control_transition(reply, previous_version, state)
+    state = cancel_superseded_check(reply, state)
+    {:reply, if(match?({:ok, _}, reply), do: :ok, else: reply), state}
+  end
+
   def handle_call({:delete_retry, runtime_id, issue_id}, _from, state) do
     reply = with_connection(state, &delete_retry_database(&1, runtime_id, issue_id))
     {:reply, clean_reply(reply), state}
@@ -350,6 +369,7 @@ defmodule SymphonyElixir.RuntimeControl do
              conn,
              "CREATE TABLE IF NOT EXISTS active_turns (token TEXT PRIMARY KEY, runtime_id TEXT NOT NULL, started_at TEXT NOT NULL)"
            ),
+         :ok <- Sqlite3.execute(conn, "CREATE TABLE IF NOT EXISTS runtime_retry_generation (id INTEGER PRIMARY KEY CHECK (id = 1), generation INTEGER NOT NULL)"),
          :ok <-
            Sqlite3.execute(
              conn,
@@ -397,8 +417,12 @@ defmodule SymphonyElixir.RuntimeControl do
   end
 
   defp read_status(conn, profile_id \\ nil) do
-    with {:ok, [mode, reason, source, changed_at, version, quota_summary, quota_checked_at]} <-
-           query_one(conn, "SELECT mode, reason, source, changed_at, version, quota_summary, quota_checked_at FROM runtime_control WHERE id = 1"),
+    with {:ok, [mode, reason, source, changed_at, version, quota_summary, quota_checked_at, retry_generation]} <-
+           query_one(conn, """
+           SELECT mode, reason, source, changed_at, version, quota_summary, quota_checked_at,
+                  COALESCE((SELECT generation FROM runtime_retry_generation WHERE id = 1), 0)
+           FROM runtime_control WHERE id = 1
+           """),
          {:ok, [active_turns]} <- reported_active_turns(conn, profile_id) do
       {:ok,
        %{
@@ -407,6 +431,7 @@ defmodule SymphonyElixir.RuntimeControl do
          source: source,
          changed_at: changed_at,
          version: version,
+         retry_generation: retry_generation,
          active_turns: active_turns,
          quota_summary: quota_summary,
          quota_checked_at: quota_checked_at,
@@ -430,6 +455,17 @@ defmodule SymphonyElixir.RuntimeControl do
 
   defp pause_database(conn, reason, source, profile_id) do
     transaction(conn, fn -> pause_in_transaction(conn, reason, source, profile_id) end)
+  end
+
+  defp pause_with_retry_in_transaction(conn, profile_id, runtime_id, retry, reason) do
+    with {:ok, status} <- read_status(conn, profile_id),
+         current? = is_nil(retry[:retry_generation]) or retry.retry_generation == status.retry_generation,
+         {:ok, payload} <- retry_payload(retry),
+         {:ok, changed?} <- write_retry_if_changed(conn, runtime_id, retry.issue_id, payload) do
+      if current? and changed? and status.mode not in [:paused, :pausing],
+        do: pause_in_transaction(conn, reason, "infrastructure", profile_id),
+        else: {:ok, status}
+    end
   end
 
   defp pause_in_transaction(conn, reason, source, profile_id) do
@@ -497,7 +533,13 @@ defmodule SymphonyElixir.RuntimeControl do
   end
 
   defp complete_resume_transition(conn, {:ok, %{available?: true} = quota}) do
-    update_control(conn, "running", nil, "resume", quota_summary(quota), DateTime.utc_now() |> DateTime.to_iso8601())
+    with :ok <-
+           Sqlite3.execute(conn, """
+           INSERT INTO runtime_retry_generation (id, generation) VALUES (1, 1)
+           ON CONFLICT(id) DO UPDATE SET generation = generation + 1
+           """) do
+      update_control(conn, "running", nil, "resume", quota_summary(quota), DateTime.utc_now() |> DateTime.to_iso8601())
+    end
   end
 
   defp complete_resume_transition(conn, {:ok, %{available?: false} = quota}) do
@@ -506,13 +548,13 @@ defmodule SymphonyElixir.RuntimeControl do
   end
 
   defp complete_resume_transition(conn, {:error, reason}) do
-    summary = "Unavailable: #{inspect(reason)}"
-    update_control(conn, "paused", "Unable to verify Codex quota: #{inspect(reason)}", "quota_check", summary, DateTime.utc_now() |> DateTime.to_iso8601())
+    quota_unavailable(conn, AppServer.quota_failure_code(reason))
   end
 
-  defp complete_resume_transition(conn, other) do
-    summary = "Unavailable: invalid response #{inspect(other)}"
-    update_control(conn, "paused", "Unable to verify Codex quota: invalid response #{inspect(other)}", "quota_check", summary, DateTime.utc_now() |> DateTime.to_iso8601())
+  defp complete_resume_transition(conn, _other), do: quota_unavailable(conn, :invalid_response)
+
+  defp quota_unavailable(conn, code) do
+    update_control(conn, "paused", "Unable to verify Codex quota: #{code}", "quota_check", "Unavailable: #{code}", DateTime.utc_now() |> DateTime.to_iso8601())
   end
 
   defp update_control(conn, mode, reason, source, quota_summary, quota_checked_at) do
@@ -573,18 +615,46 @@ defmodule SymphonyElixir.RuntimeControl do
   defp finish_drain_update(_conn, _mode, _active_turns), do: :ok
 
   defp persist_retry_database(conn, runtime_id, retry) do
-    payload =
-      retry
-      |> Map.take([:issue_id, :identifier, :issue_url, :attempt, :error, :worker_host, :workspace_path, :session_unit, :session_invocation, :infrastructure_failures, :retry_priority])
-      |> atom_keys_to_strings()
-      |> Jason.encode()
-
-    with {:ok, json} <- payload do
+    with {:ok, json} <- retry_payload(retry) do
       execute(
         conn,
         "INSERT INTO pending_retries (runtime_id, issue_id, payload) VALUES (?1, ?2, ?3) ON CONFLICT(runtime_id, issue_id) DO UPDATE SET payload = excluded.payload",
         [runtime_id, retry.issue_id, json]
       )
+    end
+  end
+
+  defp retry_payload(retry) do
+    retry
+    |> Map.take([
+      :issue_id,
+      :identifier,
+      :issue_url,
+      :attempt,
+      :error,
+      :reason_code,
+      :worker_host,
+      :workspace_path,
+      :session_unit,
+      :session_invocation,
+      :infrastructure_failures,
+      :retry_priority,
+      :retry_generation
+    ])
+    |> atom_keys_to_strings()
+    |> Jason.encode()
+  end
+
+  defp write_retry_if_changed(conn, runtime_id, issue_id, payload) do
+    sql = """
+    INSERT INTO pending_retries (runtime_id, issue_id, payload) VALUES (?1, ?2, ?3)
+    ON CONFLICT(runtime_id, issue_id) DO UPDATE SET payload = excluded.payload
+    WHERE pending_retries.payload != excluded.payload
+    """
+
+    with :ok <- execute(conn, sql, [runtime_id, issue_id, payload]),
+         {:ok, [changes]} <- query_one(conn, "SELECT changes()") do
+      {:ok, changes > 0}
     end
   end
 
@@ -772,6 +842,7 @@ defmodule SymphonyElixir.RuntimeControl do
   defp disabled_reply(:pending_retries), do: {:ok, []}
   defp disabled_reply({:pending_retries, _id}), do: {:ok, []}
   defp disabled_reply({:persist_retry, _id, _retry}), do: :ok
+  defp disabled_reply({:pause_with_retry, _id, _retry, _reason}), do: :ok
   defp disabled_reply({:delete_retry, _id, _issue}), do: :ok
   defp disabled_reply(:acquire_turn), do: {:ok, "disabled"}
   defp disabled_reply({:release_turn, _token}), do: {:ok, disabled_status()}
@@ -786,6 +857,7 @@ defmodule SymphonyElixir.RuntimeControl do
       source: nil,
       changed_at: nil,
       version: 0,
+      retry_generation: 0,
       active_turns: 0,
       quota_summary: nil,
       quota_checked_at: nil,
@@ -986,9 +1058,9 @@ defmodule SymphonyElixir.RuntimeControl do
   defp read_quota(reader) do
     reader.()
   rescue
-    exception -> {:error, {:quota_check_failed, Exception.message(exception)}}
+    _exception -> {:error, :quota_check_failed}
   catch
-    kind, reason -> {:error, {:quota_check_failed, {kind, reason}}}
+    _kind, _reason -> {:error, :quota_check_failed}
   end
 
   defp finish_resume_check(%{resume_check: %{version: version} = check} = state, version) do

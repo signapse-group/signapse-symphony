@@ -1,0 +1,52 @@
+#!/bin/sh
+set -eu
+root=/opt/apps/symphony/workspaces-qa-jira
+workspace=$(pwd -P)
+if [ "$(dirname "$workspace")" != "$root" ]; then
+    echo "Playwright MCP requires a direct QA workspace." >&2
+    exit 2
+fi
+config="$workspace/playwright.agents.config.mjs"
+if [ -L "$config" ]; then
+    echo "Prepare playwright.agents.config.mjs in this workspace before using Playwright MCP." >&2
+    exit 2
+fi
+name=${workspace##*/}
+case "$name" in
+    ''|*[!A-Za-z0-9_-]*) echo "Invalid QA workspace name." >&2; exit 2 ;;
+esac
+artifacts="$workspace/artifacts"
+durable="/opt/apps/symphony/logs-qa/evidence/$name"
+set --
+if [ -L "$artifacts" ]; then
+    # The workspace link points outside the writable workspace mount.
+    if [ ! -d "$durable" ] ||
+       [ "$(realpath -e -- "$durable")" != "$durable" ] ||
+       [ "$(realpath -e -- "$artifacts")" != "$durable" ]; then
+        echo "QA artifacts must point to this workspace's durable evidence directory." >&2
+        exit 2
+    fi
+    set -- --bind "$durable" "$durable"
+elif printf '%s\n' "$name" | grep -Eq '^SIGN-[0-9]+$'; then
+    echo "Prepare this QA issue workspace's durable artifacts link first." >&2
+    exit 2
+fi
+runtime=/opt/apps/symphony/runtime
+node="$runtime/node-v24.21.0-linux-x64/bin/node"
+cli="$workspace/node_modules/playwright/cli.js"
+preload="$(dirname "$(realpath -e "$0")")/playwright-browser-lease.cjs"
+lock="$runtime/locks/signapse-ui-integration.lock"
+state="$runtime/locks/browser-lease"
+if [ ! -r "$preload" ] || [ ! -r "$runtime/browser_lease.py" ] || [ ! -r "$lock" ]; then
+    echo "Host browser lease files are unavailable." >&2
+    exit 1
+fi
+exec /usr/bin/env -i PATH="$(dirname "$node"):/usr/bin:/bin" HOME=/tmp LANG=C.UTF-8 \
+    PLAYWRIGHT_BROWSERS_PATH="$runtime/qa-browser-cache" \
+    LD_LIBRARY_PATH="$runtime/playwright-deps/usr/lib/x86_64-linux-gnu" \
+    FONTCONFIG_FILE="$runtime/playwright-fonts.conf" \
+    SYMPHONY_BROWSER_LOCK="$lock" SYMPHONY_BROWSER_LEASE="$runtime/browser_lease.py" \
+    /usr/bin/bwrap --unshare-net --die-with-parent --ro-bind / / --dev /dev --proc /proc \
+    --tmpfs /tmp --tmpfs /run --tmpfs /home --tmpfs "$runtime/secrets" \
+    --bind "$workspace" "$workspace" --bind "$state" "$state" "$@" --chdir "$workspace" \
+    "$node" --require "$preload" "$cli" run-test-mcp-server --headless --config "$config"

@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+umask 077
+
+runtime=/opt/apps/symphony/runtime
+lock="$runtime/locks/signapse-ui-integration.lock"
+if ! [ "${SIGNAPSE_UI_INTEGRATION_LOCK:-$lock}" -ef "$lock" ]; then
+  echo 'FE browser checks require the host browser lock.' >&2
+  exit 1
+fi
+workspace_dir=$(realpath -e "${1:-.}")
+if [ "$#" -gt 0 ]; then shift; fi
+workspace_root=$(realpath -e "${SYMPHONY_WORKSPACE_ROOT:-/opt/apps/symphony/workspaces-fe-jira}")
+case "$workspace_dir" in
+  "$workspace_root"/*|/opt/apps/symphony/runtime/repos/signapse-ui|/opt/apps/symphony/runtime/signapse-ui-source) ;;
+  *) echo 'P0 browser checks require a Signapse UI workspace under the FE workspace root.' >&2; exit 1 ;;
+esac
+export PATH="$runtime/node-v24.21.0-linux-x64/bin:$PATH"
+export TMPDIR="${TMPDIR:-$runtime/tmp-fe-testing}"
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-$runtime/playwright-deps/usr/lib/x86_64-linux-gnu}"
+export FONTCONFIG_FILE="${FONTCONFIG_FILE:-$runtime/playwright-fonts.conf}"
+cd "$workspace_dir"
+exec /usr/bin/python3 /usr/local/lib/signapse-cleanup/managed_temp.py \
+  /usr/bin/python3 "$runtime/browser_lease.py" run "$lock" pnpm test:browser "$@"

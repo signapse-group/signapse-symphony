@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   require Logger
   alias SymphonyElixir.{Codex.DynamicTool, Codex.SessionProcess, Config, PathSafety, Profile, RuntimeControl, SSH}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.HostResources
   alias SymphonyElixir.WorkflowStore.Snapshot
 
   @initialize_id 1
@@ -100,7 +101,9 @@ defmodule SymphonyElixir.Codex.AppServer do
     code = primary_failure_code(failure.reason)
 
     Logger.error(
-      "Codex operation failed before session cleanup #{context} thread_id=#{log_identifier(session[:thread_id])} session_unit=#{log_identifier(get_in(session, [:containment, :unit]))} kind=#{failure.kind} reason=#{inspect(code)}"
+      "Codex operation failed before session cleanup #{context} thread_id=#{log_identifier(session[:thread_id])} " <>
+        "session_unit=#{log_identifier(get_in(session, [:containment, :unit]))} attempt=#{inspect(opts[:attempt])} " <>
+        "kind=#{failure.kind} reason=#{inspect(code)}#{heartbeat_diagnostics(code, session)}"
     )
   rescue
     _ -> :ok
@@ -115,6 +118,9 @@ defmodule SymphonyElixir.Codex.AppServer do
     do: elem(reason, 0)
 
   defp primary_failure_code(_reason), do: :unclassified
+
+  defp heartbeat_diagnostics(:session_heartbeat_expired, session), do: " host_resources=#{inspect(HostResources.snapshot(session[:worker_host]))}"
+  defp heartbeat_diagnostics(_code, _session), do: ""
 
   defp log_identifier(value) when is_binary(value), do: inspect(value, printable_limit: 128)
   defp log_identifier(nil), do: "n/a"
@@ -189,17 +195,26 @@ defmodule SymphonyElixir.Codex.AppServer do
         stop_port(port)
       end
     end
+  rescue
+    ArgumentError -> {:error, :port_closed}
+    _error -> {:error, :quota_probe_failed}
+  catch
+    _kind, _reason -> {:error, :quota_probe_failed}
   end
 
   @spec check_admission_quota(session() | Snapshot.t() | nil) ::
           :ok | {:error, :provider_quota_exhausted | :provider_quota_unavailable}
-  def check_admission_quota(nil), do: :ok
+  def check_admission_quota(source), do: check_admission_quota(source, nil)
 
-  def check_admission_quota(source) do
-    source |> read_admission_rate_limits() |> quota_availability()
+  @spec check_admission_quota(session() | Snapshot.t() | nil, map() | nil) ::
+          :ok | {:error, :provider_quota_exhausted | :provider_quota_unavailable}
+  def check_admission_quota(nil, _context), do: :ok
+
+  def check_admission_quota(source, context) do
+    source |> read_admission_rate_limits() |> quota_availability(context)
   rescue
     # A port may close after initializing and before the next request is sent.
-    ArgumentError -> {:error, :provider_quota_unavailable}
+    ArgumentError -> quota_availability({:error, :port_closed}, context)
   end
 
   defp read_admission_rate_limits(%{port: port, codex: codex}),
@@ -217,13 +232,39 @@ defmodule SymphonyElixir.Codex.AppServer do
         result
 
       {:DOWN, ^monitor, :process, _pid, _reason} ->
-        {:error, :provider_quota_unavailable}
+        {:error, :quota_probe_exited}
     end
   end
 
-  defp quota_availability({:ok, %{available?: true}}), do: :ok
-  defp quota_availability({:ok, %{available?: false}}), do: {:error, :provider_quota_exhausted}
-  defp quota_availability({:error, _reason}), do: {:error, :provider_quota_unavailable}
+  defp quota_availability({:ok, %{available?: true}}, _context), do: :ok
+  defp quota_availability({:ok, %{available?: false}}, _context), do: {:error, :provider_quota_exhausted}
+
+  defp quota_availability({:error, reason}, context) do
+    Logger.warning(
+      "Codex quota probe unavailable issue_id=#{log_identifier(context && context[:issue_id])} " <>
+        "issue_identifier=#{log_identifier(context && context[:identifier])} " <>
+        "thread_id=#{log_identifier(context && context[:thread_id])} attempt=#{inspect(context && context[:attempt])} reason=#{quota_failure_code(reason)}"
+    )
+
+    {:error, :provider_quota_unavailable}
+  end
+
+  @quota_failure_codes [
+    :response_timeout,
+    :port_closed,
+    :quota_probe_exited,
+    :session_heartbeat_expired,
+    :quota_check_timeout,
+    :quota_check_interrupted_by_restart
+  ]
+
+  @doc false
+  @spec quota_failure_code(term()) :: atom()
+  def quota_failure_code(reason) when reason in @quota_failure_codes, do: reason
+  def quota_failure_code({:port_exit, _}), do: :port_exit
+  def quota_failure_code({:quota_check_interrupted, _}), do: :quota_check_interrupted
+  def quota_failure_code(:codex_rate_limits_missing), do: :invalid_response
+  def quota_failure_code(_reason), do: :probe_error
 
   defp read_port_rate_limits(port, deadline) do
     with :ok <- request_rate_limits(port),

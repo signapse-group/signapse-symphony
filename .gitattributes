@@ -1,2 +1,6 @@
 ops/grouped/prepare-fe-workspace text eol=lf
 ops/grouped/prepare-qa-workspace text eol=lf
+ops/grouped/playwright-mcp text eol=lf
+ops/grouped/run-fe-browser text eol=lf
+scripts/configure_user_slice.py text eol=lf
+scripts/install_grouped_browser.py text eol=lf
