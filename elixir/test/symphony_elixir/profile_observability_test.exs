@@ -63,11 +63,23 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
         codex_total_tokens: 3
       }
 
+      held =
+        Map.merge(item, %{
+          issue_id: "issue-held",
+          identifier: "FE-456",
+          state: "In Review",
+          workspace_path: "/recorded/workspaces/fe/retained-issue",
+          session_id: "session-held",
+          last_codex_event: :turn_completed,
+          last_codex_timestamp: ~U[2026-11-13 10:59:32Z],
+          handoff_error: "private fixture-secret in stop failure"
+        })
+
       %{
         readiness: if(id == "qa", do: %{ready: false, error: :instructions_missing}, else: %{ready: true, error: nil}),
         admission_error: admission_error(id),
         instructions_revision: "fixture-#{id}",
-        running: [item],
+        running: if(id == "fe", do: [item, held], else: [item]),
         retrying: [],
         waiting: [],
         waiting_updated_at: DateTime.utc_now(),
@@ -149,12 +161,39 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
       assert payload["max_concurrent_agents"] == cap
       assert payload["instructions_revision"] == "fixture-#{id}"
       assert byte_size(payload["workflow_revision"]) == 64
-      assert payload["counts"] == %{"running" => 1, "retrying" => 0, "blocked" => 0, "waiting" => 0}
+      assert payload["counts"] == %{"running" => 1, "retrying" => 0, "blocked" => if(id == "fe", do: 1, else: 0), "waiting" => 0}
       assert payload["runtime_control"]["services"] == %{id => %{"status" => "online"}}
       assert payload["runtime_control"]["desired_state"] == "running"
       refute response(conn, 200) =~ "fixture-secret"
       refute response(conn, 200) =~ "fixture-token"
     end
+  end
+
+  test "held sessions appear only in the selected profile's blocked rows" do
+    state = json_response(get(build_conn(), "/api/v1/profiles/fe/state"), 200)
+    assert [%{"issue_identifier" => "FE-123"}] = state["running"]
+    assert [%{"issue_identifier" => "FE-456", "error" => "Session cleanup requires inspection"}] = state["blocked"]
+
+    conn = get(build_conn(), "/api/v1/profiles/fe/issues/FE-456")
+    issue = json_response(conn, 200)
+    assert issue["status"] == "blocked"
+    assert issue["running"] == nil
+    assert issue["last_error"] == "Session cleanup requires inspection"
+    assert issue["blocked"]["session_id"] == "session-held"
+    assert issue["blocked"]["state"] == "In Review"
+    assert issue["blocked"]["last_event"] == "turn_completed"
+    assert issue["blocked"]["last_event_at"] == "2026-11-13T10:59:32Z"
+    assert issue["blocked"]["blocked_at"] == nil
+    assert issue["workspace"]["path"] == "/recorded/workspaces/fe/retained-issue"
+    refute response(conn, 200) =~ "fixture-secret"
+    assert json_response(get(build_conn(), "/api/v1/profiles/be/issues/FE-456"), 404)["error"]["code"] == "issue_not_found"
+
+    {:ok, view, _html} = live(build_conn(), "/profiles/fe")
+    assert has_element?(view, ".data-table-running", "FE-123")
+    refute has_element?(view, ".data-table-running", "FE-456")
+    assert has_element?(view, "#blocked-sessions", "FE-456")
+    assert has_element?(view, "#blocked-sessions", "Session cleanup requires inspection")
+    assert has_element?(view, "a[href='/api/v1/profiles/fe/issues/FE-456']", "JSON details")
   end
 
   test "issue and refresh routes stay scoped and reject invalid or omitted profile" do

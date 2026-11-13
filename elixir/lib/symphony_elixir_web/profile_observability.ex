@@ -5,6 +5,7 @@ defmodule SymphonyElixirWeb.ProfileObservability do
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   @control_keys ~w(enabled mode desired_state changed_at version active_turns quota_checked_at)a
+  @session_inspection "Session cleanup requires inspection"
 
   @spec mode() :: :profiles | :legacy
   def mode, do: Endpoint.config(:observability_mode, :legacy)
@@ -247,17 +248,21 @@ defmodule SymphonyElixirWeb.ProfileObservability do
   defp snapshot_error(_error), do: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}
 
   defp sanitize_snapshot(snapshot) do
+    {held, running} = snapshot.running |> Enum.map(&sanitize_entry/1) |> Enum.split_with(& &1[:handoff_error])
+    blocked = Enum.map(Map.get(snapshot, :blocked, []), &sanitize_entry/1)
+    held = Enum.map(held, &Map.merge(&1, %{error: @session_inspection, blocked_at: nil}))
+
     snapshot
-    |> Map.update!(:running, &Enum.map(&1, fn entry -> sanitize_entry(entry) end))
+    |> Map.put(:running, running)
     |> Map.update!(:retrying, &Enum.map(&1, fn entry -> sanitize_entry(entry) end))
-    |> Map.update(:blocked, [], &Enum.map(&1, fn entry -> sanitize_entry(entry) end))
+    |> Map.put(:blocked, blocked ++ held)
     |> Map.put(:rate_limits, nil)
     |> Map.delete(:runtime_control)
   end
 
   defp sanitize_entry(entry) do
     entry
-    |> Map.update(:handoff_error, nil, fn reason -> if reason, do: "Session cleanup requires inspection" end)
+    |> Map.update(:handoff_error, nil, fn reason -> if reason, do: @session_inspection end)
     |> Map.update(:error, nil, fn reason -> if reason, do: "See service logs for details" end)
     |> Map.put(:last_codex_message, nil)
   end

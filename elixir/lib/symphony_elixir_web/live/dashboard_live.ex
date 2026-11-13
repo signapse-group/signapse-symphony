@@ -320,7 +320,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <article class="metric-card">
             <p class="metric-label">Blocked</p>
             <p class="metric-value numeric"><%= @payload.counts.blocked %></p>
-            <p class="metric-detail">Issues paused for operator input or approval.</p>
+            <p class="metric-detail"><%= if @profile, do: "Issues waiting for operator input, approval, or session inspection.", else: "Issues paused for operator input or approval." %></p>
           </article>
 
           <article class="metric-card">
@@ -479,11 +479,11 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <% end %>
         </section>
 
-        <section class="section-card">
+        <section id="blocked-sessions" class="section-card">
           <div class="section-header">
             <div>
               <h2 class="section-title">Blocked sessions</h2>
-              <p class="section-copy">Issues paused because Codex requested operator input or approval.</p>
+              <p class="section-copy"><%= if @profile, do: "Issues waiting for operator input, approval, or confirmation that a session stopped.", else: "Issues paused because Codex requested operator input or approval." %></p>
             </div>
           </div>
 
