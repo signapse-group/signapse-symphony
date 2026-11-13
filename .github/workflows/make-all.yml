@@ -45,6 +45,9 @@ jobs:
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
 
       - name: Verify make all including real SSH phase handoffs
+        env:
+          SYMPHONY_TEST_BIND_INSTRUCTIONS: "1"
+          SYMPHONY_TEST_SYSTEMD: "1"
         run: python3 ../scripts/run_session_tests.py make all
 
       - name: Verify containment, deployment script and CI gating

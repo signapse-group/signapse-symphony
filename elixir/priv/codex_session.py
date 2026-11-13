@@ -202,7 +202,8 @@ def launch(source, unit, command, workspace, shell_arg, instructions_root, mode=
                 any(c.isspace() or c in ':%\\\"\'' for c in instructions_root) or
                 not Path(instructions_root).is_dir()):
             return 3
-        args += ["--property=BindReadOnlyPaths=" + instructions_root]
+        if not readonly_instructions(instructions_root):
+            args += ["--property=BindReadOnlyPaths=" + instructions_root]
     group = Path("/proc/self/cgroup").read_text().strip().removeprefix("0::")
     owner = group.rsplit("/", 1)[-1]
     if owner.endswith(".service") and not owner.startswith("user@"):
@@ -212,16 +213,25 @@ def launch(source, unit, command, workspace, shell_arg, instructions_root, mode=
     # Copy the filtered caller environment by name so secret values never enter argv.
     args += ["--setenv=" + name for name in names]
     args += [sys.executable, "-u", "-c", "import base64,sys;exec(base64.b64decode(sys.argv[1]))",
-             source, "guard", unit, command, workspace, shell_arg, json.dumps(names), mode]
+             source, "guard", unit, command, workspace, shell_arg, json.dumps(names), mode, instructions_root]
     os.execvp(args[0], args)
 
 
-def guard(unit, command, workspace, shell_arg, names, mode="session"):
+def readonly_instructions(path):
+    try:
+        return bool(os.statvfs(path).f_flag & os.ST_RDONLY)
+    except OSError:
+        return False
+
+
+def guard(unit, command, workspace, shell_arg, names, mode="session", instructions_root=""):
     environment = {name: os.environ[name] for name in names if name in os.environ}
     props = properties(unit)
     group = Path("/proc/self/cgroup").read_text().strip().removeprefix("0::")
     if not identity(unit, props) or props["ControlGroup"] != group or not props.get("InvocationID"):
         return 3
+    if instructions_root and not readonly_instructions(instructions_root):
+        exit_guard(3, "SYMPHONY_SESSION_EXIT reason=instructions_not_readonly")
     child = None
     last_heartbeat = time.monotonic()
 
@@ -265,7 +275,7 @@ def main():
     if mode == "launch":
         return launch(source, unit, *args)
     if mode == "guard":
-        return guard(unit, args[0], args[1], args[2], json.loads(args[3]), args[4])
+        return guard(unit, args[0], args[1], args[2], json.loads(args[3]), *args[4:])
     if mode == "stop":
         return stop(unit, args[0], args[1:] == ["prestart"])
     return 3

@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.GroupedRuntimeTest do
   use ExUnit.Case, async: false
 
+  import SymphonyElixir.TestSupport, only: [instructions_probe_root: 1, mount_instruction_fixture: 2]
+
   alias SymphonyElixir.{AssignmentOwners, HttpServer, Instructions, Orchestrator, Profile, RuntimeControl}
   alias SymphonyElixirWeb.Endpoint
 
@@ -38,7 +40,7 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
   @tag timeout: 120_000
   test "five contained workers load local instructions and wait at their own caps", %{tmp_dir: root} do
     if systemd_user?() do
-      run_probe(root)
+      run_probe(instructions_probe_root(root))
     end
   end
 
@@ -102,7 +104,7 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
     old = package_path(root, "fe")
     old_revision = Path.basename(old)
     instructions = instructions_path(root, "fe")
-    stage_package(instructions, "fe", "probe-v2")
+    stage_package(root, "fe", "probe-v2")
     File.mkdir_p!(Path.join([instructions, "revisions", "invalid"]))
     assert {:error, _} = Instructions.activate("fe", "invalid")
     assert {:ok, %{revision: ^old_revision}} = Instructions.status("fe")
@@ -152,12 +154,13 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
 
     case System.get_env("SYMPHONY_TEST_PINNED_PACKAGES") do
       nil ->
-        stage_package(instructions, id, "pinned-probe-v1")
+        stage_package(root, id, "pinned-probe-v1")
         File.write!(Path.join(instructions, "active"), "pinned-probe-v1\n")
 
       dir ->
         File.mkdir_p!(Path.dirname(instructions))
         File.cp_r!(Path.join(dir, id), instructions)
+        mount_instruction_fixture(root, package_path(root, id))
     end
 
     %Profile{
@@ -182,7 +185,7 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
   end
 
   defp stage_package(root, id, revision) do
-    dir = Path.join([root, "revisions", revision])
+    dir = Path.join([instructions_path(root, id), "revisions", revision])
     File.mkdir_p!(dir)
     manifest = Jason.encode!(%{profile_id: id, revision: revision, workflow: "WORKFLOW.md", required_files: []})
 
@@ -195,6 +198,8 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
       File.write!(file, body)
       File.chmod!(file, 0o444)
     end
+
+    mount_instruction_fixture(root, dir)
   end
 
   defp write_probe_script(root) do

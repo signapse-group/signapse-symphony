@@ -1,14 +1,18 @@
 defmodule SymphonyElixir.ProfileWorkspaceTest do
   use ExUnit.Case, async: false
 
+  import SymphonyElixir.TestSupport, only: [instructions_probe_root: 1, mount_instruction_fixture: 2]
+
   alias SymphonyElixir.Workspace
 
   @tag :tmp_dir
   test "a contained hook cannot write its pin and its background subprocess is stopped", %{tmp_dir: root} do
     if System.get_env("SYMPHONY_TEST_SYSTEMD") == "1" do
+      root = instructions_probe_root(root)
       base = snapshot(root, "qa")
       File.mkdir_p!(base.instructions.root)
       File.write!(Path.join(base.instructions.root, "policy"), "pinned")
+      mount_instruction_fixture(root, base.instructions.root)
       env = Map.merge(base.env, Map.take(System.get_env(), ~w(PATH HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS)))
       recipient = self()
 
