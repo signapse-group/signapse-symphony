@@ -25,6 +25,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
+  @quota_retry_delay_ms 5_000
   @instructions_check_interval_ms 60_000
   @handoff_recovery "Phase boundary handoff requires operator confirmation"
   # Slightly above the dashboard render interval so "checking now…" can render.
@@ -57,6 +58,7 @@ defmodule SymphonyElixir.Orchestrator do
       :config_error,
       :recovery_error,
       :assignment_scope,
+      :quota_hold,
       instructions: Instructions,
       task_supervisor: SymphonyElixir.TaskSupervisor,
       running: %{},
@@ -345,6 +347,15 @@ defmodule SymphonyElixir.Orchestrator do
     block_issue_from_entry(state, issue_id, running_entry, error)
   end
 
+  defp retry_agent_down(state, issue_id, running_entry, _session_id, {:quota_admission_deferred, reason})
+       when reason in [:provider_quota_exhausted, :provider_quota_unavailable] do
+    metadata = boundary_recovery(running_entry.issue, running_entry)
+    metadata = if running_entry[:boundary_completed], do: metadata, else: %{metadata | error: nil}
+    revision = running_entry.profile_snapshot.revision
+    state = record_quota_hold(state, running_entry.issue, reason, revision)
+    schedule_issue_retry(state, issue_id, max(metadata.attempt, 1), quota_retry_metadata(metadata, reason))
+  end
+
   defp retry_agent_down(state, issue_id, running_entry, session_id, reason) do
     Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
 
@@ -468,12 +479,12 @@ defmodule SymphonyElixir.Orchestrator do
     state = update_candidate(state, issue.id, result)
 
     case result do
+      {:quota_deferred, %Issue{} = refreshed, reason} ->
+        state = record_quota_hold(state, refreshed, reason, tracker_revision(state))
+        defer_admission(state, refreshed, attempt, quota_retry_metadata(metadata, reason))
+
       {:ok, %Issue{} = refreshed} ->
-        if admission_ready?(state, refreshed, attempt, metadata) do
-          {:noreply, do_dispatch_issue(state, refreshed, attempt, metadata[:worker_host], metadata)}
-        else
-          defer_admission(state, issue, attempt, metadata)
-        end
+        finish_dispatch_admission(state, refreshed, attempt, metadata)
 
       {:skip, %Issue{} = refreshed} when is_integer(attempt) ->
         handle_retry_issue_lookup(refreshed, state, issue.id, attempt, metadata)
@@ -494,6 +505,22 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:error, reason} ->
         {:noreply, schedule_issue_retry(state, issue_id, attempt + 1, Map.put(metadata, :error, retry_error(metadata, "retry poll failed: #{inspect(reason)}")))}
+    end
+  end
+
+  defp finish_dispatch_admission(state, issue, attempt, metadata) do
+    case quota_hold_reason(state) do
+      nil ->
+        state = %{state | quota_hold: nil}
+
+        if admission_ready?(state, issue, attempt, metadata) do
+          {:noreply, do_dispatch_issue(state, issue, attempt, metadata[:worker_host], metadata)}
+        else
+          defer_admission(state, issue, attempt, metadata)
+        end
+
+      reason ->
+        defer_admission(state, issue, attempt, quota_retry_metadata(metadata, reason))
     end
   end
 
@@ -531,6 +558,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp update_candidate(%{candidate_snapshot: nil} = state, _id, _result), do: state
 
+  defp update_candidate(state, id, {:quota_deferred, %Issue{} = refreshed, _reason}),
+    do: update_candidate(state, id, {:ok, refreshed})
+
   defp update_candidate(state, id, {:ok, %Issue{} = refreshed}) do
     snapshot = state.candidate_snapshot
     issues = Enum.map(snapshot.issues, fn issue -> if issue.id == id, do: refreshed, else: issue end)
@@ -559,6 +589,28 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp defer_admission(state, issue, attempt, metadata) do
     {:noreply, schedule_issue_retry(state, issue.id, attempt, metadata)}
+  end
+
+  defp record_quota_hold(%State{profile_snapshot: %{revision: revision}} = state, issue, reason, revision) do
+    Logger.warning("Provider quota admission deferred #{issue_context(issue)} reason=#{reason}")
+    state = %{state | quota_hold: {reason, System.monotonic_time(:millisecond) + @quota_retry_delay_ms}}
+    notify_dashboard(state)
+    state
+  end
+
+  defp record_quota_hold(state, _issue, _reason, _revision), do: state
+
+  defp quota_hold_reason(%State{quota_hold: {reason, until_ms}}) do
+    if System.monotonic_time(:millisecond) < until_ms, do: reason
+  end
+
+  defp quota_hold_reason(_state), do: nil
+
+  defp quota_admission_error(%State{quota_hold: {reason, _until_ms}}), do: reason
+  defp quota_admission_error(_state), do: nil
+
+  defp quota_retry_metadata(metadata, reason) do
+    Map.put(metadata, :error, retry_error(metadata, Atom.to_string(reason)))
   end
 
   defp finish_poll(state) do
@@ -1345,7 +1397,8 @@ defmodule SymphonyElixir.Orchestrator do
     issues
     |> sort_issues_for_dispatch()
     |> Enum.reduce(state, fn issue, state_acc ->
-      if should_dispatch_issue?(issue, state_acc, dispatch_states, terminal_states) do
+      if is_nil(quota_hold_reason(state_acc)) and
+           should_dispatch_issue?(issue, state_acc, dispatch_states, terminal_states) do
         dispatch_issue(state_acc, issue)
       else
         state_acc
@@ -1407,6 +1460,7 @@ defmodule SymphonyElixir.Orchestrator do
     case state.candidate_snapshot do
       %{issues: issues, updated_at: updated_at} ->
         ready? = dispatch_ready?(state)
+        quota_held? = not is_nil(quota_admission_error(state))
         dispatch_states = dispatch_state_set(state)
         terminal_states = terminal_state_set(state)
 
@@ -1416,7 +1470,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> Enum.filter(fn issue ->
             ready? and eligible_for_dispatch?(issue, state, dispatch_states, terminal_states) and
               not retrying_issue?(state, issue.id) and
-              not dispatch_capacity_available?(issue, state)
+              (quota_held? or not dispatch_capacity_available?(issue, state))
           end)
           |> Enum.map(fn issue ->
             %{
@@ -1544,7 +1598,10 @@ defmodule SymphonyElixir.Orchestrator do
   defp refresh_issue_for_dispatch(issue, allowed_states, state, fetcher) do
     case revalidate_issue_for_dispatch(issue, fetcher, state, allowed_states) do
       {:ok, %Issue{} = refreshed_issue} ->
-        {:ok, refreshed_issue}
+        case AppServer.check_admission_quota(state.profile_snapshot) do
+          :ok -> {:ok, refreshed_issue}
+          {:error, reason} -> {:quota_deferred, refreshed_issue, reason}
+        end
 
       {:skip, :missing} ->
         Logger.info("Skipping dispatch; issue no longer active or visible: #{issue_context(issue)}")
@@ -1945,6 +2002,13 @@ defmodule SymphonyElixir.Orchestrator do
   defp notify_dashboard(%State{profile_id: id}), do: ObservabilityPubSub.broadcast_update(id)
 
   defp handle_active_retry(state, issue, attempt, metadata) do
+    case quota_hold_reason(state) do
+      nil -> dispatch_active_retry(state, issue, attempt, metadata)
+      reason -> defer_admission(state, issue, attempt, quota_retry_metadata(metadata, reason))
+    end
+  end
+
+  defp dispatch_active_retry(state, issue, attempt, metadata) do
     if retry_candidate_issue?(issue, terminal_state_set(state), state) and
          dispatch_slots_available?(issue, state) and retry_priority_available?(state, issue.id, metadata) and
          retry_worker_available?(state, metadata) do
@@ -2349,6 +2413,7 @@ defmodule SymphonyElixir.Orchestrator do
        waiting: waiting,
        waiting_updated_at: waiting_updated_at,
        readiness: readiness(state, runtime_control),
+       admission_error: quota_admission_error(state),
        instructions_revision: state.instructions_revision,
        max_concurrent_agents: state.max_concurrent_agents,
        runtime_control: runtime_control,
@@ -2559,7 +2624,8 @@ defmodule SymphonyElixir.Orchestrator do
     with {:ok, snapshot} <- WorkflowStore.snapshot(id),
          {:ok, scope} <- JiraClient.assignment_scope(snapshot.settings.tracker),
          true <- snapshot.settings.worker.ssh_hosts == [] do
-      state = %{state | profile_snapshot: snapshot, assignment_scope: scope, config_error: nil}
+      quota_hold = if tracker_revision(state) == snapshot.revision, do: state.quota_hold
+      state = %{state | profile_snapshot: snapshot, assignment_scope: scope, config_error: nil, quota_hold: quota_hold}
       apply_runtime_config(state, snapshot.settings)
     else
       false -> %{state | config_error: :profile_remote_workspace_unsupported, candidate_snapshot: nil}

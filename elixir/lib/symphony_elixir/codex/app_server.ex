@@ -183,14 +183,35 @@ defmodule SymphonyElixir.Codex.AppServer do
 
     with {:ok, port} <- open_port(System.tmp_dir!(), nil, dynamic_tool_binding, false, launch) do
       try do
-        with :ok <- send_initialize(port, deadline),
-             :ok <- request_rate_limits(port),
-             {:ok, result} <- await_response(port, @rate_limits_read_id, deadline) do
-          quota_result(result)
-        end
+        with :ok <- send_initialize(port, deadline), do: read_port_rate_limits(port, deadline)
       after
         stop_port(port)
       end
+    end
+  end
+
+  @spec check_admission_quota(map() | nil) ::
+          :ok | {:error, :provider_quota_exhausted | :provider_quota_unavailable}
+  def check_admission_quota(nil), do: :ok
+
+  def check_admission_quota(%{port: port, codex: codex}) do
+    port
+    |> read_port_rate_limits(response_deadline(codex.read_timeout_ms))
+    |> quota_availability()
+  rescue
+    ArgumentError -> {:error, :provider_quota_unavailable}
+  end
+
+  def check_admission_quota(snapshot), do: snapshot |> read_rate_limits() |> quota_availability()
+
+  defp quota_availability({:ok, %{available?: true}}), do: :ok
+  defp quota_availability({:ok, %{available?: false}}), do: {:error, :provider_quota_exhausted}
+  defp quota_availability({:error, _reason}), do: {:error, :provider_quota_unavailable}
+
+  defp read_port_rate_limits(port, deadline) do
+    with :ok <- request_rate_limits(port),
+         {:ok, result} <- await_response(port, @rate_limits_read_id, deadline) do
+      quota_result(result)
     end
   end
 

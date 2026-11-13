@@ -45,6 +45,9 @@ defmodule SymphonyElixir.AgentRunner do
       {:error, :session_heartbeat_expired} ->
         exit(:session_heartbeat_expired)
 
+      {:error, {:quota_admission_deferred, _reason} = deferred} when is_map(snapshot) ->
+        exit(deferred)
+
       {:error, reason} ->
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
 
@@ -197,7 +200,8 @@ defmodule SymphonyElixir.AgentRunner do
   defp do_run_codex_turns(app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
     prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
 
-    with {:ok, turn_session} <-
+    with :ok <- check_continuation_quota(app_session, turn_number),
+         {:ok, turn_session} <-
            AppServer.run_turn(
              app_session,
              prompt,
@@ -237,6 +241,16 @@ defmodule SymphonyElixir.AgentRunner do
       end
     end
   end
+
+  defp check_continuation_quota(%{profile_snapshot: snapshot} = session, turn_number)
+       when not is_nil(snapshot) and turn_number > 1 do
+    case AppServer.check_admission_quota(session) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:quota_admission_deferred, reason}}
+    end
+  end
+
+  defp check_continuation_quota(_session, _turn_number), do: :ok
 
   defp finish_assignment(session, workspace, issue, refreshed, recipient, opts) do
     snapshot = opts[:profile_snapshot]
