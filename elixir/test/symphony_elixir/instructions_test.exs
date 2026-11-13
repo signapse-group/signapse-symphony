@@ -141,7 +141,8 @@ defmodule SymphonyElixir.InstructionsTest do
     write(package, "instructions.json", Jason.encode!(%{manifest | required_files: [0]}))
     assert {:error, :invalid_instructions_manifest} = Instructions.validate("fe", package)
 
-    assert {:error, :invalid_instructions_git_revision} = Instructions.prepare("fe", "HEAD", root, "WORKFLOW.md", [])
+    assert {:error, :invalid_instructions_git_revision} =
+             Instructions.prepare("fe", "missing-instructions-ref", source, "WORKFLOW.md", [])
     previous_path = System.get_env("PATH")
     System.put_env("PATH", root)
 
