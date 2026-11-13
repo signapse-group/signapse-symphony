@@ -66,6 +66,13 @@ able to initialize. After `browser_close`, check that the fixture web server
 has stopped and that a new caller can acquire. On launcher death, check
 `cgroup.events` for the recorded session before reconciling a stale owner file.
 
+The Linux MCP fixture uses the pinned QA source and installed Chromium without
+reusing live task workspaces or the production lock. Set
+`SYMPHONY_BROWSER_TEST_QA` to the QA source directory,
+`SYMPHONY_BROWSER_TEST_NODE_MODULES` to the Playwright 1.63.0 dependencies,
+and `PLAYWRIGHT_BROWSERS_PATH` to the installed browser cache. Run
+`python3 -m unittest discover -s scripts -p test_grouped_browser_mcp.py -v`.
+
 ## Rollback
 
 Pause and drain the same profiles and verify no browser session or recorded

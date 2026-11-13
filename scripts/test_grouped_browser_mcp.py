@@ -65,7 +65,8 @@ class GroupedBrowserMcpTests(unittest.TestCase):
             'projects': [{'name': 'chromium'}],
             'webServer': {'command': 'node web.cjs', 'url': f'http://127.0.0.1:{self.port}'},
         }
-        (self.workspace / 'playwright.agents.config.cjs').write_text('module.exports = ' + json.dumps(config))
+        self.config = self.workspace / 'playwright.agents.config.cjs'
+        self.config.write_text('module.exports = ' + json.dumps(config))
         (self.workspace / 'seed.spec.cjs').write_text(
             "const {test, expect} = require('@playwright/test');\n"
             f"test('fixture', async ({{page}}) => {{ await page.goto('http://127.0.0.1:{self.port}'); "
@@ -76,7 +77,7 @@ class GroupedBrowserMcpTests(unittest.TestCase):
     def mcp(self):
         env = os.environ | {'SYMPHONY_BROWSER_LEASE': str(self.hold), 'SYMPHONY_BROWSER_LOCK': str(self.lock)}
         command = ['node', '--require', str(PRELOAD), str(self.modules / 'playwright/cli.js'),
-                   'run-test-mcp-server', '--headless', '--config', str(self.workspace / 'playwright.agents.config.cjs')]
+                   'run-test-mcp-server', '--headless', '--config', str(self.config)]
         with subprocess.Popen(command, cwd=self.workspace, env=env, stdin=subprocess.PIPE,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
             try:
@@ -163,3 +164,56 @@ class GroupedBrowserMcpTests(unittest.TestCase):
             cleared = subprocess.run(command, input=b'release\n', capture_output=True, timeout=5)
             self.assertEqual(cleared.returncode, 0)
             self.assertFalse(self.owner.exists())
+
+    def test_terminated_cli_cleans_up_detached_child_before_releasing(self):
+        ready = self.workspace / 'detached-pid'
+        workload = (
+            'import pathlib,subprocess,sys,time\n'
+            'child = subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)\n'
+            'pathlib.Path(sys.argv[1]).write_text(str(child.pid))\n'
+            'time.sleep(30)\n'
+        )
+        command = [sys.executable, str(self.helper), 'run', str(self.lock), sys.executable, '-c', workload, str(ready)]
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as holder:
+            try:
+                deadline = time.monotonic() + 6
+                while not ready.exists() and holder.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(ready.exists())
+                pid = int(ready.read_text())
+                self.assertEqual(self.cli_probe().returncode, 73)
+                holder.terminate()
+                _, stderr = holder.communicate(timeout=8)
+                self.assertNotEqual(holder.returncode, 0)
+                self.assertIn(b'interrupted', stderr)
+                self.assertFalse(Path(f'/proc/{pid}').exists())
+                self.assertFalse(self.owner.exists())
+                self.assertEqual(self.cli_probe().returncode, 0)
+            finally:
+                if holder.poll() is None:
+                    holder.terminate()
+                    holder.communicate(timeout=8)
+
+    def test_bad_config_does_not_fence_browser_slot(self):
+        self.config.write_text('throw new Error("invalid fixture config");\n')
+        with self.mcp() as process:
+            result = self.tool(process, 2, 'test_run', {})
+            self.assertIn('invalid fixture config', result['content'][0]['text'])
+            self.assertFalse(self.owner.exists())
+            self.assertEqual(self.cli_probe().returncode, 0)
+
+    def test_failed_teardown_returns_error_and_preserves_fence(self):
+        teardown = self.workspace / 'teardown.cjs'
+        teardown.write_text('module.exports = () => { throw new Error("fixture teardown failure"); };\n')
+        with self.config.open('a') as config:
+            config.write('\nmodule.exports.globalTeardown = "./teardown.cjs";\n')
+        with self.mcp() as process:
+            paused = self.setup_planner(process, 2)
+            self.assertFalse(paused.get('isError'), paused)
+            closed = self.tool(process, 3, 'browser_close', {'intent': 'close fixture'})
+            self.assertTrue(closed.get('isError'), closed)
+            self.assertIn('cleanup could not be confirmed', closed['content'][0]['text'])
+            self.assertTrue(self.owner.exists())
+            denied = self.setup_planner(process, 4)
+            self.assertTrue(denied.get('isError'), denied)
+            self.assertIn('resource_busy', denied['content'][0]['text'])

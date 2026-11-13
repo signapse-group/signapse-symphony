@@ -37,6 +37,10 @@ cli="$workspace/node_modules/playwright/cli.js"
 preload="$(dirname "$(realpath -e "$0")")/playwright-browser-lease.cjs"
 lock="$runtime/locks/signapse-ui-integration.lock"
 state="$runtime/locks/browser-lease"
+if [ ! -r "$preload" ] || [ ! -r "$runtime/browser_lease.py" ] || [ ! -r "$lock" ]; then
+    echo "Host browser lease files are unavailable." >&2
+    exit 1
+fi
 exec /usr/bin/env -i PATH="$(dirname "$node"):/usr/bin:/bin" HOME=/tmp LANG=C.UTF-8 \
     PLAYWRIGHT_BROWSERS_PATH="$runtime/qa-browser-cache" \
     LD_LIBRARY_PATH="$runtime/playwright-deps/usr/lib/x86_64-linux-gnu" \
