@@ -65,6 +65,7 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
 
       %{
         readiness: if(id == "qa", do: %{ready: false, error: :instructions_missing}, else: %{ready: true, error: nil}),
+        admission_error: admission_error(id),
         instructions_revision: "fixture-#{id}",
         running: [item],
         retrying: [],
@@ -74,6 +75,11 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
         rate_limits: %{"private" => "fixture-secret"}
       }
     end
+
+    defp admission_error("fe"), do: :provider_quota_exhausted
+    defp admission_error("be"), do: :provider_quota_unavailable
+    defp admission_error("landing"), do: {:internal_error, "private fixture-secret"}
+    defp admission_error(_id), do: nil
   end
 
   defmodule Instructions do
@@ -164,6 +170,30 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
     assert json_response(get(build_conn(), "/api/v1/profiles/unknown/state"), 404)["error"]["code"] == "unknown_profile"
     assert json_response(post(build_conn(), "/api/v1/profiles/unknown/refresh", %{}), 404)["error"]["code"] == "unknown_profile"
     refute_received {:refresh, _}
+  end
+
+  test "provider quota hold is scoped, safe, and independent of profile health and desired state" do
+    overview = json_response(get(build_conn(), "/api/v1/state"), 200)
+    assert Enum.find(overview["profiles"], &(&1["profile_id"] == "fe"))["admission_error"] == "provider_quota_exhausted"
+
+    for {id, reason} <- [{"fe", "provider_quota_exhausted"}, {"be", "provider_quota_unavailable"}, {"landing", nil}] do
+      payload = json_response(get(build_conn(), "/api/v1/profiles/#{id}/state"), 200)
+      assert payload["admission_error"] == reason
+      assert payload["health"] == "healthy"
+      assert payload["runtime_control"]["desired_state"] == "running"
+    end
+
+    {:ok, view, _html} = live(build_conn(), "/profiles/fe")
+    assert has_element?(view, "#admission-quota-status", "Provider quota is exhausted")
+    assert has_element?(view, "#waiting-queue h2", "Waiting for provider quota")
+    assert has_element?(view, "#profile-health", "Ready")
+
+    view |> element("#tab-be") |> render_click()
+    assert has_element?(view, "#admission-quota-status", "Provider quota could not be verified")
+
+    view |> element("#tab-landing") |> render_click()
+    refute has_element?(view, "#admission-quota-status")
+    assert has_element?(view, "#waiting-queue h2", "Waiting for slots")
   end
 
   test "tabs link to each profile, reload selects the same profile, and foreign events do not change the tab" do

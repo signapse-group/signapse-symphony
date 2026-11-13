@@ -127,6 +127,7 @@ defmodule SymphonyElixirWeb.ProfileObservability do
       profile_id: id,
       health: if(reason, do: "unavailable", else: "healthy"),
       reason: reason,
+      admission_error: admission_error(snapshot),
       workflow_revision: config.revision,
       workflow_reload_error: config.reload_error,
       instructions_revision: instructions_revision(id, snapshot),
@@ -134,6 +135,9 @@ defmodule SymphonyElixirWeb.ProfileObservability do
       runtime_control: control
     }
   end
+
+  defp admission_error(%{admission_error: reason}) when reason in [:provider_quota_exhausted, :provider_quota_unavailable], do: Atom.to_string(reason)
+  defp admission_error(_snapshot), do: nil
 
   defp workflow_status(id) do
     case WorkflowStore.status(id) do

@@ -247,6 +247,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
           Last quota check: <%= @payload.runtime_control.quota_summary %>
           <span :if={@payload.runtime_control[:quota_checked_at]}> · <%= @payload.runtime_control.quota_checked_at %></span>
         </p>
+        <p :if={admission_quota_message(@payload)} id="admission-quota-status" class="runtime-control-reason" role="status">
+          <%= admission_quota_message(@payload) %>
+        </p>
         <p :if={@payload[:runtime_control] && runtime_control_mode(@payload.runtime_control) == :pausing && @payload.runtime_control.active_turns > 0} class="runtime-control-reason">
           <%= if @profile do %>
             Waiting for <%= @payload.runtime_control.active_turns %> active worker(s) to finish.
@@ -303,7 +306,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </article>
 
           <article class="metric-card">
-            <p class="metric-label">Waiting for slots</p>
+            <p class="metric-label"><%= waiting_label(@payload) %></p>
             <p id="waiting-count" class="metric-value numeric"><%= @payload.counts.waiting || "n/a" %></p>
             <p class="metric-detail">Eligible tasks from the latest successful tracker poll.</p>
           </article>
@@ -338,7 +341,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
         <section id="waiting-queue" class="section-card">
           <div class="section-header">
             <div>
-              <h2 class="section-title">Waiting for slots</h2>
+              <h2 class="section-title"><%= waiting_label(@payload) %></h2>
               <p class="section-copy">Eligible tasks cached from the latest successful tracker poll, in dispatch order.</p>
               <p :if={@payload.waiting_updated_at} class="section-copy">
                 Last successful poll: <span class="mono numeric"><%= @payload.waiting_updated_at %></span>
@@ -350,7 +353,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
             <% is_nil(@payload.counts.waiting) -> %>
               <p class="empty-state">Waiting tasks unavailable until a successful tracker poll.</p>
             <% @payload.waiting == [] -> %>
-              <p class="empty-state">No eligible tasks waiting for slots.</p>
+              <p class="empty-state"><%= if admission_quota_message(@payload), do: "No new eligible tasks waiting for provider quota.", else: "No eligible tasks waiting for slots." %></p>
             <% true -> %>
               <div class="table-wrap">
                 <table class="data-table">
@@ -665,6 +668,16 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp service_health_label("healthy"), do: "All profiles operational"
   defp service_health_label("partial"), do: "Service partially operational"
   defp service_health_label(_health), do: "Service unavailable"
+
+  defp waiting_label(payload), do: if(admission_quota_message(payload), do: "Waiting for provider quota", else: "Waiting for slots")
+
+  defp admission_quota_message(%{admission_error: "provider_quota_exhausted", runtime_control: %{mode: :running}}),
+    do: "Provider quota is exhausted. New work waits for the next quota check."
+
+  defp admission_quota_message(%{admission_error: "provider_quota_unavailable", runtime_control: %{mode: :running}}),
+    do: "Provider quota could not be verified. New work waits for the next quota check."
+
+  defp admission_quota_message(_payload), do: nil
 
   defp profile_operation("pause_profile"), do: :pause
   defp profile_operation("resume_profile"), do: :resume
