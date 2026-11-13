@@ -68,6 +68,18 @@ jobs:
           run-id: ${{ steps.gate.outputs.build_run_id }}
           github-token: ${{ github.token }}
 
+      - name: Verify production artifact and packaged OTP
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum --check symphony-nightly-linux_x86_64.sha256
+          if [[ "$(<symphony-nightly-linux_x86_64.otp-version)" != '28.5.0.8' ]]; then
+            echo 'The nightly artifact does not report the approved production OTP version.'
+            exit 1
+          fi
+
       - name: Connect to Tailscale
         if: steps.gate.outputs.ready == 'true'
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4
@@ -89,9 +101,6 @@ jobs:
             echo 'A newer main commit arrived; skipping this deploy.'
             exit 0
           fi
-          cd candidate
-          sha256sum --check symphony-nightly-linux_x86_64.sha256
-          cd ..
           test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
           umask 077
           ssh_dir="$(mktemp -d)"

@@ -199,6 +199,27 @@ class WorkflowGateTests(unittest.TestCase):
                 })
                 self.assertEqual('ready=true' in output.read_text(), ready)
 
+    def test_workflow_rejects_missing_or_wrong_otp_and_mismatched_bytes(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/deploy.yml').read_text()
+        step = workflow.split('      - name: Verify production artifact and packaged OTP\n', 1)[1]
+        script = step.split('        run: |\n', 1)[1].split('\n      - name:', 1)[0]
+        script = '\n'.join(line[10:] for line in script.splitlines())
+        for otp, artifact_bytes, expected in [
+            (None, b'candidate', False),
+            ('28.5.0.6', b'candidate', False),
+            ('28.5.0.8', b'wrong artifact', False),
+            ('28.5.0.8', b'candidate', True),
+        ]:
+            with self.subTest(otp=otp, artifact_bytes=artifact_bytes), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                artifact = root / 'symphony-nightly-linux_x86_64'
+                artifact.write_bytes(artifact_bytes)
+                Path(f'{artifact}.sha256').write_text(f'{hashlib.sha256(b"candidate").hexdigest()}  {artifact.name}\n')
+                if otp is not None:
+                    Path(f'{artifact}.otp-version').write_text(otp + '\n')
+                result = subprocess.run(['bash', '-c', script], cwd=root, capture_output=True)
+                self.assertEqual(result.returncode == 0, expected, result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()
