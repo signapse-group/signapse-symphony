@@ -30,7 +30,7 @@ class PrepareGroupedWorkspacesTests(unittest.TestCase):
         source = self.root / 'fixture.env'
         source.write_text('EXAMPLE=fixture\n')
         env = os.environ | {'SIGNAPSE_UI_APP_ENV': str(source), 'SYMPHONY_WORKSPACE_ROOT': str(workspace.parent)}
-        command = ['sh', str(HOOKS / 'prepare-fe-workspace')]
+        command = [str(HOOKS / 'prepare-fe-workspace')]
         subprocess.run(command, cwd=workspace, env=env, check=True)
         copy = workspace / '.env.local'
         self.assertEqual(copy.read_text(), source.read_text())
@@ -38,6 +38,13 @@ class PrepareGroupedWorkspacesTests(unittest.TestCase):
         failed = subprocess.run(command, cwd=self.root, env=env, capture_output=True)
         self.assertNotEqual(failed.returncode, 0)
         self.assertFalse((self.root / '.env.local').exists())
+
+    def test_qa_hook_can_start_directly(self):
+        missing = self.root / 'missing-workspace'
+        result = subprocess.run([str(HOOKS / 'prepare-qa-workspace'), str(missing)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(str(missing), result.stderr)
 
     def test_qa_checks_the_pinned_root_and_preserves_existing_evidence(self):
         workspace = self.root / 'workspaces-qa-jira' / 'SIGN-2'

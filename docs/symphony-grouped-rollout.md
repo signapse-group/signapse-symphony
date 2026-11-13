@@ -28,10 +28,12 @@ Git/Codex configuration explicitly.
 
 Copy [the FE hook](../ops/grouped/prepare-fe-workspace) and
 [the QA hook](../ops/grouped/prepare-qa-workspace) to `runtime/` with mode
-`0750`. Save the previous executables with the rollback inputs. The FE hook
-copies the existing private app environment to the assignment workspace with
-mode `0600`. The QA hook checks the pinned revision through the installed
-consumer checker while preserving the assignment's durable `artifacts` link.
+`0750`. Export the reviewed revision with `git archive` when staging from
+Windows to preserve the Linux shebangs. Save the previous executables with
+the rollback inputs. The FE hook copies the existing private app environment
+to the assignment workspace with mode `0600`. The QA hook checks the pinned
+revision through the installed consumer checker while preserving the
+assignment's durable `artifacts` link.
 Keep the existing QA runtime README, Playwright MCP wrapper, account pool,
 browser cache and locks installed.
 
