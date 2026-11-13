@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.Jira.AdapterTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.Jira.Adapter, as: JiraAdapter
   alias SymphonyElixir.Jira.AgentTool, as: JiraAgentTool
   alias SymphonyElixir.Jira.Client, as: JiraClient
@@ -13,6 +14,16 @@ defmodule SymphonyElixir.Jira.AdapterTest do
 
     def fetch_issues_by_ids(ids) do
       send(self(), {:jira_ids_called, ids})
+      {:ok, ids}
+    end
+
+    def fetch_issues_by_states(states, tracker_settings) do
+      send(self(), {:scoped_jira_states_called, states, tracker_settings})
+      {:ok, states}
+    end
+
+    def fetch_issues_by_ids(ids, tracker_settings) do
+      send(self(), {:scoped_jira_ids_called, ids, tracker_settings})
       {:ok, ids}
     end
   end
@@ -88,6 +99,91 @@ defmodule SymphonyElixir.Jira.AdapterTest do
              JiraClient.validate_settings(tracker_settings(%{"project_key" => 123}))
 
     assert JiraClient.secret_environment_names(tracker_settings(%{"api_token" => "$SYMPHONY_JIRA_TOKEN"})) == ["JIRA_API_TOKEN", "SYMPHONY_JIRA_TOKEN"]
+  end
+
+  test "scoped tracker reads and saved links use the supplied Jira settings" do
+    Application.put_env(:symphony_elixir, :jira_client_module, FakeJiraClient)
+    settings = Map.put(tracker_settings(), :env, %{"JIRA_SITE_URL" => "https://profile.atlassian.net"})
+
+    assert {:ok, ["Ready"]} = Tracker.fetch_issues_by_states(["Ready"], settings)
+    assert_received {:scoped_jira_states_called, ["Ready"], ^settings}
+
+    assert {:ok, ["10001"]} = Tracker.fetch_issues_by_ids(["10001"], settings)
+    assert_received {:scoped_jira_ids_called, ["10001"], ^settings}
+
+    assert Tracker.issue_url("SYM-1", nil, settings) == "https://profile.atlassian.net/browse/SYM-1"
+    assert {:error, :unsupported_scoped_tracker} = Tracker.fetch_issues_by_states(["Ready"], %{kind: "memory"})
+    assert {:error, :unsupported_scoped_tracker} = Tracker.fetch_issues_by_ids(["10001"], %{kind: "memory"})
+  end
+
+  test "concurrent Jira tool calls use the environment captured at bind time" do
+    env_names = ["JIRA_API_TOKEN", "PROFILE_JIRA_TOKEN"]
+    original = Map.new(env_names, &{&1, System.get_env(&1)})
+    on_exit(fn -> Enum.each(original, fn {name, value} -> restore_env(name, value) end) end)
+    System.put_env(%{"JIRA_API_TOKEN" => "host-default", "PROFILE_JIRA_TOKEN" => "host-named"})
+
+    settings = tracker_settings(%{"base_url" => "$JIRA_BASE_URL", "api_token" => "$PROFILE_JIRA_TOKEN"})
+    assert :ok = JiraClient.validate_settings(%{settings | provider: Map.put(settings.provider, "base_url", "https://legacy.test")})
+
+    missing_named_token = Map.put(settings, :env, %{"JIRA_BASE_URL" => "https://profile.test", "JIRA_API_TOKEN" => "profile-default"})
+    assert {:error, :missing_jira_api_token} = JiraClient.validate_settings(missing_named_token)
+
+    provider_without_token = Map.delete(settings.provider, "api_token")
+    without_token = %{settings | provider: provider_without_token}
+
+    assert {:error, :missing_jira_api_token} =
+             JiraClient.validate_settings(Map.put(without_token, :env, %{"JIRA_BASE_URL" => "https://profile.test"}))
+
+    bindings =
+      for profile <- ["fe", "qa"] do
+        env = %{"JIRA_BASE_URL" => "https://#{profile}.atlassian.net", "PROFILE_JIRA_TOKEN" => "#{profile}-token"}
+        {profile, DynamicTool.bind(Map.put(settings, :env, env))}
+      end
+
+    test_pid = self()
+
+    tasks =
+      for {profile, binding} <- bindings do
+        Task.async(fn ->
+          DynamicTool.execute(
+            "jira_rest",
+            %{"method" => "GET", "path" => "/rest/api/3/myself"},
+            binding,
+            jira_client: fn method, path, query, body, opts ->
+              JiraClient.request(
+                method,
+                path,
+                query,
+                body,
+                Keyword.put(opts, :request_fun, fn "GET", "/rest/api/3/myself", %{}, nil, jira ->
+                  send(test_pid, {:profile_credentials, profile, jira.base_url, jira.api_token})
+                  {:ok, %{status: 200, body: %{"accountId" => profile}}}
+                end)
+              )
+            end
+          )
+        end)
+      end
+
+    for task <- tasks, do: assert(Task.await(task)["success"])
+    assert_received {:profile_credentials, "fe", "https://fe.atlassian.net", "fe-token"}
+    assert_received {:profile_credentials, "qa", "https://qa.atlassian.net", "qa-token"}
+  end
+
+  test "assignment scope uses the normalized Jira project, type and selected route" do
+    settings = routed_settings()
+    settings = %{settings | provider: Map.merge(settings.provider, %{"base_url" => "https://JIRA.example.test/", "project_key" => "sym"})}
+
+    assert {:ok,
+            %{
+              base_url: "https://jira.example.test",
+              project_key: "SYM",
+              issue_types: ["subtask"],
+              routing_labels: ["route-backend", "route-frontend"],
+              worker_routes: ["route-backend"]
+            }} = JiraClient.assignment_scope(settings)
+
+    assert {:error, :invalid_jira_routing_config} = JiraClient.assignment_scope(%{settings | required_labels: []})
   end
 
   test "client separates Jira browser links from the REST gateway" do

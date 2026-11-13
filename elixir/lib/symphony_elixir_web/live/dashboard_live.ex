@@ -5,46 +5,101 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
-  alias SymphonyElixir.{RuntimeControl, WorkflowUpdate}
-  alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
+  alias SymphonyElixir.{Profile, RuntimeControl, WorkflowUpdate}
+  alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter, ProfileObservability}
   @runtime_tick_ms 1_000
 
   @impl true
   def mount(_params, _session, socket) do
+    mode = ProfileObservability.mode()
+
     socket =
-      socket
-      |> assign(:payload, load_payload())
-      |> assign(:workflow_updating, false)
-      |> assign(:workflow_update_message, nil)
-      |> assign(:now, DateTime.utc_now())
+      assign(socket,
+        mode: mode,
+        profile: nil,
+        profile_ids: if(mode == :profiles, do: Profile.ids(), else: []),
+        profile_actions: %{},
+        service_health: nil,
+        profile_health: [],
+        selection_error: nil,
+        payload: %{},
+        workflow_updating: false,
+        workflow_update_message: nil,
+        now: DateTime.utc_now()
+      )
 
     if connected?(socket) do
-      :ok = ObservabilityPubSub.subscribe()
+      :ok = if mode == :profiles, do: ObservabilityPubSub.subscribe_profiles(), else: ObservabilityPubSub.subscribe()
       schedule_runtime_tick()
+      if mode == :profiles, do: schedule_overview_tick()
     end
 
     {:ok, socket}
   end
 
   @impl true
+  def handle_params(params, _uri, %{assigns: %{mode: :profiles}} = socket) do
+    id = Map.get(params, "profile_id", List.first(socket.assigns.profile_ids))
+
+    socket =
+      if ProfileObservability.known?(id) do
+        socket |> assign(profile: id, selection_error: nil) |> refresh_payload()
+      else
+        assign(socket, profile: nil, payload: %{}, selection_error: "Profile not found.")
+      end
+
+    {:noreply, refresh_overview(socket)}
+  end
+
+  def handle_params(%{"profile_id" => _id}, _uri, socket) do
+    {:noreply, assign(socket, selection_error: "Profile not found.")}
+  end
+
+  def handle_params(_params, _uri, socket) do
+    {:noreply, socket |> assign(selection_error: nil) |> refresh_payload()}
+  end
+
+  @impl true
   def handle_info(:runtime_tick, socket) do
     schedule_runtime_tick()
-
-    {:noreply,
-     socket
-     |> assign(:payload, load_payload())
-     |> assign(:now, DateTime.utc_now())}
+    {:noreply, refresh_payload(socket)}
   end
 
-  @impl true
-  def handle_info(:observability_updated, socket) do
-    {:noreply,
-     socket
-     |> assign(:payload, load_payload())
-     |> assign(:now, DateTime.utc_now())}
+  def handle_info(:overview_tick, socket) do
+    schedule_overview_tick()
+    {:noreply, refresh_overview(socket)}
   end
 
+  def handle_info(:observability_updated, %{assigns: %{mode: :legacy}} = socket) do
+    {:noreply, refresh_payload(socket)}
+  end
+
+  def handle_info({:observability_updated, id}, %{assigns: %{profile: id, mode: :profiles}} = socket) do
+    {:noreply, refresh_payload(socket)}
+  end
+
+  def handle_info({:observability_updated, _id}, socket), do: {:noreply, socket}
+
   @impl true
+  def handle_event(event, %{"profile" => id} = params, %{assigns: %{mode: :profiles, profile: id}} = socket)
+      when event in ["pause_profile", "resume_profile", "activate_profile"] do
+    if ProfileObservability.known?(id) and get_in(socket.assigns.profile_actions, [id, :pending]) != true do
+      revision = Map.get(params, "revision")
+      operation = profile_operation(event)
+
+      {:noreply,
+       socket
+       |> assign_profile_action(id, pending: true, message: nil)
+       |> start_async({:profile_action, id}, fn -> ProfileObservability.perform(id, operation, revision) end)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event(_event, _params, %{assigns: %{mode: :profiles}} = socket), do: {:noreply, socket}
+
+  def handle_event(_event, _params, %{assigns: %{selection_error: error}} = socket) when is_binary(error), do: {:noreply, socket}
+
   def handle_event("update_workflow", _params, %{assigns: %{workflow_updating: true}} = socket), do: {:noreply, socket}
 
   def handle_event("update_workflow", _params, socket) do
@@ -86,6 +141,17 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   @impl true
+  def handle_async({:profile_action, id}, result, socket) do
+    message =
+      case result do
+        {:ok, message} -> message
+        {:exit, _reason} -> "The action was interrupted. Check this profile before retrying."
+      end
+
+    :ok = ObservabilityPubSub.broadcast_update(id)
+    {:noreply, assign_profile_action(socket, id, pending: false, message: message)}
+  end
+
   def handle_async(:update_workflow, {:ok, {_status, message}}, socket) do
     {:noreply, assign(socket, workflow_updating: false, workflow_update_message: message)}
   end
@@ -125,7 +191,16 @@ defmodule SymphonyElixirWeb.DashboardLive do
         </div>
       </header>
 
-      <section class="section-card">
+      <.profile_navigation :if={@mode == :profiles} ids={@profile_ids} current={@profile} health={@service_health} states={@profile_health} />
+
+      <section :if={@selection_error} class="error-card" role="alert">
+        <h2 class="error-title"><%= @selection_error %></h2>
+      </section>
+
+      <div :if={!@selection_error} class="profile-panel" id="profile-panel" aria-labelledby={@profile && "tab-#{@profile}"}>
+      <.profile_workflow :if={@mode == :profiles} id={@profile} payload={@payload} action={@profile_actions[@profile] || %{}} />
+
+      <section :if={@mode == :legacy} class="section-card">
         <div class="section-header">
           <div>
             <h2 class="section-title">Workflow</h2>
@@ -146,7 +221,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
         <div class="section-header">
           <div>
             <h2 class="section-title">Runtime control</h2>
-            <p class="section-copy">Pause or resume Codex work across BE, FE and landing.</p>
+            <p :if={@mode == :legacy} class="section-copy">Pause or resume Codex work across BE, FE and landing.</p>
+            <p :if={@profile} class="section-copy">
+              Desired state: <%= @payload.runtime_control[:desired_state] %>
+            </p>
           </div>
           <strong class={runtime_control_badge_class(@payload[:runtime_control])}>
             <%= runtime_control_label(@payload[:runtime_control]) %>
@@ -174,11 +252,24 @@ defmodule SymphonyElixirWeb.DashboardLive do
         </p>
 
         <div class="runtime-control-actions">
-          <button :if={runtime_control_mode(@payload[:runtime_control]) in [:running, :checking_quota]} phx-click="pause_all">
-            Pause all
+          <button
+            :if={runtime_control_mode(@payload[:runtime_control]) in [:running, :checking_quota]}
+            id={if(@profile, do: "pause-profile")}
+            phx-click={if(@profile, do: "pause_profile", else: "pause_all")}
+            phx-value-profile={@profile}
+            disabled={get_in(@profile_actions, [@profile, :pending]) == true}
+          >
+            <%= if @profile, do: "Pause #{ProfileObservability.label(@profile)}", else: "Pause all" %>
           </button>
-          <button :if={runtime_control_mode(@payload[:runtime_control]) == :paused} class="secondary" phx-click="resume_all">
-            Check quota and resume
+          <button
+            :if={runtime_control_mode(@payload[:runtime_control]) == :paused}
+            id={if(@profile, do: "resume-profile")}
+            class="secondary"
+            phx-click={if(@profile, do: "resume_profile", else: "resume_all")}
+            phx-value-profile={@profile}
+            disabled={get_in(@profile_actions, [@profile, :pending]) == true or (is_binary(@profile) and @payload.health != "healthy")}
+          >
+            Check quota and resume<%= if @profile, do: " #{ProfileObservability.label(@profile)}" %>
           </button>
           <button :if={runtime_control_mode(@payload[:runtime_control]) in [:pausing, :checking_quota, :unknown]} disabled>
             <%= case runtime_control_mode(@payload[:runtime_control]) do %>
@@ -280,7 +371,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <% end %>
         </section>
 
-        <section class="section-card">
+        <section :if={@mode == :legacy} class="section-card">
           <div class="section-header">
             <div>
               <h2 class="section-title">Rate limits</h2>
@@ -327,7 +418,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     <td>
                       <div class="issue-stack">
                         <.issue_identifier identifier={entry.issue_identifier} url={entry.issue_url} />
-                        <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
+                        <a class="issue-link" href={ProfileObservability.issue_path(@profile, entry.issue_identifier)}>JSON details</a>
                       </div>
                     </td>
                     <td>
@@ -409,7 +500,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     <td>
                       <div class="issue-stack">
                         <.issue_identifier identifier={entry.issue_identifier} url={entry.issue_url} />
-                        <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
+                        <a class="issue-link" href={ProfileObservability.issue_path(@profile, entry.issue_identifier)}>JSON details</a>
                       </div>
                     </td>
                     <td>
@@ -481,7 +572,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     <td>
                       <div class="issue-stack">
                         <.issue_identifier identifier={entry.issue_identifier} url={entry.issue_url} />
-                        <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
+                        <a class="issue-link" href={ProfileObservability.issue_path(@profile, entry.issue_identifier)}>JSON details</a>
                       </div>
                     </td>
                     <td><%= entry.attempt %></td>
@@ -494,8 +585,102 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <% end %>
         </section>
       <% end %>
+      </div>
     </section>
     """
+  end
+
+  attr(:ids, :list, required: true)
+  attr(:current, :string, default: nil)
+  attr(:health, :string, default: nil)
+  attr(:states, :list, required: true)
+
+  defp profile_navigation(assigns) do
+    ~H"""
+    <nav class="profile-tabs" aria-label="Symphony profiles">
+      <.link
+        :for={id <- @ids}
+        id={"tab-#{id}"}
+        patch={"/profiles/#{id}"}
+        aria-current={if id == @current, do: "page"}
+      >
+        <%= ProfileObservability.label(id) %>
+      </.link>
+    </nav>
+    <section :if={@health} class="section-card" id="service-health" aria-label="Service health">
+      <strong><%= service_health_label(@health) %></strong>
+      <ul :if={@health != "healthy"} class="profile-unavailable-list">
+        <li :for={state <- Enum.reject(@states, &(&1.health == "healthy"))}>
+          <.link patch={"/profiles/#{state.profile_id}"}><%= ProfileObservability.label(state.profile_id) %></.link>
+          <%= humanize_code(state.reason) %>
+        </li>
+      </ul>
+    </section>
+    """
+  end
+
+  attr(:id, :string, required: true)
+  attr(:payload, :map, required: true)
+  attr(:action, :map, required: true)
+
+  defp profile_workflow(assigns) do
+    ~H"""
+    <section id={"workflow-#{@id}"} class="section-card">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title"><%= ProfileObservability.label(@id) %> workflow</h2>
+          <p id="profile-health" class="section-copy">
+            <%= if @payload.health == "healthy", do: "Ready", else: "Unavailable" %>
+            <span :if={@payload.reason}>· <%= humanize_code(@payload.reason) %></span>
+          </p>
+        </div>
+        <p class="section-copy">Worker limit <strong id="profile-cap"><%= @payload.max_concurrent_agents || "—" %></strong></p>
+      </div>
+      <dl class="profile-revisions">
+        <dt>Deployment workflow</dt>
+        <dd id="workflow-revision" class="mono"><%= @payload.workflow_revision || "Unavailable" %></dd>
+        <dt>Active instructions</dt>
+        <dd id="instructions-revision" class="mono"><%= @payload.instructions_revision || "Unavailable" %></dd>
+      </dl>
+      <p :if={@payload[:workflow_reload_error]} class="runtime-control-reason">
+        Workflow reload failed: <%= humanize_code(@payload.workflow_reload_error) %>
+      </p>
+      <form id={"activate-#{@id}"} class="profile-update-form" phx-submit="activate_profile">
+        <input type="hidden" name="profile" value={@id} />
+        <label for={"revision-#{@id}"}>Staged instructions revision</label>
+        <input type="text" id={"revision-#{@id}"} name="revision" required maxlength="128" spellcheck="false" />
+        <button type="submit" disabled={@action[:pending] == true}>Update workflow</button>
+      </form>
+      <p :if={@action[:message]} id="profile-action-result" role="status"><%= @action.message %></p>
+    </section>
+    """
+  end
+
+  defp humanize_code(code), do: code |> String.replace("_", " ") |> String.capitalize()
+
+  defp service_health_label("healthy"), do: "All profiles operational"
+  defp service_health_label("partial"), do: "Service partially operational"
+  defp service_health_label(_health), do: "Service unavailable"
+
+  defp profile_operation("pause_profile"), do: :pause
+  defp profile_operation("resume_profile"), do: :resume
+  defp profile_operation("activate_profile"), do: :activate
+
+  defp assign_profile_action(socket, id, result) do
+    assign(socket, :profile_actions, Map.put(socket.assigns.profile_actions, id, Map.new(result)))
+  end
+
+  defp refresh_payload(%{assigns: %{selection_error: error}} = socket) when is_binary(error), do: socket
+
+  defp refresh_payload(%{assigns: %{profile: id}} = socket) when is_binary(id) do
+    assign(socket, payload: ProfileObservability.state(id), now: DateTime.utc_now())
+  end
+
+  defp refresh_payload(socket), do: assign(socket, payload: load_payload(), now: DateTime.utc_now())
+
+  defp refresh_overview(socket) do
+    overview = ProfileObservability.overview()
+    assign(socket, service_health: overview.health, profile_health: overview.profiles)
   end
 
   defp load_payload do
@@ -662,6 +847,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp schedule_runtime_tick do
     Process.send_after(self(), :runtime_tick, @runtime_tick_ms)
   end
+
+  defp schedule_overview_tick, do: Process.send_after(self(), :overview_tick, 5_000)
 
   defp pretty_value(nil), do: "n/a"
   defp pretty_value(value), do: inspect(value, pretty: true, limit: :infinity)

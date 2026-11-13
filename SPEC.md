@@ -332,6 +332,10 @@ Workflow file path precedence:
 1. Explicit application/runtime setting (set by CLI startup path).
 2. Default: `WORKFLOW.md` in the current process working directory.
 
+The Signapse implementation also supports a [Jira profile manifest](elixir/docs/profiles.md)
+instead of the positional workflow path. Each entry selects its own repository workflow
+and environment. A scoped profile lookup never falls back to the default workflow.
+
 Loader behavior:
 
 - If the file cannot be read, return `missing_workflow_file` error.

@@ -1,13 +1,11 @@
 """Offline deployment checks: python3 -m unittest discover -s scripts -p 'test_*.py'."""
 
 import hashlib
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
-import threading
 import unittest
 from unittest.mock import patch
 
@@ -29,38 +27,35 @@ class DeploymentTests(unittest.TestCase):
         self.artifact.write_bytes(b'new binary')
         self.checksum = Path(f'{self.artifact}.sha256')
         self.checksum.write_text(f'{hashlib.sha256(self.artifact.read_bytes()).hexdigest()}  {self.artifact.name}\n')
-        self.config = self.root / 'old-sys.config'
-        self.config.write_text('existing origins and application configuration')
+        grouped = self.root / 'runtime/grouped'
+        grouped.mkdir(parents=True)
+        for name in ['profiles.json', 'service.env', 'sys.config']:
+            (grouped / name).touch()
         self.sha = 'a' * 40
         self.release = self.root / 'runtime/releases' / self.sha
-        self.before = dict.fromkeys(deploy.SERVICES, '/old/symphony')
+        self.before = {deploy.GROUPED_SERVICE: '/old/symphony'}
 
     def prepare(self):
         with patch.object(deploy, 'properties', return_value={
             'ActiveState': 'active', 'MainPID': '123', 'ExecStart': '/old/symphony'
-        }), patch.object(deploy, 'process_environment', return_value={
-            'ERL_FLAGS': f'-config {self.config.with_suffix("")} +S 2'
         }):
-            return deploy.prepare(self.sha, self.candidate, self.release)
+            return deploy.prepare_grouped(self.sha, self.candidate, self.release)
 
     def test_bad_checksum_never_reaches_systemd(self):
         self.artifact.write_bytes(b'corrupted')
-        with patch.object(deploy, 'systemctl') as ctl:
-            with self.assertRaisesRegex(ValueError, 'checksum'):
-                self.prepare()
-            ctl.assert_not_called()
+        with self.assertRaisesRegex(ValueError, 'checksum'):
+            self.prepare()
         self.assertFalse(self.release.exists())
 
-    def test_prepare_preserves_per_service_runtime_configuration(self):
+    def test_prepare_preserves_grouped_manifest_and_runtime_configuration(self):
         before, configs = self.prepare()
         self.assertEqual(before, self.before)
-        self.assertEqual(set(configs), set(deploy.SERVICES))
-        for identity, service, repo, port, logs, _ in deploy.WORKERS:
-            self.assertEqual((self.release / f'{identity}-sys.config').read_bytes(), self.config.read_bytes())
-            env = (self.release / f'{identity}.env').read_text()
-            self.assertIn(f'install-{self.sha}/{identity}', env)
-            self.assertIn('+S 2', env)
-            self.assertIn(f'repos/{repo}/WORKFLOW.md', configs[service].decode())
+        self.assertEqual(set(configs), {deploy.GROUPED_SERVICE})
+        config = configs[deploy.GROUPED_SERVICE].decode()
+        self.assertIn(f'install-{self.sha}/grouped', config)
+        self.assertIn('runtime/grouped/service.env', config)
+        self.assertIn('runtime/grouped/sys', config)
+        self.assertIn('--profiles ', config)
         self.assertEqual(self.release.stat().st_mode & 0o777, 0o700)
         self.assertEqual(self.prepare(), (before, configs))
         self.artifact.write_bytes(b'different binary')
@@ -68,22 +63,22 @@ class DeploymentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'different binary'):
             self.prepare()
 
-    def test_success_updates_all_four_without_idle_or_pause(self):
+    def test_success_updates_only_grouped_service(self):
         before, configs = self.prepare()
         with patch.object(deploy, 'systemctl') as ctl, patch.object(deploy, 'await_healthy') as healthy:
             deploy.activate(configs, before, self.candidate / 'backup', self.release / 'symphony')
-        self.assertEqual(ctl.call_args_list[0].args, ('stop', *deploy.SERVICES))
-        self.assertEqual(ctl.call_args_list[-1].args, ('start', *deploy.SERVICES))
-        healthy.assert_called_once_with(dict.fromkeys(deploy.SERVICES, str(self.release / 'symphony')))
-        for service in deploy.SERVICES:
-            self.assertEqual(deploy.dropin(service).read_bytes(), configs[service])
+        self.assertEqual(ctl.call_args_list[0].args, ('stop', deploy.GROUPED_SERVICE))
+        self.assertEqual(ctl.call_args_list[-1].args, ('start', deploy.GROUPED_SERVICE))
+        healthy.assert_called_once_with({deploy.GROUPED_SERVICE: str(self.release / 'symphony')})
+        self.assertEqual(deploy.dropin(deploy.GROUPED_SERVICE).read_bytes(), configs[deploy.GROUPED_SERVICE])
 
     def test_start_or_health_failure_restores_existing_and_absent_dropins(self):
         for failure in ['start', 'health']:
             with self.subTest(failure=failure):
                 before, configs = self.prepare()
-                first = deploy.SERVICES[0]
-                deploy.atomic_write(deploy.dropin(first), b'previous CD configuration')
+                dropin = deploy.dropin(deploy.GROUPED_SERVICE)
+                if failure == 'start':
+                    deploy.atomic_write(dropin, b'previous CD configuration')
                 starts = []
 
                 def ctl(*args):
@@ -99,9 +94,11 @@ class DeploymentTests(unittest.TestCase):
                     with self.assertRaises((RuntimeError, subprocess.CalledProcessError)):
                         deploy.activate(configs, before, self.candidate / f'backup-{failure}', self.release / 'symphony')
                 healthy.assert_called_with(before)
-                self.assertEqual(deploy.dropin(first).read_bytes(), b'previous CD configuration')
-                for service in deploy.SERVICES[1:]:
-                    self.assertFalse(deploy.dropin(service).exists())
+                if failure == 'start':
+                    self.assertEqual(dropin.read_bytes(), b'previous CD configuration')
+                    dropin.unlink()
+                else:
+                    self.assertFalse(dropin.exists())
 
     def test_execstart_ignores_systemd_process_metadata(self):
         with patch.object(deploy, 'systemctl', return_value=(
@@ -118,51 +115,54 @@ class DeploymentTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Rollback failed; manual recovery required'):
                 deploy.activate(configs, before, self.candidate / 'backup', self.release / 'symphony')
 
-    def test_health_reads_http_200_body_and_requires_all_members(self):
-        payload = {
-            'counts': {'running': 2, 'retrying': 1},
-            'runtime_control': {'enabled': True, 'mode': 'running', 'database_error': None,
-                                'services': {'qa': {'status': 'online'}}},
-        }
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(json.dumps(payload).encode())
-
-            def log_message(self, *_args):
-                pass
-
-        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        worker = ('qa', 'qa.service', 'repo', server.server_port, 'logs', {'qa'})
-        with patch.object(deploy, 'WORKERS', [worker]), patch.object(deploy, 'properties', return_value={
-            'ActiveState': 'active', 'MainPID': '123', 'ExecStart': '/new/symphony'
-        }):
-            self.assertEqual(deploy.health({'qa.service': '/new/symphony'}), ['123'])
-            payload['error'] = {'code': 'snapshot_unavailable'}
-            with self.assertRaises(RuntimeError):
-                deploy.health({'qa.service': '/new/symphony'})
-            del payload['error']
-            payload['runtime_control']['services']['qa']['status'] = 'unknown'
-            with self.assertRaises(RuntimeError):
-                deploy.health({'qa.service': '/new/symphony'})
-            payload['runtime_control']['services'] = {}
-            with self.assertRaises(RuntimeError):
-                deploy.health({'qa.service': '/new/symphony'})
-
     def test_duplicate_success_event_does_not_restart_services_again(self):
         binary = self.root / 'runtime/releases' / self.sha / 'symphony'
-        (self.root / 'runtime').mkdir()
+        grouped = self.root / 'runtime/grouped'
+        (grouped / 'cutover-complete').touch()
         with patch.object(deploy.sys, 'argv', ['deploy_symphony.py', self.sha, str(self.candidate)]), patch.object(
-            deploy, 'prepare', return_value=(dict.fromkeys(deploy.SERVICES, str(binary)), {})
-        ), patch.object(deploy, 'await_healthy'), patch.object(deploy, 'activate') as activate:
+            deploy, 'prepare_grouped', return_value=({deploy.GROUPED_SERVICE: str(binary)}, {})
+        ), patch.object(deploy, 'assert_legacy_stopped'), patch.object(
+            deploy, 'await_healthy'
+        ), patch.object(deploy, 'activate') as activate:
             deploy.main()
             activate.assert_not_called()
+
+    def test_cd_skips_until_operator_verifies_cutover(self):
+        with patch.object(deploy.sys, 'argv', ['deploy_symphony.py', self.sha, str(self.candidate)]), patch.object(
+            deploy, 'systemctl'
+        ) as ctl:
+            deploy.main()
+        ctl.assert_not_called()
+
+    def test_initial_prepare_stages_release_without_touching_units(self):
+        with patch.object(deploy.sys, 'argv', [
+            'deploy_symphony.py', '--prepare-grouped', self.sha, str(self.candidate)
+        ]), patch.object(deploy, 'systemctl') as ctl:
+            deploy.main()
+        ctl.assert_not_called()
+        self.assertTrue((self.candidate / 'grouped-90-cd.conf').is_file())
+        self.assertTrue((self.release / 'symphony').is_file())
+        self.assertFalse(deploy.dropin(deploy.GROUPED_SERVICE).exists())
+
+    def test_grouped_health_requires_all_profiles_and_independent_control(self):
+        profiles = [
+            {'profile_id': identity, 'health': 'healthy', 'max_concurrent_agents': cap,
+             'workflow_revision': 'workflow-sha', 'instructions_revision': 'instructions-sha',
+             'runtime_control': {'enabled': True, 'mode': 'paused', 'database_error': None,
+                                 'services': {identity: {'status': 'online'}}}}
+            for identity, cap in deploy.PROFILES.items()
+        ]
+        state = {'mode': 'profiles', 'health': 'healthy', 'profiles': profiles}
+        with patch.object(deploy, 'properties', return_value={
+            'ActiveState': 'active', 'MainPID': '123', 'ExecStart': '/new/symphony'
+        }), patch.object(deploy.urllib.request, 'urlopen') as open_url, patch.object(
+            deploy.json, 'load', return_value=state
+        ):
+            self.assertEqual(deploy.health({deploy.GROUPED_SERVICE: '/new/symphony'}), ['123'])
+            open_url.assert_called_once_with('http://127.0.0.1:4000/api/v1/state', timeout=5)
+            profiles[1]['runtime_control']['services']['landing'] = {'status': 'online'}
+            with self.assertRaisesRegex(RuntimeError, 'be:'):
+                deploy.health({deploy.GROUPED_SERVICE: '/new/symphony'})
 
 
 class WorkflowGateTests(unittest.TestCase):

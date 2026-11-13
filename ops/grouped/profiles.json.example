@@ -1,0 +1,126 @@
+{
+  "assignment_owners_path": "/opt/apps/symphony/runtime/state/grouped/assignment-owners.sqlite3",
+  "profiles": [
+    {
+      "id": "fe",
+      "workflow": "workflows/fe.md",
+      "instructions_root": "instructions/fe",
+      "control_path": "/opt/apps/symphony/runtime/state/grouped/fe.sqlite3",
+      "env": {
+        "PATH": "$FE_PATH",
+        "HOME": "$HOME",
+        "CODEX_HOME": "$FE_CODEX_HOME",
+        "FONTCONFIG_FILE": "$FE_FONTCONFIG_FILE",
+        "LD_LIBRARY_PATH": "$FE_LD_LIBRARY_PATH",
+        "XDG_RUNTIME_DIR": "$XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS": "$DBUS_SESSION_BUS_ADDRESS",
+        "GITHUB_TOKEN": "$FE_GITHUB_TOKEN",
+        "SIGNAPSE_UI_APP_ENV": "$FE_SIGNAPSE_UI_APP_ENV",
+        "SIGNAPSE_UI_E2E_ENV": "$FE_SIGNAPSE_UI_E2E_ENV",
+        "SIGNAPSE_UI_INTEGRATION_LOCK": "$FE_SIGNAPSE_UI_INTEGRATION_LOCK",
+        "JIRA_BASE_URL": "$JIRA_BASE_URL",
+        "JIRA_SITE_URL": "$JIRA_SITE_URL",
+        "JIRA_EMAIL": "$FE_JIRA_EMAIL",
+        "JIRA_API_TOKEN": "$FE_JIRA_API_TOKEN",
+        "SYMPHONY_WORKSPACE_ROOT": "/opt/apps/symphony/workspaces-fe-jira",
+        "CONTROL_DB": "/opt/apps/symphony/runtime/state/grouped/fe.sqlite3"
+      }
+    },
+    {
+      "id": "be",
+      "workflow": "workflows/be.md",
+      "instructions_root": "instructions/be",
+      "control_path": "/opt/apps/symphony/runtime/state/grouped/be.sqlite3",
+      "env": {
+        "PATH": "$BE_PATH",
+        "HOME": "$HOME",
+        "CODEX_HOME": "$BE_CODEX_HOME",
+        "FONTCONFIG_FILE": "$BE_FONTCONFIG_FILE",
+        "LD_LIBRARY_PATH": "$BE_LD_LIBRARY_PATH",
+        "XDG_RUNTIME_DIR": "$XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS": "$DBUS_SESSION_BUS_ADDRESS",
+        "GITHUB_TOKEN": "$BE_GITHUB_TOKEN",
+        "JIRA_BASE_URL": "$JIRA_BASE_URL",
+        "JIRA_SITE_URL": "$JIRA_SITE_URL",
+        "JIRA_EMAIL": "$BE_JIRA_EMAIL",
+        "JIRA_API_TOKEN": "$BE_JIRA_API_TOKEN",
+        "SYMPHONY_WORKSPACE_ROOT": "/opt/apps/symphony/workspaces-jira",
+        "CONTROL_DB": "/opt/apps/symphony/runtime/state/grouped/be.sqlite3"
+      }
+    },
+    {
+      "id": "qa",
+      "workflow": "workflows/qa.md",
+      "instructions_root": "instructions/qa",
+      "control_path": "/opt/apps/symphony/runtime/state/grouped/qa.sqlite3",
+      "env": {
+        "PATH": "$QA_PATH",
+        "HOME": "$HOME",
+        "CODEX_HOME": "$QA_CODEX_HOME",
+        "FONTCONFIG_FILE": "$QA_FONTCONFIG_FILE",
+        "LD_LIBRARY_PATH": "$QA_LD_LIBRARY_PATH",
+        "PLAYWRIGHT_BROWSERS_PATH": "$QA_PLAYWRIGHT_BROWSERS_PATH",
+        "PLAYWRIGHT_SKIP_BROWSER_GC": "$QA_PLAYWRIGHT_SKIP_BROWSER_GC",
+        "SIGNAPSE_QA_PRIVATE_DIR": "$QA_PRIVATE_DIR",
+        "SIGNAPSE_QA_RECOVERY_ROOT": "$QA_RECOVERY_ROOT",
+        "XDG_RUNTIME_DIR": "$XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS": "$DBUS_SESSION_BUS_ADDRESS",
+        "SYMPHONY_GIT_CREDENTIAL_HELPER": "$QA_GIT_CREDENTIAL_HELPER",
+        "JIRA_BASE_URL": "$JIRA_BASE_URL",
+        "JIRA_SITE_URL": "$JIRA_SITE_URL",
+        "JIRA_EMAIL": "$QA_JIRA_EMAIL",
+        "JIRA_API_TOKEN": "$QA_JIRA_API_TOKEN",
+        "SYMPHONY_WORKSPACE_ROOT": "/opt/apps/symphony/workspaces-qa-jira",
+        "CONTROL_DB": "/opt/apps/symphony/runtime/state/grouped/qa.sqlite3"
+      }
+    },
+    {
+      "id": "landing",
+      "workflow": "workflows/landing.md",
+      "instructions_root": "instructions/landing",
+      "control_path": "/opt/apps/symphony/runtime/state/grouped/landing.sqlite3",
+      "env": {
+        "PATH": "$LANDING_PATH",
+        "HOME": "$HOME",
+        "CODEX_HOME": "$LANDING_CODEX_HOME",
+        "FONTCONFIG_FILE": "$LANDING_FONTCONFIG_FILE",
+        "LD_LIBRARY_PATH": "$LANDING_LD_LIBRARY_PATH",
+        "PLAYWRIGHT_BROWSERS_PATH": "$LANDING_PLAYWRIGHT_BROWSERS_PATH",
+        "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE": "$LANDING_PLAYWRIGHT_HOST_PLATFORM_OVERRIDE",
+        "PLAYWRIGHT_SKIP_BROWSER_GC": "$LANDING_PLAYWRIGHT_SKIP_BROWSER_GC",
+        "SIGNAPSE_LANDING_INDEXABLE": "$LANDING_INDEXABLE",
+        "SIGNAPSE_VERCEL_ANALYTICS": "$LANDING_VERCEL_ANALYTICS",
+        "XDG_RUNTIME_DIR": "$XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS": "$DBUS_SESSION_BUS_ADDRESS",
+        "SYMPHONY_GIT_CREDENTIAL_HELPER": "$LANDING_GIT_CREDENTIAL_HELPER",
+        "SYMPHONY_LANDING_BROWSER_WRAPPER": "$LANDING_BROWSER_WRAPPER",
+        "JIRA_BASE_URL": "$JIRA_BASE_URL",
+        "JIRA_SITE_URL": "$JIRA_SITE_URL",
+        "JIRA_EMAIL": "$LANDING_JIRA_EMAIL",
+        "JIRA_API_TOKEN": "$LANDING_JIRA_API_TOKEN",
+        "SYMPHONY_WORKSPACE_ROOT": "/opt/apps/symphony/workspaces-landing-jira",
+        "CONTROL_DB": "/opt/apps/symphony/runtime/state/grouped/landing.sqlite3"
+      }
+    },
+    {
+      "id": "planning",
+      "workflow": "workflows/planning.md",
+      "instructions_root": "instructions/planning",
+      "control_path": "/opt/apps/symphony/runtime/state/grouped/planning.sqlite3",
+      "env": {
+        "PATH": "$PLANNING_PATH",
+        "HOME": "$HOME",
+        "CODEX_HOME": "$PLANNING_CODEX_HOME",
+        "XDG_RUNTIME_DIR": "$XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS": "$DBUS_SESSION_BUS_ADDRESS",
+        "SYMPHONY_GIT_CREDENTIAL_HELPER": "$PLANNING_GIT_CREDENTIAL_HELPER",
+        "JIRA_BASE_URL": "$JIRA_BASE_URL",
+        "JIRA_SITE_URL": "$JIRA_SITE_URL",
+        "JIRA_EMAIL": "$PLANNING_JIRA_EMAIL",
+        "JIRA_API_TOKEN": "$PLANNING_JIRA_API_TOKEN",
+        "SYMPHONY_WORKSPACE_ROOT": "/opt/apps/symphony/workspaces-planning-jira",
+        "CONTROL_DB": "/opt/apps/symphony/runtime/state/grouped/planning.sqlite3"
+      }
+    }
+  ]
+}

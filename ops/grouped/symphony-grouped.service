@@ -1,0 +1,17 @@
+[Unit]
+Description=Symphony for FE, BE, QA, Landing and Planning
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/apps/symphony
+EnvironmentFile=/opt/apps/symphony/runtime/grouped/service.env
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+CPUWeight=1000
+IOWeight=1000
+MemoryLow=268435456
+
+[Install]
+WantedBy=default.target

@@ -50,10 +50,11 @@ defmodule SymphonyElixir.Config.Schema do
     embedded_schema do
       field(:kind, :string)
       field(:endpoint, :string)
-      field(:api_key, :string)
+      field(:api_key, :string, redact: true)
       field(:project_slug, :string)
       field(:assignee, :string)
-      field(:provider, :map, default: %{})
+      field(:provider, :map, default: %{}, redact: true)
+      field(:env, :map, virtual: true, redact: true)
       field(:secret_environment_names, {:array, :string}, default: [])
       field(:required_labels, {:array, :string}, default: [])
       field(:dispatch_states, {:array, :string})
@@ -321,15 +322,18 @@ defmodule SymphonyElixir.Config.Schema do
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
-    def changeset(schema, attrs) do
+    def changeset(schema, attrs), do: changeset(schema, attrs, nil)
+
+    @spec changeset(%__MODULE__{}, map(), map() | nil) :: Ecto.Changeset.t()
+    def changeset(schema, attrs, env) do
       schema
       |> cast(
         attrs,
         [:enabled, :path, :id, :members, :quota_check_timeout_ms, :heartbeat_interval_ms, :heartbeat_timeout_ms],
         empty_values: []
       )
-      |> update_change(:path, &Schema.resolve_runtime_control_value/1)
-      |> update_change(:id, &Schema.resolve_runtime_control_value/1)
+      |> update_change(:path, &Schema.resolve_runtime_control_value(&1, env))
+      |> update_change(:id, &Schema.resolve_runtime_control_value(&1, env))
       |> validate_number(:quota_check_timeout_ms, greater_than: 0)
       |> validate_number(:heartbeat_interval_ms, greater_than: 0)
       |> validate_number(:heartbeat_timeout_ms, greater_than: 0)
@@ -401,15 +405,18 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   @spec parse(map()) :: {:ok, %__MODULE__{}} | {:error, {:invalid_workflow_config, String.t()}}
-  def parse(config) when is_map(config) do
+  def parse(config), do: parse(config, nil)
+
+  @spec parse(map(), map() | nil) :: {:ok, %__MODULE__{}} | {:error, {:invalid_workflow_config, String.t()}}
+  def parse(config, env) when is_map(config) do
+    config = config |> normalize_keys() |> drop_nil_values()
+
     config
-    |> normalize_keys()
-    |> drop_nil_values()
-    |> changeset()
+    |> changeset(env)
     |> apply_action(:validate)
     |> case do
       {:ok, settings} ->
-        {:ok, finalize_settings(settings)}
+        {:ok, finalize_settings(settings, env, config)}
 
       {:error, changeset} ->
         {:error, {:invalid_workflow_config, format_errors(changeset)}}
@@ -452,8 +459,8 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   @doc false
-  @spec resolve_runtime_control_value(String.t()) :: String.t() | nil
-  def resolve_runtime_control_value(value), do: resolve_env_value(value, nil)
+  @spec resolve_runtime_control_value(String.t(), map() | nil) :: String.t() | nil
+  def resolve_runtime_control_value(value, env), do: resolve_env_value(value, nil, env)
 
   @doc false
   @spec normalize_state_limits(nil | map()) :: map()
@@ -484,7 +491,7 @@ defmodule SymphonyElixir.Config.Schema do
     end)
   end
 
-  defp changeset(attrs) do
+  defp changeset(attrs, env) do
     %__MODULE__{}
     |> cast(attrs, [])
     |> cast_embed(:tracker, with: &Tracker.changeset/2)
@@ -496,10 +503,10 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
-    |> cast_embed(:runtime_control, with: &RuntimeControl.changeset/2)
+    |> cast_embed(:runtime_control, with: &RuntimeControl.changeset(&1, &2, env))
   end
 
-  defp finalize_settings(settings) do
+  defp finalize_settings(settings, env, config) do
     provider = normalize_optional_map(settings.tracker.provider) || %{}
 
     {api_key, assignee, provider, secret_environment_names} =
@@ -513,10 +520,10 @@ defmodule SymphonyElixir.Config.Schema do
             |> Map.put_new("assignee", settings.tracker.assignee)
 
           resolved_api_key =
-            resolve_secret_setting(linear_provider["api_key"], System.get_env("LINEAR_API_KEY"))
+            resolve_secret_setting(linear_provider["api_key"], env_value(env, "LINEAR_API_KEY"), env)
 
           resolved_assignee =
-            resolve_secret_setting(linear_provider["assignee"], System.get_env("LINEAR_ASSIGNEE"))
+            resolve_secret_setting(linear_provider["assignee"], env_value(env, "LINEAR_ASSIGNEE"), env)
 
           {
             resolved_api_key,
@@ -550,15 +557,11 @@ defmodule SymphonyElixir.Config.Schema do
         project_slug: Map.get(provider, "project_slug", settings.tracker.project_slug),
         assignee: assignee,
         provider: provider,
+        env: env,
         secret_environment_names: Enum.uniq(secret_environment_names),
         dispatch_states: dispatch_states,
         active_states: active_states,
         terminal_states: terminal_states
-    }
-
-    workspace = %{
-      settings.workspace
-      | root: resolve_path_value(settings.workspace.root, Path.join(System.tmp_dir!(), "symphony_workspaces"))
     }
 
     codex = %{
@@ -567,7 +570,20 @@ defmodule SymphonyElixir.Config.Schema do
         turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)
     }
 
-    %{settings | tracker: tracker, workspace: workspace, codex: codex}
+    %{settings | tracker: tracker, workspace: finalize_workspace(settings.workspace, env, config), codex: codex}
+  end
+
+  defp finalize_workspace(workspace, env, config) do
+    workspace_default = if is_nil(env), do: Path.join(System.tmp_dir!(), "symphony_workspaces")
+
+    workspace_value =
+      if is_nil(env) or match?(%{"workspace" => %{"root" => root}} when is_binary(root), config) do
+        workspace.root
+      end
+
+    workspace_root = resolve_env_value(workspace_value, workspace_default, env)
+    root = if workspace_root in [nil, ""], do: workspace_default, else: workspace_root
+    %{workspace | root: root}
   end
 
   defp normalize_keys(value) when is_map(value) do
@@ -600,34 +616,21 @@ defmodule SymphonyElixir.Config.Schema do
   defp drop_nil_values(value) when is_list(value), do: Enum.map(value, &drop_nil_values/1)
   defp drop_nil_values(value), do: value
 
-  defp resolve_secret_setting(nil, fallback), do: normalize_secret_value(fallback)
+  defp resolve_secret_setting(nil, fallback, _env), do: normalize_secret_value(fallback)
 
-  defp resolve_secret_setting(value, fallback) when is_binary(value) do
-    case resolve_env_value(value, fallback) do
+  defp resolve_secret_setting(value, fallback, env) when is_binary(value) do
+    case resolve_env_value(value, fallback, env) do
       resolved when is_binary(resolved) -> normalize_secret_value(resolved)
       resolved -> resolved
     end
   end
 
-  defp resolve_secret_setting(value, _fallback), do: value
+  defp resolve_secret_setting(value, _fallback, _env), do: value
 
-  defp resolve_path_value(value, default) when is_binary(value) do
-    case normalize_path_token(value) do
-      :missing ->
-        default
-
-      "" ->
-        default
-
-      path ->
-        path
-    end
-  end
-
-  defp resolve_env_value(value, fallback) when is_binary(value) do
+  defp resolve_env_value(value, fallback, env) when is_binary(value) do
     case env_reference_name(value) do
       {:ok, env_name} ->
-        case System.get_env(env_name) do
+        case env_value(env, env_name) do
           nil -> fallback
           "" -> nil
           env_value -> env_value
@@ -638,12 +641,10 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
-  defp normalize_path_token(value) when is_binary(value) do
-    case env_reference_name(value) do
-      {:ok, env_name} -> resolve_env_token(env_name)
-      :error -> value
-    end
-  end
+  defp resolve_env_value(nil, fallback, _env), do: fallback
+
+  defp env_value(nil, name), do: System.get_env(name)
+  defp env_value(env, name), do: Map.get(env, name)
 
   defp env_reference_name("$" <> env_name) do
     if String.match?(env_name, ~r/^[A-Za-z_][A-Za-z0-9_]*$/) do
@@ -662,13 +663,6 @@ defmodule SymphonyElixir.Config.Schema do
         :error -> []
       end
     end)
-  end
-
-  defp resolve_env_token(env_name) do
-    case System.get_env(env_name) do
-      nil -> :missing
-      env_value -> env_value
-    end
   end
 
   defp normalize_secret_value(value) when is_binary(value) do

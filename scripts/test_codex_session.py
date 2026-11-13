@@ -267,7 +267,7 @@ class Session:
         fixture = root / "fixture.py"
         fixture.write_text(FIXTURE)
         command = shlex.join([sys.executable, "-u", str(fixture), mode, str(root)])
-        args = [sys.executable, "-u", "-c", DECODER, ENCODED, "launch", self.unit, command, str(root)]
+        args = [sys.executable, "-u", "-c", DECODER, ENCODED, "launch", self.unit, command, str(root), "-lc", "", "session"]
         if self.owner:
             args = ["systemd-run", "--user", "--quiet", "--pipe", "--wait", "--collect",
                     "--unit=" + self.owner, "--setenv=SYMPHONY_TEST_SENTINEL"] + args

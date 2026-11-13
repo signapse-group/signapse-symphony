@@ -136,4 +136,42 @@ defmodule SymphonyElixir.CLITest do
 
     assert :ok = CLI.evaluate([@ack_flag, "WORKFLOW.md"], deps)
   end
+
+  test "uses a profile manifest without selecting a legacy workflow" do
+    parent = self()
+
+    deps = %{
+      file_regular?: fn _path -> flunk("legacy workflow should not be checked") end,
+      set_workflow_file_path: fn _path -> flunk("legacy workflow should not be selected") end,
+      set_logs_root: fn _path -> :ok end,
+      set_server_port_override: fn _port -> :ok end,
+      set_profile_manifest: fn path ->
+        send(parent, {:manifest, path})
+        :ok
+      end,
+      ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
+    }
+
+    path = Path.expand("fixtures/profiles.json")
+    assert :ok = CLI.evaluate([@ack_flag, "--profiles", "fixtures/profiles.json"], deps)
+    assert_received {:manifest, ^path}
+
+    assert {:error, usage} = CLI.evaluate([@ack_flag, "--profiles", path, "WORKFLOW.md"], deps)
+    assert usage =~ "Usage:"
+    refute_received {:manifest, _path}
+  end
+
+  test "does not start when the manifest cannot be loaded" do
+    deps = %{
+      file_regular?: fn _path -> false end,
+      set_workflow_file_path: fn _path -> :ok end,
+      set_logs_root: fn _path -> :ok end,
+      set_server_port_override: fn _port -> :ok end,
+      set_profile_manifest: fn _path -> {:error, :invalid_profiles_json} end,
+      ensure_all_started: fn -> flunk("runtime should not start") end
+    }
+
+    assert {:error, message} = CLI.evaluate([@ack_flag, "--profiles", "bad.json"], deps)
+    assert message =~ "invalid_profiles_json"
+  end
 end

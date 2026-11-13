@@ -14,4 +14,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   def bind do
     Tracker.bind_agent_tools()
   end
+
+  @spec bind(map()) :: map()
+  def bind(tracker_settings) do
+    Tracker.bind_agent_tools(tracker_settings)
+  end
 end

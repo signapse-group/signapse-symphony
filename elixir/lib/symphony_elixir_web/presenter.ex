@@ -11,31 +11,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
       %{} = snapshot ->
-        waiting = Map.get(snapshot, :waiting, [])
-        waiting_updated_at = iso8601(Map.get(snapshot, :waiting_updated_at))
-
-        payload = %{
-          generated_at: generated_at,
-          counts: %{
-            running: length(snapshot.running),
-            retrying: length(snapshot.retrying),
-            blocked: length(Map.get(snapshot, :blocked, [])),
-            waiting: if(waiting_updated_at, do: length(waiting))
-          },
-          running: Enum.map(snapshot.running, &running_entry_payload/1),
-          retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
-          blocked: Enum.map(Map.get(snapshot, :blocked, []), &blocked_entry_payload/1),
-          waiting: Enum.map(waiting, &waiting_entry_payload/1),
-          waiting_updated_at: waiting_updated_at,
-          codex_totals: snapshot.codex_totals,
-          rate_limits: snapshot.rate_limits
-        }
-
-        if Map.has_key?(snapshot, :runtime_control) do
-          Map.put(payload, :runtime_control, snapshot.runtime_control)
-        else
-          payload
-        end
+        project_state(snapshot, generated_at)
 
       :timeout ->
         %{generated_at: generated_at, error: %{code: "snapshot_timeout", message: "Snapshot timed out"}}
@@ -45,22 +21,56 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
+  @doc false
+  @spec project_state(map(), String.t()) :: map()
+  def project_state(snapshot, generated_at) do
+    waiting = Map.get(snapshot, :waiting, [])
+    waiting_updated_at = iso8601(Map.get(snapshot, :waiting_updated_at))
+
+    %{
+      generated_at: generated_at,
+      counts: %{
+        running: length(snapshot.running),
+        retrying: length(snapshot.retrying),
+        blocked: length(Map.get(snapshot, :blocked, [])),
+        waiting: if(waiting_updated_at, do: length(waiting))
+      },
+      running: Enum.map(snapshot.running, &running_entry_payload/1),
+      retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
+      blocked: Enum.map(Map.get(snapshot, :blocked, []), &blocked_entry_payload/1),
+      waiting: Enum.map(waiting, &waiting_entry_payload/1),
+      waiting_updated_at: waiting_updated_at,
+      codex_totals: snapshot.codex_totals,
+      rate_limits: snapshot.rate_limits
+    }
+    |> maybe_put_control(snapshot)
+  end
+
+  defp maybe_put_control(payload, %{runtime_control: control}), do: Map.put(payload, :runtime_control, control)
+  defp maybe_put_control(payload, _snapshot), do: payload
+
   @spec issue_payload(String.t(), GenServer.name(), timeout()) :: {:ok, map()} | {:error, :issue_not_found}
   def issue_payload(issue_identifier, orchestrator, snapshot_timeout_ms) when is_binary(issue_identifier) do
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
       %{} = snapshot ->
-        running = Enum.find(snapshot.running, &(&1.identifier == issue_identifier))
-        retry = Enum.find(snapshot.retrying, &(&1.identifier == issue_identifier))
-        blocked = Enum.find(Map.get(snapshot, :blocked, []), &(&1.identifier == issue_identifier))
-
-        if is_nil(running) and is_nil(retry) and is_nil(blocked) do
-          {:error, :issue_not_found}
-        else
-          {:ok, issue_payload_body(issue_identifier, running, retry, blocked)}
-        end
+        project_issue(snapshot, issue_identifier, fn -> Config.settings!().workspace.root end)
 
       _ ->
         {:error, :issue_not_found}
+    end
+  end
+
+  @doc false
+  @spec project_issue(map(), String.t(), (-> Path.t() | nil)) :: {:ok, map()} | {:error, :issue_not_found}
+  def project_issue(snapshot, issue_identifier, workspace_root) do
+    running = Enum.find(snapshot.running, &(&1.identifier == issue_identifier))
+    retry = Enum.find(snapshot.retrying, &(&1.identifier == issue_identifier))
+    blocked = Enum.find(Map.get(snapshot, :blocked, []), &(&1.identifier == issue_identifier))
+
+    if is_nil(running) and is_nil(retry) and is_nil(blocked) do
+      {:error, :issue_not_found}
+    else
+      {:ok, issue_payload_body(issue_identifier, running, retry, blocked, workspace_root)}
     end
   end
 
@@ -75,13 +85,13 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
-  defp issue_payload_body(issue_identifier, running, retry, blocked) do
+  defp issue_payload_body(issue_identifier, running, retry, blocked, workspace_root) do
     %{
       issue_identifier: issue_identifier,
       issue_id: issue_id_from_entries(running, retry, blocked),
       status: issue_status(running, retry, blocked),
       workspace: %{
-        path: workspace_path(issue_identifier, running, retry, blocked),
+        path: workspace_path(issue_identifier, running, retry, blocked, workspace_root),
         host: workspace_host(running, retry, blocked)
       },
       attempts: %{
@@ -222,12 +232,15 @@ defmodule SymphonyElixirWeb.Presenter do
     }
   end
 
-  defp workspace_path(issue_identifier, running, retry, blocked) do
+  defp workspace_path(issue_identifier, running, retry, blocked, workspace_root) do
     (running && Map.get(running, :workspace_path)) ||
       (retry && Map.get(retry, :workspace_path)) ||
       (blocked && Map.get(blocked, :workspace_path)) ||
-      Path.join(Config.settings!().workspace.root, Workspace.workspace_key(issue_identifier))
+      derived_workspace_path(issue_identifier, workspace_root.())
   end
+
+  defp derived_workspace_path(identifier, root) when is_binary(root), do: Path.join(root, Workspace.workspace_key(identifier))
+  defp derived_workspace_path(_identifier, nil), do: nil
 
   defp workspace_host(running, retry, blocked) do
     (running && Map.get(running, :worker_host)) ||

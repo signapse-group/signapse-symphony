@@ -4,7 +4,13 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, PathSafety, SSH}
+  alias SymphonyElixir.Codex.SessionProcess
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.Jira.Client
+  alias SymphonyElixir.PathSafety
+  alias SymphonyElixir.Profile
+  alias SymphonyElixir.SSH
+  alias SymphonyElixir.WorkflowStore.Snapshot
 
   @remote_workspace_marker "__SYMPHONY_WORKSPACE__"
 
@@ -13,27 +19,47 @@ defmodule SymphonyElixir.Workspace do
   @spec create_for_issue(map() | String.t() | nil, worker_host()) ::
           {:ok, Path.t()} | {:error, term()}
   def create_for_issue(issue_or_identifier, worker_host \\ nil) do
+    create_for_issue(issue_or_identifier, worker_host, nil)
+  end
+
+  @spec create_for_issue(map() | String.t() | nil, worker_host(), Snapshot.t() | nil) ::
+          {:ok, Path.t()} | {:error, term()}
+  def create_for_issue(issue_or_identifier, worker_host, snapshot) do
     issue_context = issue_context(issue_or_identifier)
 
     try do
       safe_id = workspace_key(issue_or_identifier)
 
-      with {:ok, workspace} <- workspace_path_for_issue(safe_id, worker_host),
-           :ok <- validate_workspace_path(workspace, worker_host),
-           {:ok, workspace, created?} <- ensure_workspace(workspace, worker_host) do
-        case maybe_run_after_create_hook(workspace, issue_context, created?, worker_host) do
-          :ok ->
-            {:ok, workspace}
-
-          {:error, _reason} = error ->
-            cleanup_failed_new_workspace(workspace, created?, worker_host)
-            error
-        end
+      with :ok <- allow_host(worker_host, snapshot),
+           {:ok, workspace} <- workspace_path_for_issue(safe_id, worker_host, snapshot),
+           :ok <- validate_workspace_path(workspace, worker_host, snapshot),
+           {:ok, workspace, created?} <- ensure_workspace(workspace, worker_host),
+           :ok <- record_created_workspace(workspace, snapshot) do
+        complete_workspace_creation(workspace, issue_context, created?, worker_host, snapshot)
       end
     rescue
       error in [ArgumentError, ErlangError, File.Error] ->
         Logger.error("Workspace creation failed #{issue_log_context(issue_context)} worker_host=#{worker_host_for_log(worker_host)} error=#{Exception.message(error)}")
         {:error, error}
+    end
+  end
+
+  defp record_created_workspace(workspace, %{workspace_prepared: callback}) when is_function(callback, 1),
+    do: callback.(workspace)
+
+  defp record_created_workspace(_workspace, _snapshot), do: :ok
+
+  defp complete_workspace_creation(workspace, issue_context, created?, worker_host, snapshot) do
+    case maybe_run_after_create_hook(workspace, issue_context, created?, worker_host, snapshot) do
+      :ok ->
+        {:ok, workspace}
+
+      {:error, {:session_stop_unconfirmed, _reason}} = error ->
+        error
+
+      {:error, _reason} = error ->
+        cleanup_failed_new_workspace(workspace, created?, worker_host)
+        error
     end
   end
 
@@ -156,6 +182,30 @@ defmodule SymphonyElixir.Workspace do
     {:error, {:workspace_path_unreadable, workspace, :invalid}, ""}
   end
 
+  @spec remove_recorded(Path.t(), worker_host(), Snapshot.t() | nil) ::
+          {:ok, [String.t()]} | {:error, term(), String.t()}
+  def remove_recorded(workspace, worker_host, nil), do: remove_recorded(workspace, worker_host)
+
+  def remove_recorded(workspace, worker_host, snapshot) when is_binary(workspace) do
+    with :ok <- allow_host(worker_host, snapshot),
+         :ok <- validate_workspace_path(workspace, worker_host, snapshot),
+         :ok <- before_scoped_remove(workspace, snapshot) do
+      File.rm_rf(workspace)
+    else
+      {:error, reason} -> {:error, reason, workspace}
+    end
+  end
+
+  defp before_scoped_remove(workspace, snapshot) do
+    if File.dir?(workspace) do
+      if Map.get(snapshot, :require_contained_hook, false) and is_binary(snapshot.settings.hooks.before_remove),
+        do: {:error, :workspace_cleanup_requires_contained_hook},
+        else: run_scoped_hook(:before_remove, workspace, Path.basename(workspace), nil, snapshot)
+    else
+      :ok
+    end
+  end
+
   defp remove_local_workspace(workspace) do
     maybe_run_before_remove_hook(workspace, nil)
     File.rm_rf(workspace)
@@ -216,6 +266,21 @@ defmodule SymphonyElixir.Workspace do
 
   def remove_issue_workspaces(_identifier, _worker_host), do: :ok
 
+  @spec remove_issue_workspaces(term(), worker_host(), Snapshot.t() | nil) ::
+          :ok | {:error, term(), String.t()}
+  def remove_issue_workspaces(issue, worker_host, nil), do: remove_issue_workspaces(issue, worker_host)
+
+  def remove_issue_workspaces(issue, worker_host, snapshot) do
+    with :ok <- allow_host(worker_host, snapshot),
+         {:ok, workspace} <- workspace_path_for_issue(workspace_key(issue), worker_host, snapshot),
+         {:ok, _removed} <- remove_recorded(workspace, worker_host, snapshot) do
+      :ok
+    else
+      {:error, reason} -> {:error, reason, ""}
+      {:error, _reason, _path} = error -> error
+    end
+  end
+
   @spec run_before_run_hook(Path.t(), map() | String.t() | nil, worker_host()) ::
           :ok | {:error, term()}
   def run_before_run_hook(workspace, issue_or_identifier, worker_host \\ nil) when is_binary(workspace) do
@@ -246,6 +311,32 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
+  @spec run_before_run_hook(Path.t(), map() | String.t() | nil, worker_host(), Snapshot.t() | nil) ::
+          :ok | {:error, term()}
+  def run_before_run_hook(workspace, issue, worker_host, nil), do: run_before_run_hook(workspace, issue, worker_host)
+
+  def run_before_run_hook(workspace, issue, worker_host, snapshot) do
+    run_scoped_hook(:before_run, workspace, issue, worker_host, snapshot)
+  end
+
+  @spec run_after_run_hook(Path.t(), map() | String.t() | nil, worker_host(), Snapshot.t() | nil) :: :ok
+  def run_after_run_hook(workspace, issue, worker_host, nil), do: run_after_run_hook(workspace, issue, worker_host)
+
+  def run_after_run_hook(workspace, issue, worker_host, snapshot) do
+    run_scoped_hook(:after_run, workspace, issue, worker_host, snapshot)
+    |> ignore_hook_failure()
+  end
+
+  defp run_scoped_hook(hook, workspace, issue, worker_host, snapshot) do
+    with :ok <- allow_host(worker_host, snapshot),
+         :ok <- validate_workspace_path(workspace, worker_host, snapshot) do
+      case Map.fetch!(snapshot.settings.hooks, hook) do
+        nil -> :ok
+        command -> run_local_hook(command, workspace, issue_context(issue), Atom.to_string(hook), snapshot)
+      end
+    end
+  end
+
   defp workspace_path_for_issue(safe_id, nil) when is_binary(safe_id) do
     Config.local_workspace_root()
     |> Path.join(safe_id)
@@ -255,6 +346,16 @@ defmodule SymphonyElixir.Workspace do
   defp workspace_path_for_issue(safe_id, worker_host) when is_binary(safe_id) and is_binary(worker_host) do
     {:ok, Path.join(Config.settings!().workspace.root, safe_id)}
   end
+
+  defp workspace_path_for_issue(safe_id, worker_host, nil), do: workspace_path_for_issue(safe_id, worker_host)
+
+  defp workspace_path_for_issue(safe_id, nil, snapshot) do
+    {:ok, Path.join(snapshot.settings.workspace.root, safe_id)}
+  end
+
+  defp allow_host(_host, nil), do: :ok
+  defp allow_host(nil, _snapshot), do: :ok
+  defp allow_host(_host, _snapshot), do: {:error, :profile_remote_workspace_unsupported}
 
   @doc """
   Returns the collision-safe directory name for an issue identifier.
@@ -286,21 +387,18 @@ defmodule SymphonyElixir.Workspace do
     |> binary_part(0, 16)
   end
 
-  defp maybe_run_after_create_hook(workspace, issue_context, created?, worker_host) do
+  defp maybe_run_after_create_hook(_workspace, _issue, false, _worker_host, _snapshot), do: :ok
+
+  defp maybe_run_after_create_hook(workspace, issue, true, worker_host, %{} = snapshot) do
+    run_scoped_hook(:after_create, workspace, issue, worker_host, snapshot)
+  end
+
+  defp maybe_run_after_create_hook(workspace, issue_context, true, worker_host, nil) do
     hooks = Config.settings!().hooks
 
-    case created? do
-      true ->
-        case hooks.after_create do
-          nil ->
-            :ok
-
-          command ->
-            run_hook(command, workspace, issue_context, "after_create", worker_host)
-        end
-
-      false ->
-        :ok
+    case hooks.after_create do
+      nil -> :ok
+      command -> run_hook(command, workspace, issue_context, "after_create", worker_host)
     end
   end
 
@@ -395,26 +493,7 @@ defmodule SymphonyElixir.Workspace do
   defp ignore_hook_failure({:error, _reason}), do: :ok
 
   defp run_hook(command, workspace, issue_context, hook_name, nil) do
-    timeout_ms = Config.settings!().hooks.timeout_ms
-
-    Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local")
-
-    task =
-      Task.async(fn ->
-        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
-      end)
-
-    case Task.yield(task, timeout_ms) do
-      {:ok, cmd_result} ->
-        handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
-
-      nil ->
-        Task.shutdown(task, :brutal_kill)
-
-        Logger.warning("Workspace hook timed out hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local timeout_ms=#{timeout_ms}")
-
-        {:error, {:workspace_hook_timeout, hook_name, timeout_ms}}
-    end
+    run_local_hook(command, workspace, issue_context, hook_name, nil)
   end
 
   defp run_hook(command, workspace, issue_context, hook_name, worker_host) when is_binary(worker_host) do
@@ -433,6 +512,61 @@ defmodule SymphonyElixir.Workspace do
         {:error, reason}
     end
   end
+
+  defp run_local_hook(command, workspace, issue_context, hook_name, snapshot) do
+    {args, env, timeout_ms} = hook_options(command, snapshot)
+
+    Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local")
+
+    case run_hook_process(args, workspace, env, timeout_ms, snapshot) do
+      {:ok, cmd_result} ->
+        handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
+
+      {:error, :hook_timeout} ->
+        Logger.warning("Workspace hook timed out hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local timeout_ms=#{timeout_ms}")
+        {:error, {:workspace_hook_timeout, hook_name, timeout_ms}}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp run_hook_process(["-c", command], workspace, env, timeout_ms, %{hook_started: callback} = snapshot)
+       when is_function(callback, 1) do
+    SessionProcess.run_hook(command, workspace, snapshot, env, timeout_ms)
+  end
+
+  defp run_hook_process(args, workspace, env, timeout_ms, _snapshot) do
+    task = Task.async(fn -> System.cmd("sh", args, cd: workspace, env: env, stderr_to_stdout: true) end)
+
+    case Task.yield(task, timeout_ms) do
+      {:ok, _cmd_result} = result ->
+        result
+
+      nil ->
+        Task.shutdown(task, :brutal_kill)
+        {:error, :hook_timeout}
+    end
+  end
+
+  defp hook_options(command, nil), do: {["-lc", command], [], Config.settings!().hooks.timeout_ms}
+
+  defp hook_options(command, snapshot) do
+    env =
+      snapshot.env
+      |> Map.merge(instructions_environment(snapshot))
+      |> Map.put("SYMPHONY_PROFILE_ID", snapshot.profile_id)
+      |> Map.put("SYMPHONY_WORKSPACE_ROOT", snapshot.settings.workspace.root)
+
+    env = Profile.subprocess_env(%{env: env}, Client.secret_environment_names(snapshot.settings.tracker))
+    {["-c", command], env, snapshot.settings.hooks.timeout_ms}
+  end
+
+  defp instructions_environment(%{instructions: %{root: root, revision: revision}}) do
+    %{"SYMPHONY_INSTRUCTIONS_ROOT" => root, "SYMPHONY_INSTRUCTIONS_REVISION" => revision}
+  end
+
+  defp instructions_environment(_snapshot), do: %{}
 
   defp handle_hook_command_result({_output, 0}, _workspace, _issue_id, _hook_name) do
     :ok
@@ -473,6 +607,21 @@ defmodule SymphonyElixir.Workspace do
 
       true ->
         :ok
+    end
+  end
+
+  defp validate_workspace_path(workspace, worker_host, nil), do: validate_workspace_path(workspace, worker_host)
+
+  defp validate_workspace_path(workspace, nil, snapshot) do
+    root = snapshot.settings.workspace.root
+
+    with :ok <- validate_local_workspace_path(workspace, root),
+         {:ok, ^root} <- PathSafety.canonicalize(root),
+         {:ok, ^workspace} <- PathSafety.canonicalize(workspace) do
+      :ok
+    else
+      {:error, _reason} = error -> error
+      _ -> {:error, {:workspace_path_changed, workspace, root}}
     end
   end
 

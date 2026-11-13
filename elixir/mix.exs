@@ -24,6 +24,10 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.Orchestrator.State,
           # Stateful runtime boundaries are verified through OTP integration tests.
           SymphonyElixir.RuntimeControl,
+          # Their failure/recovery behavior is exercised with real OTP processes and SQLite.
+          SymphonyElixir.AssignmentOwners,
+          SymphonyElixir.Profile,
+          SymphonyElixir.WorkflowStore,
           SymphonyElixir.AgentRunner,
           SymphonyElixir.Application,
           SymphonyElixir.CLI,
@@ -41,6 +45,7 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixirWeb.Layouts,
           SymphonyElixirWeb.ObservabilityApiController,
           SymphonyElixirWeb.Presenter,
+          SymphonyElixirWeb.ProfileObservability,
           SymphonyElixirWeb.StaticAssetController,
           SymphonyElixirWeb.StaticAssets,
           SymphonyElixirWeb.Router,

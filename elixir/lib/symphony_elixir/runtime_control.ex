@@ -11,7 +11,7 @@ defmodule SymphonyElixir.RuntimeControl do
   require Logger
 
   alias Exqlite.Sqlite3
-  alias SymphonyElixir.{Codex.AppServer, Config}
+  alias SymphonyElixir.{Codex.AppServer, Config, Profile, WorkflowStore}
 
   @retry_open_ms 5_000
 
@@ -84,7 +84,8 @@ defmodule SymphonyElixir.RuntimeControl do
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
-    config = Config.runtime_control()
+    profile_id = Keyword.get(opts, :profile_id)
+    config = control_config(profile_id)
     enabled = Keyword.get(opts, :enabled, config.enabled or Keyword.has_key?(opts, :path))
     path = Keyword.get(opts, :path, config.path)
     runtime_id = Keyword.get(opts, :runtime_id, config.id || "local")
@@ -94,6 +95,7 @@ defmodule SymphonyElixir.RuntimeControl do
     end
 
     state = %{
+      profile_id: profile_id,
       enabled: enabled,
       conn: nil,
       path: path,
@@ -103,7 +105,7 @@ defmodule SymphonyElixir.RuntimeControl do
       heartbeat_interval_ms: Keyword.get(opts, :heartbeat_interval_ms, config.heartbeat_interval_ms),
       heartbeat_timeout_ms: Keyword.get(opts, :heartbeat_timeout_ms, config.heartbeat_timeout_ms),
       quota_check_timeout_ms: Keyword.get(opts, :quota_check_timeout_ms, config.quota_check_timeout_ms),
-      quota_reader: Keyword.get(opts, :quota_reader, &AppServer.read_rate_limits/0),
+      quota_reader: Keyword.get(opts, :quota_reader, fn -> read_profile_quota(profile_id) end),
       resume_check: nil,
       file_identity: nil,
       database_error: nil,
@@ -112,11 +114,43 @@ defmodule SymphonyElixir.RuntimeControl do
       monitor_tokens: %{}
     }
 
-    if enabled do
+    if enabled and is_binary(path) do
       connect_database(state)
     else
-      {:ok, state}
+      {:ok, if(profile_id, do: %{state | enabled: true, database_error: "Profile control path unavailable"}, else: state)}
     end
+  end
+
+  defp control_config(nil), do: Config.runtime_control()
+
+  defp control_config(id) do
+    case WorkflowStore.snapshot(id) do
+      {:ok, snapshot} ->
+        snapshot.settings.runtime_control
+
+      {:error, _reason} ->
+        path =
+          case Profile.lookup(id) do
+            {:ok, profile} -> profile.control_path
+            _ -> nil
+          end
+
+        %{
+          enabled: true,
+          path: path,
+          id: id,
+          members: [id],
+          heartbeat_interval_ms: 1_000,
+          heartbeat_timeout_ms: 10_000,
+          quota_check_timeout_ms: 15_000
+        }
+    end
+  end
+
+  defp read_profile_quota(nil), do: AppServer.read_rate_limits()
+
+  defp read_profile_quota(id) do
+    with {:ok, snapshot} <- WorkflowStore.snapshot(id), do: AppServer.read_rate_limits(snapshot)
   end
 
   defp connect_database(state) do
@@ -901,7 +935,7 @@ defmodule SymphonyElixir.RuntimeControl do
 
   defp start_resume(state, caller) do
     previous_version = current_version(state)
-    reply = with_connection(state, &begin_resume_database(&1, state))
+    reply = with :ok <- ready_to_resume(state), do: with_connection(state, &begin_resume_database(&1, state))
     state = log_control_transition(reply, previous_version, state)
 
     case reply do
@@ -922,6 +956,17 @@ defmodule SymphonyElixir.RuntimeControl do
 
       _ ->
         {reply, state}
+    end
+  end
+
+  defp ready_to_resume(%{profile_id: nil}), do: :ok
+
+  defp ready_to_resume(%{profile_id: id}) do
+    with {:ok, _snapshot} <- WorkflowStore.snapshot(id),
+         {:ok, _pin} <- SymphonyElixir.Instructions.pin(id) do
+      :ok
+    else
+      {:error, _reason} -> {:error, :profile_not_ready}
     end
   end
 

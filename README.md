@@ -39,6 +39,8 @@ help with the setup:
 Each target repository owns its `WORKFLOW.md` configuration and agent prompt, including its
 implementation, verification, and PR handoff rules. Symphony loads that file; optional agent skills
 are maintained by the target repository independently of Symphony releases.
+The [profile runtime contract](elixir/docs/profiles.md) defines how Signapse loads
+multiple Jira profiles while keeping each profile's settings and paths separate.
 The dashboard shows eligible tasks waiting for worker capacity in the current runtime, excluding
 dependency-blocked tasks; see [web dashboard](elixir/README.md#web-dashboard) for refresh semantics.
 The dashboard's **Update workflow** button can fast-forward the current service's clean target
