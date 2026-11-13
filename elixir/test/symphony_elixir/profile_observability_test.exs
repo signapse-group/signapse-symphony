@@ -3,6 +3,7 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
 
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
+  import ExUnit.CaptureLog
 
   alias SymphonyElixir.{HttpServer, Profile}
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub}
@@ -107,14 +108,21 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
     def status(_id), do: {:error, :missing}
   end
 
-  setup do
+  defmodule SlowInstructions do
+    def status("fe"), do: Process.sleep(:infinity)
+    def status("be"), do: raise("private fixture-secret")
+    def status(_id), do: {:error, :missing}
+  end
+
+  setup context do
     config = Application.get_env(:symphony_elixir, Endpoint)
+    instructions = if context[:slow_instructions], do: SlowInstructions, else: Instructions
     on_exit(fn -> Application.put_env(:symphony_elixir, Endpoint, config) end)
 
     Application.put_env(
       :symphony_elixir,
       Endpoint,
-      Keyword.merge(config, instructions: Instructions, instructions_test_pid: self())
+      Keyword.merge(config, instructions: instructions, instructions_test_pid: self())
     )
 
     root = Path.join(System.tmp_dir!(), "symphony-profile-dashboard-#{System.unique_integer([:positive])}")
@@ -139,7 +147,7 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
       start_supervised!(Supervisor.child_spec({Runtime, {id, role, self()}}, id: {id, role}))
     end
 
-    start_supervised!({HttpServer, mode: :profiles, port: 0})
+    start_supervised!({HttpServer, mode: :profiles, port: 0, snapshot_timeout_ms: context[:snapshot_timeout_ms] || 500})
     :ok
   end
 
@@ -194,6 +202,35 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
     assert has_element?(view, "#blocked-sessions", "FE-456")
     assert has_element?(view, "#blocked-sessions", "Session cleanup requires inspection")
     assert has_element?(view, "a[href='/api/v1/profiles/fe/issues/FE-456']", "JSON details")
+  end
+
+  @tag slow_instructions: true, snapshot_timeout_ms: 50
+  test "an entire profile read can time out or crash without taking down the overview or LiveView" do
+    conn = get(build_conn(), "/api/v1/state")
+    overview = json_response(conn, 200)
+    assert overview["health"] == "partial"
+    assert Enum.map(overview["profiles"], & &1["profile_id"]) == @ids
+    assert Enum.find(overview["profiles"], &(&1["profile_id"] == "fe"))["reason"] == "snapshot_timeout"
+    assert Enum.find(overview["profiles"], &(&1["profile_id"] == "be"))["reason"] == "snapshot_unavailable"
+    assert Enum.find(overview["profiles"], &(&1["profile_id"] == "landing"))["health"] == "healthy"
+    refute response(conn, 200) =~ "fixture-secret"
+
+    log =
+      capture_log(fn ->
+        conn = get(build_conn(), "/api/v1/profiles/be/state")
+        assert json_response(conn, 200)["reason"] == "snapshot_unavailable"
+        refute response(conn, 200) =~ "fixture-secret"
+      end)
+
+    refute log =~ "fixture-secret"
+
+    {:ok, view, _html} = live(build_conn(), "/profiles/fe")
+    assert has_element?(view, "#profile-health", "Snapshot timeout")
+    send(view.pid, :overview_tick)
+    assert render(view) =~ "Service partially operational"
+    assert Process.alive?(view.pid)
+    view |> element("#tab-landing") |> render_click()
+    assert has_element?(view, "#profile-panel", "LANDING-123")
   end
 
   test "issue and refresh routes stay scoped and reject invalid or omitted profile" do

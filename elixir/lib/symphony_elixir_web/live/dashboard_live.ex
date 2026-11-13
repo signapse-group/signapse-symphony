@@ -652,6 +652,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
       <p :if={@payload[:workflow_reload_error]} class="runtime-control-reason">
         Workflow reload failed: <%= humanize_code(@payload.workflow_reload_error) %>
       </p>
+      <p :if={@payload[:browser_lock] == "locked"} class="section-copy">
+        Shared browser test slot is occupied.
+      </p>
       <form id={"activate-#{@id}"} class="profile-update-form" phx-submit="activate_profile">
         <input type="hidden" name="profile" value={@id} />
         <label for={"revision-#{@id}"}>Staged instructions revision</label>

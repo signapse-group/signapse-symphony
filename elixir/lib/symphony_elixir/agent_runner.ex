@@ -192,6 +192,7 @@ defmodule SymphonyElixir.AgentRunner do
           do_run_codex_turns(session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, max_turns)
         end,
         issue: issue,
+        attempt: opts[:attempt],
         on_stopped: on_stopped
       )
     end
@@ -200,7 +201,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp do_run_codex_turns(app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
     prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
 
-    with :ok <- check_continuation_quota(app_session, turn_number),
+    with :ok <- check_continuation_quota(app_session, turn_number, issue, opts[:attempt]),
          {:ok, turn_session} <-
            AppServer.run_turn(
              app_session,
@@ -242,15 +243,17 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp check_continuation_quota(%{profile_snapshot: snapshot} = session, turn_number)
+  defp check_continuation_quota(%{profile_snapshot: snapshot} = session, turn_number, issue, attempt)
        when not is_nil(snapshot) and turn_number > 1 do
-    case AppServer.check_admission_quota(session) do
+    context = %{issue_id: issue.id, identifier: issue.identifier, thread_id: session.thread_id, attempt: attempt}
+
+    case AppServer.check_admission_quota(session, context) do
       :ok -> :ok
       {:error, reason} -> {:error, {:quota_admission_deferred, reason}}
     end
   end
 
-  defp check_continuation_quota(_session, _turn_number), do: :ok
+  defp check_continuation_quota(_session, _turn_number, _issue, _attempt), do: :ok
 
   defp finish_assignment(session, workspace, issue, refreshed, recipient, opts) do
     snapshot = opts[:profile_snapshot]

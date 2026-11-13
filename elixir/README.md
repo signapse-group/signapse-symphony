@@ -721,6 +721,9 @@ Jira supplies both `type.inward` and `type.outward` on every link. Use the actua
 The Update workflow action validates local Markdown references in the candidate commit before fast-forwarding. Operator rollout also runs each consumer real-parser phase checker, preserves host configuration and issue output, drains active turns, and verifies a fresh session. Reload does not update existing workspaces or erase old session context. Keep legacy runner checkouts for rollback, not as fallback instruction sources.
 
 Session heartbeat expiry reports session_heartbeat_expired after 60 seconds.
-Retries reserve capacity in original failure order. Three consecutive heartbeat expiries
-on one issue pause its configured RuntimeControl membership; manual Resume starts a fresh
-three-failure allowance. Give FE a separate control database to keep BE/landing running.
+Retries reserve capacity in original failure order. Three consecutive heartbeat expiries or
+stalls corroborated by fresh local pressure samples pause the configured RuntimeControl
+membership. The third retry and pause are written atomically. Successful Resume starts a fresh
+three-failure allowance. Each grouped profile keeps its own control database and pause state.
+See the [profile runtime contract](docs/profiles.md) and
+[host limits runbook](../ops/grouped/host-resources.md).

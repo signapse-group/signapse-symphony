@@ -99,7 +99,7 @@ defmodule SymphonyElixir.Profile do
         {Registry, keys: :unique, name: @registry, meta: [profiles: catalog]},
         {SymphonyElixir.Profile.Reservations, Map.put(control_paths, :assignment_owners, owners_path)},
         supervisor_child(:profile_workflow_stores, Enum.map(profiles, &workflow_child/1))
-      ] ++ runtime_children
+      ] ++ runtime_children ++ [{Task.Supervisor, name: SymphonyElixirWeb.ProfileTasks}]
 
     Supervisor.init(children, strategy: :rest_for_one)
   end

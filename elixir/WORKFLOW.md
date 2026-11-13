@@ -135,4 +135,4 @@ items unless the root `AGENTS.md` explicitly assigns that action. Stop only at t
 handoff boundary, `Done`, or a true external blocker with no meaningful independent work remaining.
 
 <!-- Runtime retry safety: heartbeat lease 60s; pending retries reserve capacity;
-three consecutive heartbeat expiries pause the configured control membership. -->
+three consecutive heartbeat expiries or pressure-classified stalls pause the configured control membership. -->
