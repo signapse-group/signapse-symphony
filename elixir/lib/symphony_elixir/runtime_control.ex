@@ -183,7 +183,7 @@ defmodule SymphonyElixir.RuntimeControl do
 
   def handle_call({:pause, reason, source}, _from, state) do
     previous_version = current_version(state)
-    reply = with_connection(state, &pause_database(&1, reason, source))
+    reply = with_connection(state, &pause_database(&1, reason, source, state.profile_id))
     state = log_control_transition(reply, previous_version, state)
     state = cancel_superseded_check(reply, state)
     {:reply, clean_reply(reply), state}
@@ -230,7 +230,7 @@ defmodule SymphonyElixir.RuntimeControl do
 
   def handle_call({:release_turn, token}, _from, state) do
     previous_version = current_version(state)
-    reply = with_connection(state, &release_turn_database(&1, token))
+    reply = with_connection(state, &release_turn_database(&1, token, state.profile_id))
     state = if match?({:ok, _}, reply), do: drop_turn_monitor(state, token), else: state
     state = log_control_transition(reply, previous_version, state)
     {:reply, clean_reply(reply), state}
@@ -293,7 +293,7 @@ defmodule SymphonyElixir.RuntimeControl do
 
       {token, _monitor_tokens} ->
         previous_version = current_version(state)
-        reply = with_connection(state, &release_turn_database(&1, token))
+        reply = with_connection(state, &release_turn_database(&1, token, state.profile_id))
         state = if match?({:ok, _}, reply), do: drop_turn_monitor(state, token), else: state
         state = log_control_transition(reply, previous_version, state)
         {:noreply, state}
@@ -396,10 +396,10 @@ defmodule SymphonyElixir.RuntimeControl do
     end
   end
 
-  defp read_status(conn) do
+  defp read_status(conn, profile_id \\ nil) do
     with {:ok, [mode, reason, source, changed_at, version, quota_summary, quota_checked_at]} <-
            query_one(conn, "SELECT mode, reason, source, changed_at, version, quota_summary, quota_checked_at FROM runtime_control WHERE id = 1"),
-         {:ok, [active_turns]} <- query_one(conn, "SELECT COUNT(*) FROM active_turns") do
+         {:ok, [active_turns]} <- reported_active_turns(conn, profile_id) do
       {:ok,
        %{
          mode: parse_mode(mode),
@@ -415,23 +415,36 @@ defmodule SymphonyElixir.RuntimeControl do
     end
   end
 
-  defp pause_database(conn, reason, source) do
-    transaction(conn, fn -> pause_in_transaction(conn, reason, source) end)
+  defp reported_active_turns(conn, nil), do: query_one(conn, "SELECT COUNT(*) FROM active_turns")
+
+  defp reported_active_turns(conn, _profile_id) do
+    # Grouped workers can hold both an assignment permit and a provider turn permit.
+    # A permit without owner metadata still counts until the runtime reaps it.
+    query_one(conn, """
+    SELECT COUNT(*) FROM (
+      SELECT 1 FROM active_turns AS turns LEFT JOIN turn_owners AS owners ON turns.token = owners.token
+      GROUP BY turns.runtime_id, owners.boot_id, owners.owner, CASE WHEN owners.token IS NULL THEN turns.token END
+    )
+    """)
   end
 
-  defp pause_in_transaction(conn, reason, source) do
+  defp pause_database(conn, reason, source, profile_id) do
+    transaction(conn, fn -> pause_in_transaction(conn, reason, source, profile_id) end)
+  end
+
+  defp pause_in_transaction(conn, reason, source, profile_id) do
     with {:ok, [current_mode, current_reason, current_source]} <-
            query_one(conn, "SELECT mode, reason, source FROM runtime_control WHERE id = 1"),
          {:ok, [active_turns]} <- query_one(conn, "SELECT COUNT(*) FROM active_turns") do
       if current_mode in ["paused", "pausing"] and current_reason == reason and current_source == source do
-        read_status(conn)
+        read_status(conn, profile_id)
       else
-        update_pause(conn, reason, source, active_turns)
+        update_pause(conn, reason, source, active_turns, profile_id)
       end
     end
   end
 
-  defp update_pause(conn, reason, source, active_turns) do
+  defp update_pause(conn, reason, source, active_turns, profile_id) do
     mode = if active_turns > 0, do: "pausing", else: "paused"
 
     with :ok <-
@@ -440,7 +453,7 @@ defmodule SymphonyElixir.RuntimeControl do
              "UPDATE runtime_control SET mode = ?1, reason = ?2, source = ?3, changed_at = ?4, version = version + 1 WHERE id = 1",
              [mode, reason, source, DateTime.utc_now() |> DateTime.to_iso8601()]
            ) do
-      read_status(conn)
+      read_status(conn, profile_id)
     end
   end
 
@@ -532,20 +545,20 @@ defmodule SymphonyElixir.RuntimeControl do
     end)
   end
 
-  defp release_turn_database(conn, token) do
+  defp release_turn_database(conn, token, profile_id) do
     transaction(conn, fn ->
       with :ok <- execute(conn, "DELETE FROM active_turns WHERE token = ?1", [token]) do
         execute(conn, "DELETE FROM turn_owners WHERE token = ?1", [token])
-        complete_drain_if_idle(conn)
+        complete_drain_if_idle(conn, profile_id)
       end
     end)
   end
 
-  defp complete_drain_if_idle(conn) do
+  defp complete_drain_if_idle(conn, profile_id \\ nil) do
     with {:ok, [mode]} <- query_one(conn, "SELECT mode FROM runtime_control WHERE id = 1"),
          {:ok, [active_turns]} <- query_one(conn, "SELECT COUNT(*) FROM active_turns"),
          :ok <- finish_drain_update(conn, mode, active_turns) do
-      read_status(conn)
+      read_status(conn, profile_id)
     end
   end
 
@@ -878,7 +891,7 @@ defmodule SymphonyElixir.RuntimeControl do
   end
 
   defp control_status(conn, state) do
-    with {:ok, status} <- read_status(conn),
+    with {:ok, status} <- read_status(conn, state.profile_id),
          {:ok, rows} <- query_rows(conn, "SELECT runtime_id, last_seen FROM runtime_services", []) do
       seen = Map.new(rows, fn [id, last_seen] -> {id, last_seen} end)
 

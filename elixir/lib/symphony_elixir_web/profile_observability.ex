@@ -221,7 +221,7 @@ defmodule SymphonyElixirWeb.ProfileObservability do
   defp safe_source(_source), do: nil
 
   defp public_control_reason(:checking_quota), do: "Checking Codex quota"
-  defp public_control_reason(:pausing), do: "Waiting for active turns to finish"
+  defp public_control_reason(:pausing), do: "Waiting for active workers to finish"
   defp public_control_reason(_mode), do: nil
 
   defp scheduler_call(id, request) do

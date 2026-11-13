@@ -248,7 +248,11 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <span :if={@payload.runtime_control[:quota_checked_at]}> · <%= @payload.runtime_control.quota_checked_at %></span>
         </p>
         <p :if={@payload[:runtime_control] && runtime_control_mode(@payload.runtime_control) == :pausing && @payload.runtime_control.active_turns > 0} class="runtime-control-reason">
-          Waiting for <%= @payload.runtime_control.active_turns %> active Codex turn(s) to finish.
+          <%= if @profile do %>
+            Waiting for <%= @payload.runtime_control.active_turns %> active worker(s) to finish.
+          <% else %>
+            Waiting for <%= @payload.runtime_control.active_turns %> active Codex turn(s) to finish.
+          <% end %>
         </p>
 
         <div class="runtime-control-actions">
