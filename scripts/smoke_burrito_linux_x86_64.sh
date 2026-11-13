@@ -20,5 +20,6 @@ otp_version=$(cat "${versions[0]}")
 test "$otp_version" = 28.5.0.8
 beam="$(dirname "${versions[0]}")/erts-16.4.0.7/bin/beam.smp"
 runtime=$("$beam" -V 2>&1)
+runtime=${runtime%$'\r'}
 [[ "$runtime" == *'version 16.4.0.7' ]]
 printf '%s\n' "$otp_version"
