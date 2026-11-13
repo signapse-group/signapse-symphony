@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   require Logger
   alias SymphonyElixir.{Codex.DynamicTool, Codex.SessionProcess, Config, PathSafety, Profile, RuntimeControl, SSH}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.WorkflowStore.Snapshot
 
   @initialize_id 1
   @thread_start_id 2
@@ -190,19 +191,35 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  @spec check_admission_quota(map() | nil) ::
+  @spec check_admission_quota(session() | Snapshot.t() | nil) ::
           :ok | {:error, :provider_quota_exhausted | :provider_quota_unavailable}
   def check_admission_quota(nil), do: :ok
 
-  def check_admission_quota(%{port: port, codex: codex}) do
-    port
-    |> read_port_rate_limits(response_deadline(codex.read_timeout_ms))
-    |> quota_availability()
+  def check_admission_quota(source) do
+    source |> read_admission_rate_limits() |> quota_availability()
   rescue
+    # A port may close after initializing and before the next request is sent.
     ArgumentError -> {:error, :provider_quota_unavailable}
   end
 
-  def check_admission_quota(snapshot), do: snapshot |> read_rate_limits() |> quota_availability()
+  defp read_admission_rate_limits(%{port: port, codex: codex}),
+    do: read_port_rate_limits(port, response_deadline(codex.read_timeout_ms))
+
+  defp read_admission_rate_limits(%Snapshot{} = snapshot) do
+    # Keep a broken pipe from terminating the caller of a standalone probe.
+    caller = self()
+    reply = make_ref()
+    {_pid, monitor} = spawn_monitor(fn -> send(caller, {reply, read_rate_limits(snapshot)}) end)
+
+    receive do
+      {^reply, result} ->
+        Process.demonitor(monitor, [:flush])
+        result
+
+      {:DOWN, ^monitor, :process, _pid, _reason} ->
+        {:error, :provider_quota_unavailable}
+    end
+  end
 
   defp quota_availability({:ok, %{available?: true}}), do: :ok
   defp quota_availability({:ok, %{available?: false}}), do: {:error, :provider_quota_exhausted}

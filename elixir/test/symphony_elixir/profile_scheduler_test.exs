@@ -75,6 +75,14 @@ defmodule SymphonyElixir.ProfileSchedulerTest do
     assert {:ok, snapshot} = WorkflowStore.snapshot("fe")
     assert {:ok, %{available?: true}} = AppServer.read_rate_limits(snapshot)
     assert String.trim(File.read!(trace)) == "#{home}|unset|unset"
+
+    File.write!(script, """
+    #!/bin/sh
+    IFS= read -r line
+    printf '%s\\n' '{"id":1,"result":{}}'
+    """)
+
+    assert {:error, :provider_quota_unavailable} = AppServer.check_admission_quota(snapshot)
   end
 
   test "a paused invalid profile recovers independently and keeps the latest pause", %{root: root} do
