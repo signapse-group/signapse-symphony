@@ -65,7 +65,11 @@ defmodule SymphonyElixir.Application do
         ]
 
       profiles ->
-        [{SymphonyElixir.Profile, profiles}, {SymphonyElixir.HttpServer, mode: :profiles}]
+        [
+          SymphonyElixir.HostResources,
+          {SymphonyElixir.Profile, profiles},
+          {SymphonyElixir.HttpServer, mode: :profiles}
+        ]
     end
   end
 
