@@ -6,6 +6,16 @@ defmodule SymphonyElixirWeb.ProfileObservability do
 
   @control_keys ~w(enabled mode desired_state changed_at version active_turns quota_checked_at)a
   @session_inspection "Session cleanup requires inspection"
+  @checkout_messages %{
+    "checkout_workflow_missing" => "Workflow missing from checkout",
+    "checkout_workflow_invalid" => "Workflow must be valid prompt-only Markdown",
+    "checkout_agents_missing" => "AGENTS.md missing from checkout",
+    "checkout_agents_invalid" => "Invalid AGENTS.md in checkout",
+    "checkout_skills_missing" => "Required skill missing from checkout",
+    "checkout_skills_invalid" => "Invalid skill in checkout",
+    "checkout_instructions_invalid" => "Checkout instruction check failed",
+    "checkout_prompt_invalid" => "Checkout prompt could not be rendered"
+  }
   @retry_messages %{
     "session_heartbeat_expired" => "Session heartbeat expired",
     "host_pressure_stall" => "Worker stalled during host resource pressure",
@@ -95,6 +105,7 @@ defmodule SymphonyElixirWeb.ProfileObservability do
       reason: error.code,
       error: error,
       workflow_revision: nil,
+      instructions_source: instructions_source(id),
       instructions_revision: nil,
       max_concurrent_agents: nil,
       generated_at: generated_at(),
@@ -152,9 +163,15 @@ defmodule SymphonyElixirWeb.ProfileObservability do
   end
 
   def perform(id, :activate, revision) when is_binary(revision) and byte_size(revision) <= 128 do
-    case instruction_call(:activate, [id, revision]) do
-      {:ok, _pin} -> "Workflow revision activated."
-      {:error, reason} -> "Workflow activation failed (#{safe_code(reason, "invalid_instructions")})."
+    case instructions_source(id) do
+      "checkout" ->
+        "This profile reads instructions from the task checkout."
+
+      _ ->
+        case instruction_call(:activate, [id, revision]) do
+          {:ok, _pin} -> "Workflow revision activated."
+          {:error, reason} -> "Workflow activation failed (#{safe_code(reason, "invalid_instructions")})."
+        end
     end
   end
 
@@ -178,6 +195,7 @@ defmodule SymphonyElixirWeb.ProfileObservability do
     config = workflow_status(id)
     control = control_status(id, snapshot)
     reason = unavailable_reason(config, snapshot, control)
+    source = instructions_source(id)
 
     %{
       profile_id: id,
@@ -187,10 +205,19 @@ defmodule SymphonyElixirWeb.ProfileObservability do
       admission_error: admission_error(snapshot),
       workflow_revision: config.revision,
       workflow_reload_error: config.reload_error,
-      instructions_revision: instructions_revision(id, snapshot),
+      instructions_source: source,
+      instructions_revision: if(source == "package", do: instructions_revision(id, snapshot)),
       max_concurrent_agents: max_concurrent_agents(id, snapshot),
       runtime_control: control
     }
+  end
+
+  defp instructions_source(id) do
+    case Profile.lookup(id) do
+      {:ok, %{checkout_workflow: path}} when is_binary(path) -> "checkout"
+      {:ok, _profile} -> "package"
+      {:error, _reason} -> nil
+    end
   end
 
   defp browser_lock(id) when id in ["fe", "qa"] do
@@ -287,10 +314,11 @@ defmodule SymphonyElixirWeb.ProfileObservability do
   defp desired_state(mode) when mode in [:pausing, :paused, :checking_quota], do: "paused"
   defp desired_state(_mode), do: "unknown"
 
-  defp safe_source(source) when source in ["manual", "quota", "quota_check", "resume", "infrastructure"], do: source
+  defp safe_source(source) when source in ["manual", "quota", "quota_check", "resume", "infrastructure", "checkout_instructions"], do: source
   defp safe_source(_source), do: nil
 
   defp public_control_reason(:checking_quota, _source), do: "Checking Codex quota"
+  defp public_control_reason(mode, "checkout_instructions") when mode in [:paused, :pausing], do: "Fix the checkout instructions before resuming"
   defp public_control_reason(mode, "infrastructure") when mode in [:paused, :pausing], do: "Infrastructure retry limit reached"
   defp public_control_reason(:pausing, _source), do: "Waiting for active workers to finish"
   defp public_control_reason(_mode, _source), do: nil
@@ -327,12 +355,31 @@ defmodule SymphonyElixirWeb.ProfileObservability do
   end
 
   defp sanitize_entry(entry) do
-    message = Map.get(@retry_messages, entry[:reason_code])
+    code = entry[:reason_code]
+    checkout_message = @checkout_messages[code]
+    message = checkout_message || @retry_messages[code]
 
     entry
     |> Map.update(:handoff_error, nil, fn reason -> if reason, do: @session_inspection end)
     |> Map.update(:error, message, fn reason -> message || if(reason, do: "See service logs for details") end)
-    |> Map.put(:reason_code, if(message, do: entry[:reason_code]))
+    |> Map.put(:reason_code, if(message, do: code))
     |> Map.put(:last_codex_message, nil)
+    |> Map.put(:checkout_failure_path, if(checkout_message, do: safe_relative_path(entry[:checkout_failure_path])))
+    |> Map.put(:checkout_head, safe_digest(entry[:checkout_head], [40, 64]))
+    |> Map.put(:checkout_prompt_digest, safe_digest(entry[:checkout_prompt_digest], [64]))
   end
+
+  defp safe_relative_path(path) when is_binary(path) and byte_size(path) <= 256 do
+    segments = String.split(path, "/")
+
+    if Enum.all?(segments, &(&1 not in [".", ".."] and Regex.match?(~r/\A[A-Za-z0-9_.-]+\z/, &1))), do: path
+  end
+
+  defp safe_relative_path(_path), do: nil
+
+  defp safe_digest(value, lengths) when is_binary(value) do
+    if byte_size(value) in lengths and Regex.match?(~r/\A[0-9a-f]+\z/, value), do: value
+  end
+
+  defp safe_digest(_value, _lengths), do: nil
 end

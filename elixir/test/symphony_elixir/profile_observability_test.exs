@@ -15,40 +15,49 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
   defmodule Runtime do
     use GenServer
 
-    def start_link({profile, role, test}) do
-      GenServer.start_link(__MODULE__, {profile, test, :running}, name: Profile.via(profile, role))
+    def start_link({profile, role, test, checkout?}) do
+      mode = if checkout?, do: :paused, else: :running
+      GenServer.start_link(__MODULE__, {profile, test, mode, checkout?}, name: Profile.via(profile, role))
     end
 
     @impl true
     def init(state), do: {:ok, state}
 
     @impl true
-    def handle_call(:snapshot, _from, {id, _, _} = state) do
-      {:reply, snapshot(id), state}
+    def handle_call(:snapshot, _from, {id, _, _, checkout?} = state) do
+      {:reply, snapshot(id, checkout?), state}
     end
 
-    def handle_call(:request_refresh, _from, {id, test, _} = state) do
+    def handle_call(:request_refresh, _from, {id, test, _, _} = state) do
       send(test, {:refresh, id})
       {:reply, %{queued: true, coalesced: false, requested_at: DateTime.utc_now(), operations: ["poll"]}, state}
     end
 
-    def handle_call(:status, _from, {id, _, mode} = state), do: {:reply, {:ok, status(id, mode)}, state}
+    def handle_call(:status, _from, {id, _, mode, checkout?} = state), do: {:reply, {:ok, status(id, mode, checkout?)}, state}
 
-    def handle_call({:pause, _reason, "manual"}, _from, {id, test, _}) do
+    def handle_call({:pause, _reason, "manual"}, _from, {id, test, _, checkout?}) do
       send(test, {:pause, id})
-      {:reply, {:ok, status(id, :paused)}, {id, test, :paused}}
+      {:reply, {:ok, status(id, :paused, checkout?)}, {id, test, :paused, checkout?}}
     end
 
-    def handle_call(:resume, _from, {id, test, _}) do
+    def handle_call(:resume, _from, {id, test, _, checkout?}) do
       send(test, {:resume, id})
-      {:reply, {:ok, status(id, :checking_quota)}, {id, test, :checking_quota}}
+      {:reply, {:ok, status(id, :checking_quota, checkout?)}, {id, test, :checking_quota, checkout?}}
     end
 
-    defp status(id, mode) do
-      %{enabled: true, mode: mode, active_turns: 0, database_error: nil, services: %{id => %{status: :online}}}
+    defp status(id, mode, checkout?) do
+      %{
+        enabled: true,
+        mode: mode,
+        active_turns: 0,
+        database_error: nil,
+        services: %{id => %{status: :online}},
+        source: if(checkout?, do: "checkout_instructions"),
+        reason: "private fixture-secret in pause"
+      }
     end
 
-    defp snapshot(id) do
+    defp snapshot(id, checkout?) do
       item = %{
         issue_id: "issue-#{id}",
         identifier: String.upcase(id) <> "-123",
@@ -76,12 +85,32 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
           handoff_error: "private fixture-secret in stop failure"
         })
 
+      item =
+        if checkout?, do: Map.merge(item, %{checkout_head: String.duplicate("a", 40), checkout_prompt_digest: String.duplicate("c", 64)}), else: item
+
+      retrying =
+        if checkout? do
+          retry = %{
+            issue_id: "issue-789",
+            identifier: "FE-789",
+            checkout_failure_path: ".agents/skills/code-review/SKILL.md",
+            due_in_ms: 0,
+            attempt: 1,
+            reason_code: "checkout_skills_missing",
+            error: "private fixture-secret in retry"
+          }
+
+          [retry, %{retry | issue_id: "issue-790", identifier: "FE-790", checkout_failure_path: "../fixture-secret"}]
+        else
+          []
+        end
+
       %{
         readiness: if(id == "qa", do: %{ready: false, error: :instructions_missing}, else: %{ready: true, error: nil}),
         admission_error: admission_error(id),
         instructions_revision: "fixture-#{id}",
         running: if(id == "fe", do: [item, held], else: [item]),
-        retrying: [],
+        retrying: retrying,
         waiting: [],
         waiting_updated_at: DateTime.utc_now(),
         codex_totals: %{input_tokens: 1, output_tokens: 2, total_tokens: 3, seconds_running: 0},
@@ -141,10 +170,15 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
       )
 
     {:ok, profiles} = Profile.load(@fixture, env)
+    checkout? = context[:checkout] == true
+
+    profiles =
+      if checkout?, do: Enum.map(profiles, fn profile -> if profile.id == "fe", do: Map.put(profile, :checkout_workflow, "WORKFLOW.md"), else: profile end), else: profiles
+
     start_supervised!({Profile, profiles})
 
     for id <- @ids, role <- [:orchestrator, :runtime_control] do
-      start_supervised!(Supervisor.child_spec({Runtime, {id, role, self()}}, id: {id, role}))
+      start_supervised!(Supervisor.child_spec({Runtime, {id, role, self(), checkout? and id == "fe"}}, id: {id, role}))
     end
 
     start_supervised!({HttpServer, mode: :profiles, port: 0, snapshot_timeout_ms: context[:snapshot_timeout_ms] || 500})
@@ -167,6 +201,7 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
       payload = json_response(conn, 200)
       assert payload["profile_id"] == id
       assert payload["max_concurrent_agents"] == cap
+      assert payload["instructions_source"] == "package"
       assert payload["instructions_revision"] == "fixture-#{id}"
       assert byte_size(payload["workflow_revision"]) == 64
       assert payload["counts"] == %{"running" => 1, "retrying" => 0, "blocked" => if(id == "fe", do: 1, else: 0), "waiting" => 0}
@@ -175,6 +210,37 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
       refute response(conn, 200) =~ "fixture-secret"
       refute response(conn, 200) =~ "fixture-token"
     end
+  end
+
+  @tag checkout: true, slow_instructions: true
+  test "checkout diagnostics are safe and the profile can resume without an active package" do
+    conn = get(build_conn(), "/api/v1/profiles/fe/state")
+    payload = json_response(conn, 200)
+    assert payload["instructions_source"] == "checkout"
+    assert payload["instructions_revision"] == nil
+    assert payload["health"] == "healthy"
+    assert payload["runtime_control"]["mode"] == "paused"
+    assert payload["runtime_control"]["reason"] == "Fix the checkout instructions before resuming"
+    assert [%{"checkout_head" => head, "checkout_prompt_digest" => digest}] = payload["running"]
+    assert head == String.duplicate("a", 40)
+    assert digest == String.duplicate("c", 64)
+    assert [retry, unsafe] = payload["retrying"]
+    assert retry["checkout_failure_path"] == ".agents/skills/code-review/SKILL.md"
+    assert unsafe["checkout_failure_path"] == nil
+    refute response(conn, 200) =~ "fixture-secret"
+
+    issue = json_response(get(build_conn(), "/api/v1/profiles/fe/issues/FE-789"), 200)
+    assert issue["last_error"] == "Required skill missing from checkout"
+    assert issue["retry"]["checkout_failure_path"] == retry["checkout_failure_path"]
+
+    {:ok, view, _html} = live(build_conn(), "/profiles/fe")
+    assert has_element?(view, "#instructions-source", "Task checkout")
+    assert has_element?(view, "#retry-queue", "Required skill missing from checkout")
+    assert has_element?(view, "#retry-queue", retry["checkout_failure_path"])
+    refute has_element?(view, "#activate-fe")
+    view |> element("#resume-profile") |> render_click()
+    assert_receive {:resume, "fe"}
+    render_async(view)
   end
 
   test "held sessions appear only in the selected profile's blocked rows" do
