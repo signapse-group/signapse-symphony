@@ -50,6 +50,8 @@ mount available for rollback.
    executable, grouped drop-in, manifest, live YAML workflows, QA hook,
    package pointers and mount configuration. Protect any backup containing
    runtime settings with operator-only permissions.
+   Before updating a stable checkout used by a legacy unit, save its effective
+   combined workflow separately so the unit can still be recovered.
 3. Install the verified, compatible binary with the original package
    manifest. To use the automated deploy job, restore the marker under the
    lock after drain and release the lock before the job runs. If an earlier
@@ -64,7 +66,10 @@ mount available for rollback.
    after its PR branch and server checkout contain the compatible prompt.
    For each change to the grouped manifest, repeat maintenance coordination
    and drain the grouped service before restarting. Install the matching
-   QA hook before enabling the QA checkout profile.
+   QA hook before enabling the QA checkout profile. The deploy job transfers
+   the binary and deploy script, so install the reviewed hook separately at
+   the path selected by the QA workflow. Verify its checksum and confirm the
+   stable QA checkout's installed checker exports `checkLocalInstructions`.
 5. After restart, verify `instructions_source: "checkout"` and the expected
    `workflow_revision` for the migrated profile. Package profiles still report
    an `instructions_revision`. A checkout's commit and prompt hash are
