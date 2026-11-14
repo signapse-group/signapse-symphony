@@ -74,7 +74,8 @@ defmodule SymphonyElixir.ProfileTest do
       assert {:ok, [^expected]} = Profile.load(path, %{})
     end
 
-    start_supervised!({Profile, [%Profile{id: "planning", checkout_workflow: "workflow/symphony/WORKFLOW.md"}]})
+    profile = fixture(root, "planning")
+    start_supervised!({Profile, [%{profile | checkout_workflow: "workflow/symphony/WORKFLOW.md", instructions_root: nil}]})
     assert {:error, :checkout_instructions_enabled} = SymphonyElixir.Instructions.pin("planning")
   end
 
