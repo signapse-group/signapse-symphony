@@ -57,6 +57,8 @@ see [session containment and recovery](../docs/codex-session-containment.md).
      prompt, referring to your repository's `AGENTS.md` and optional installed skills as needed.
 5. Follow the instructions below to install the required runtime dependencies and start the service.
 
+Grouped profiles can use the assignment checkout for their prompt and local
+skills through [checkout instructions](docs/profiles.md#checkout-instructions).
 Symphony does not require a shared workflow skills package. Each repository maintains its workflow
 and optional skills independently of the Symphony runtime.
 
