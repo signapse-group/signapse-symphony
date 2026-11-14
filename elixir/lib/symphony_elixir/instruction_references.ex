@@ -22,6 +22,40 @@ defmodule SymphonyElixir.InstructionReferences do
     end
   end
 
+  @doc false
+  @spec checkout_requirements(Path.t(), Path.t(), String.t(), String.t(), String.t() | nil) ::
+          {:ok, [{Path.t(), String.t() | nil}]} | {:error, :unsafe_instruction_reference}
+  def checkout_requirements(root, workflow, template, rendered, profile_id) do
+    authored = MapSet.new(references(template, workflow))
+
+    rendered
+    |> references(workflow)
+    |> Enum.filter(&MapSet.member?(authored, &1))
+    |> Enum.reduce_while({:ok, []}, fn {source, target, label}, {:ok, paths} ->
+      [path | anchors] = String.split(target, "#", parts: 2)
+      path = URI.decode(path)
+
+      if not provenance?(label) and checkout_requirement?(path, profile_id) do
+        case resolve_reference_path(root, source, path, List.first(anchors)) do
+          {:ok, relative, anchor} -> {:cont, {:ok, [{relative, anchor} | paths]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      else
+        {:cont, {:ok, paths}}
+      end
+    end)
+  end
+
+  @doc false
+  @spec checkout_anchor(String.t(), String.t() | nil) :: :ok | {:error, :missing_instruction_anchor}
+  def checkout_anchor(content, anchor), do: validate_anchor(content, anchor)
+
+  defp checkout_requirement?(path, profile_id) do
+    not Regex.match?(~r/\A(?:[A-Za-z][A-Za-z0-9+.-]*:|\/\/)/, path) and
+      (Regex.match?(~r{(?:^|/)(?:(?:AGENTS(?:\.override)?|CONTRIBUTING|README)\.md|docs/runbooks/[^/]+\.md|\.agents/skills/[^/]+/SKILL\.md)$}, path) or
+         (profile_id == "planning" and String.ends_with?(path, ".md")))
+  end
+
   @spec collect(Path.t(), Path.t(), [String.t()], [String.t()], (String.t() -> {:ok, binary()} | {:error, atom()})) ::
           {:ok, %{String.t() => binary()}} | {:error, atom()}
   def collect(root, workflow, required, rendered_prompts, read) do

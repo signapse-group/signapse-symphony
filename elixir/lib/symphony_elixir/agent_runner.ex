@@ -5,7 +5,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.{Config, Profile, PromptBuilder, RuntimeControl, Tracker, Workspace}
+  alias SymphonyElixir.{Config, Instructions, Profile, PromptBuilder, RuntimeControl, Tracker, Workspace}
   alias SymphonyElixir.Tracker.Issue
 
   @type worker_host :: String.t() | nil
@@ -27,7 +27,7 @@ defmodule SymphonyElixir.AgentRunner do
       metadata = [
         profile_id: snapshot.profile_id,
         workflow_revision: snapshot.revision,
-        instructions_revision: opts[:instructions].revision
+        instructions_revision: get_in(opts[:instructions], [:revision])
       ]
 
       Logger.metadata(metadata)
@@ -47,6 +47,10 @@ defmodule SymphonyElixir.AgentRunner do
 
       {:error, {:quota_admission_deferred, _reason} = deferred} when is_map(snapshot) ->
         exit(deferred)
+
+      {:error, {:checkout_instructions, code, path} = failure} ->
+        Logger.warning("Checkout instructions unavailable #{issue_context(issue)} reason=#{code} path=#{inspect(path)}")
+        exit({:session_not_started, failure})
 
       {:error, reason} ->
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
@@ -91,7 +95,8 @@ defmodule SymphonyElixir.AgentRunner do
         result =
           try do
             with :ok <- record_workspace(opts, codex_update_recipient, issue, worker_host, workspace),
-                 :ok <- run_workspace_hook(:run_before_run_hook, workspace, issue, worker_host, snapshot) do
+                 :ok <- run_workspace_hook(:run_before_run_hook, workspace, issue, worker_host, snapshot),
+                 {:ok, opts} <- prepare_checkout(workspace, issue, codex_update_recipient, opts) do
               run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
             end
           catch
@@ -111,6 +116,29 @@ defmodule SymphonyElixir.AgentRunner do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp prepare_checkout(workspace, issue, recipient, opts) do
+    case opts[:profile_snapshot] do
+      %{checkout_workflow: path, settings: settings} when is_binary(path) ->
+        with {:ok, prompt} <- Instructions.prepare_checkout(workspace, path, issue, settings, opts[:attempt]),
+             {:ok, head} <- Instructions.checkout_head(workspace) do
+          Logger.info("Checkout instructions loaded #{issue_context(issue)} workflow=#{inspect(path)} checkout_head=#{head} checkout_prompt_digest=#{prompt.workflow_digest}")
+
+          if is_pid(recipient) do
+            info = %{worker_pid: self(), checkout_head: head, checkout_prompt_digest: prompt.workflow_digest}
+            send(recipient, {:worker_runtime_info, issue.id, info})
+          end
+
+          {:ok, Keyword.put(opts, :checkout_prompt, prompt)}
+        else
+          {:error, :checkout_head_unavailable} -> {:error, {:checkout_instructions, :checkout_head_unavailable, path}}
+          {:error, _reason} = error -> error
+        end
+
+      _ ->
+        {:ok, opts}
     end
   end
 
@@ -180,6 +208,7 @@ defmodule SymphonyElixir.AgentRunner do
       worker_host: worker_host,
       profile_snapshot: snapshot,
       instructions: opts[:instructions],
+      checkout_prompt: opts[:checkout_prompt],
       on_started: on_started,
       on_stopped: on_stopped,
       lifecycle_owner: codex_update_recipient
@@ -281,9 +310,10 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp build_turn_prompt(issue, opts, 1, _max_turns) do
-    case opts[:instructions] do
-      nil -> PromptBuilder.build_prompt(issue, opts)
-      pin -> recovery_prompt(PromptBuilder.build_prompt(issue, opts[:attempt], pin), opts)
+    case {opts[:checkout_prompt], opts[:instructions]} do
+      {%{prompt: prompt}, nil} -> recovery_prompt(prompt, opts)
+      {nil, nil} -> PromptBuilder.build_prompt(issue, opts)
+      {nil, pin} -> recovery_prompt(PromptBuilder.build_prompt(issue, opts[:attempt], pin), opts)
     end
   end
 

@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.ProfileSchedulerTest do
   use ExUnit.Case
 
-  alias SymphonyElixir.{AgentRunner, AgentRuntimeSupervisor, AssignmentOwners}
+  alias SymphonyElixir.{AgentRunner, AgentRuntimeSupervisor, AssignmentOwners, Workspace}
   alias SymphonyElixir.Codex.AppServer
   alias SymphonyElixir.Instructions, as: LocalInstructions
   alias SymphonyElixir.Orchestrator
@@ -35,7 +35,15 @@ defmodule SymphonyElixir.ProfileSchedulerTest do
   end
 
   defmodule JiraClient do
-    def fetch_issues_by_states(_states, _tracker), do: {:ok, []}
+    def fetch_issues_by_states(_states, tracker), do: {:ok, checkout_issues(tracker)}
+
+    def fetch_issues_by_ids(ids, tracker), do: {:ok, Enum.filter(checkout_issues(tracker), &(&1.id in ids))}
+
+    defp checkout_issues(%{env: %{"CHECKOUT_PROBE" => "1"}}) do
+      [%Issue{id: "101", identifier: "SIGN-101", title: "Checkout task", state: "Ready", labels: ["route-frontend"], dispatchable: true}]
+    end
+
+    defp checkout_issues(_tracker), do: []
   end
 
   test "profile quota subprocess uses its own credentials scope and environment", %{root: root} do
@@ -215,6 +223,98 @@ defmodule SymphonyElixir.ProfileSchedulerTest do
     execute = %{candidate | labels: ["route-quality-assurance", "qa-execute"]}
     assert Orchestrator.should_dispatch_issue_for_test(generate, state)
     refute AgentRunner.same_agent_task?(generate, execute, snapshot.settings.tracker, "qa")
+  end
+
+  test "QA prerequisite hook gives checkout-only typed failures without reading a package", %{root: root} do
+    qa = profile(root, "qa")
+    qa = %{qa | checkout_workflow: "WORKFLOW.md", instructions_root: nil}
+
+    workflow = File.read!(qa.workflow_path)
+
+    hook_config = """
+    hooks:
+      before_run: |
+        test "$SYMPHONY_INSTRUCTIONS_SOURCE" = checkout || exit 5
+        test -z "${SYMPHONY_INSTRUCTIONS_ROOT+x}${SYMPHONY_INSTRUCTIONS_REVISION+x}" || exit 6
+        exit "$(cat result)"
+    ---
+    qa fixture:
+    """
+
+    File.write!(qa.workflow_path, String.replace(workflow, "---\nqa fixture:", String.trim(hook_config)))
+    qa = %{qa | env: Map.merge(qa.env, %{"PATH" => System.fetch_env!("PATH"), "SYMPHONY_INSTRUCTIONS_ROOT" => "/old", "SYMPHONY_INSTRUCTIONS_REVISION" => "old"})}
+    start_supervised!({Profile, [qa]})
+    assert {:ok, snapshot} = WorkflowStore.snapshot("qa")
+    workspace = Path.join(snapshot.settings.workspace.root, "SIGN-12")
+    File.mkdir_p!(workspace)
+    result_file = Path.join(workspace, "result")
+    issue = %Issue{identifier: "SIGN-12"}
+
+    File.write!(result_file, "78")
+
+    assert {:error, {:checkout_instructions, :checkout_instructions_invalid, "WORKFLOW.md"}} =
+             Workspace.run_before_run_hook(workspace, issue, nil, snapshot)
+
+    File.write!(result_file, "1")
+    assert {:error, {:workspace_hook_failed, "before_run", 1, _}} = Workspace.run_before_run_hook(workspace, issue, nil, snapshot)
+  end
+
+  test "missing checkout instructions stop before a task session and survive scheduler restart", %{root: root} do
+    fe = profile(root, "fe")
+    workspace = Path.join(fe.env["SYMPHONY_WORKSPACE_ROOT"], "SIGN-101")
+    File.mkdir_p!(workspace)
+    marker = Path.join(workspace, "preserve-me")
+    File.write!(marker, "existing output")
+    trace = Path.join(root, "codex-trace")
+    command = Path.join(root, "fake-codex")
+
+    File.write!(command, ~S"""
+    #!/bin/sh
+    while IFS= read -r line; do
+      case "$line" in
+        *'"method":"initialize"'*) printf '%s\n' '{"id":1,"result":{}}' ;;
+        *'"method":"account/rateLimits/read"'*) printf '%s\n' '{"id":4,"result":{"rateLimits":{"primary":{"usedPercent":7}}}}'; printf 'quota\n' >> "$CHECKOUT_PROBE_TRACE"; exit 0 ;;
+        *'"method":"thread/start"'*) printf 'thread\n' >> "$CHECKOUT_PROBE_TRACE"; exit 1 ;;
+      esac
+    done
+    """)
+
+    File.chmod!(command, 0o755)
+    content = File.read!(fe.workflow_path)
+    updated = String.replace(content, "---\nfe fixture:", "polling:\n  interval_ms: 50\ncodex:\n  command: #{command}\n---\nfe fixture:")
+    File.write!(fe.workflow_path, updated)
+
+    fe = %{
+      fe
+      | instructions_root: nil,
+        checkout_workflow: "WORKFLOW.md",
+        env: Map.merge(fe.env, %{"PATH" => System.fetch_env!("PATH"), "CHECKOUT_PROBE" => "1", "CHECKOUT_PROBE_TRACE" => trace})
+    }
+
+    start_supervised!({Profile, {[fe], Path.join(root, "owners.db")}})
+    control = Profile.via("fe", :runtime_control)
+    scheduler = Profile.via("fe", :orchestrator)
+    assert_eventually(fn -> match?(%{readiness: %{ready: true}, instructions_revision: nil}, snapshot("fe")) end)
+    assert {:ok, %{mode: :checking_quota}} = RuntimeControl.resume(control)
+
+    assert_eventually(fn ->
+      match?(%{runtime_control: %{mode: :paused, source: "checkout_instructions"}, running: []}, snapshot("fe"))
+    end)
+
+    assert {:ok, [%{"reason_code" => "checkout_workflow_missing", "checkout_failure_path" => "WORKFLOW.md", "workspace_path" => ^workspace}]} =
+             RuntimeControl.pending_retries("fe", control)
+
+    assert File.read!(marker) == "existing output"
+    assert File.read!(trace) =~ "quota"
+    refute File.read!(trace) =~ "thread"
+
+    old = GenServer.whereis(scheduler)
+    Process.exit(old, :kill)
+
+    assert_eventually(fn ->
+      GenServer.whereis(scheduler) not in [old, nil] and
+        match?(%{runtime_control: %{mode: :paused, source: "checkout_instructions"}, retrying: [%{checkout_failure_path: "WORKFLOW.md"}]}, snapshot("fe"))
+    end)
   end
 
   defp profile(root, id) do

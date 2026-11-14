@@ -1,6 +1,15 @@
 defmodule SymphonyElixir.PathSafety do
   @moduledoc false
 
+  @spec repository_relative?(term()) :: boolean()
+  def repository_relative?(path) when is_binary(path) and byte_size(path) > 0 do
+    String.valid?(path) and Path.type(path) == :relative and
+      not String.contains?(path, [<<0>>, "\r", "\n", "\\", ":"]) and
+      Enum.all?(String.split(path, "/"), &(&1 not in ["", ".", "..", ".git"]))
+  end
+
+  def repository_relative?(_path), do: false
+
   @spec canonicalize(Path.t()) :: {:ok, Path.t()} | {:error, term()}
   def canonicalize(path) when is_binary(path) do
     expanded_path = Path.expand(path)

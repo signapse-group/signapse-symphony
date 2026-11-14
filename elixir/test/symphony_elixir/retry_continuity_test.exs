@@ -170,6 +170,52 @@ defmodule SymphonyElixir.RetryContinuityTest do
              RuntimeControl.pending_retries("fe")
   end
 
+  @tag :tmp_dir
+  test "checkout failure drains only the affected profile and survives a control restart", %{tmp_dir: root} do
+    start_supervised!({Registry, keys: :unique, name: SymphonyElixir.ProfileRegistry})
+    fe = start_grouped_control("fe", root)
+    qa = start_grouped_control("qa", root)
+    assert {:ok, fe_turn} = RuntimeControl.acquire_turn(fe)
+    assert {:ok, qa_turn} = RuntimeControl.acquire_turn(qa)
+    assert {:ok, %{retry_generation: generation}} = RuntimeControl.status(fe)
+
+    issue = %Issue{id: "checkout", identifier: "SIGN-CHECKOUT", state: "In Review"}
+    state = %Orchestrator.State{profile_id: "fe", profile_snapshot: %{settings: Config.settings!()}, codex_totals: %{}}
+    path = ".agents/skills/code-review/SKILL.md"
+    reason = {:session_not_started, {:checkout_instructions, :checkout_required_file_missing, path}}
+    state = fail(state, issue, 0, reason, nil, generation)
+    assert MapSet.member?(state.claimed, issue.id)
+    assert {:ok, %{mode: :pausing, source: "checkout_instructions", active_turns: 1}} = RuntimeControl.status(fe)
+    assert {:error, :runtime_paused} = RuntimeControl.acquire_turn(fe)
+    assert {:ok, %{mode: :running}} = RuntimeControl.status(qa)
+    assert {:ok, %{active_turns: 0}} = RuntimeControl.release_turn(qa_turn, qa)
+    assert {:ok, %{mode: :paused, active_turns: 0}} = RuntimeControl.release_turn(fe_turn, fe)
+
+    assert {:ok, [%{"attempt" => 1, "reason_code" => "checkout_required_file_missing", "checkout_failure_path" => ^path}]} =
+             RuntimeControl.pending_retries("fe", fe)
+
+    assert :ok = stop_supervised(fe)
+    fe_opts = [path: Path.join(root, "fe.sqlite3"), runtime_id: "fe", members: ["fe"], name: fe]
+    start_supervised!(Supervisor.child_spec({RuntimeControl, fe_opts}, id: fe))
+    assert {:ok, %{mode: :paused, source: "checkout_instructions"}} = RuntimeControl.status(fe)
+    assert {:ok, [%{"checkout_failure_path" => ^path}]} = RuntimeControl.pending_retries("fe", fe)
+    assert {:ok, %{resume_version: version}} = RuntimeControl.begin_resume(fe)
+
+    assert {:ok, %{mode: :running, retry_generation: current_generation}} =
+             RuntimeControl.complete_resume(version, {:ok, %{available?: true}}, fe)
+
+    stale = %{issue_id: issue.id, retry_generation: generation, checkout_failure_path: "stale.md"}
+    assert :ok = RuntimeControl.pause_with_retry("fe", stale, "Stale checkout failure", fe, "checkout_instructions")
+    assert {:ok, %{mode: :running}} = RuntimeControl.status(fe)
+    assert {:ok, [%{"checkout_failure_path" => ^path}]} = RuntimeControl.pending_retries("fe", fe)
+
+    unchanged = %{issue_id: issue.id, retry_generation: current_generation, checkout_failure_path: path}
+    assert :ok = RuntimeControl.persist_retry("fe", unchanged, fe)
+    assert :ok = RuntimeControl.pause_with_retry("fe", unchanged, "Checkout failure", fe, "checkout_instructions")
+    assert {:ok, %{mode: :paused, source: "checkout_instructions"}} = RuntimeControl.status(fe)
+    cancel(state)
+  end
+
   test "retry and infrastructure pause roll back together when the pause write fails" do
     issue = %Issue{id: "atomic", identifier: "SIGN-ATOMIC", state: "In Progress"}
     conn = :sys.get_state(RuntimeControl).conn

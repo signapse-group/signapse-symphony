@@ -519,6 +519,9 @@ defmodule SymphonyElixir.Workspace do
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local")
 
     case run_hook_process(args, workspace, env, timeout_ms, snapshot) do
+      {:ok, {_output, 78}} when hook_name == "before_run" and is_map(snapshot) and snapshot.profile_id == "qa" and is_binary(snapshot.checkout_workflow) ->
+        {:error, {:checkout_instructions, :checkout_instructions_invalid, snapshot.checkout_workflow}}
+
       {:ok, cmd_result} ->
         handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
 
@@ -554,13 +557,23 @@ defmodule SymphonyElixir.Workspace do
   defp hook_options(command, snapshot) do
     env =
       snapshot.env
+      |> Map.delete("SYMPHONY_INSTRUCTIONS_SOURCE")
       |> Map.merge(instructions_environment(snapshot))
       |> Map.put("SYMPHONY_PROFILE_ID", snapshot.profile_id)
       |> Map.put("SYMPHONY_WORKSPACE_ROOT", snapshot.settings.workspace.root)
 
-    env = Profile.subprocess_env(%{env: env}, Client.secret_environment_names(snapshot.settings.tracker))
+    unset = Client.secret_environment_names(snapshot.settings.tracker)
+
+    unset =
+      if is_binary(Map.get(snapshot, :checkout_workflow)),
+        do: ["SYMPHONY_INSTRUCTIONS_ROOT", "SYMPHONY_INSTRUCTIONS_REVISION" | unset],
+        else: unset
+
+    env = Profile.subprocess_env(%{env: env}, unset)
     {["-c", command], env, snapshot.settings.hooks.timeout_ms}
   end
+
+  defp instructions_environment(%{checkout_workflow: path}) when is_binary(path), do: %{"SYMPHONY_INSTRUCTIONS_SOURCE" => "checkout"}
 
   defp instructions_environment(%{instructions: %{root: root, revision: revision}}) do
     %{"SYMPHONY_INSTRUCTIONS_ROOT" => root, "SYMPHONY_INSTRUCTIONS_REVISION" => revision}
