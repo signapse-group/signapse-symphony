@@ -519,11 +519,8 @@ defmodule SymphonyElixir.Workspace do
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local")
 
     case run_hook_process(args, workspace, env, timeout_ms, snapshot) do
-      {:ok, {_output, 78}} when hook_name == "before_run" and is_map(snapshot) and snapshot.profile_id == "qa" and is_binary(snapshot.checkout_workflow) ->
-        {:error, {:checkout_instructions, :checkout_instructions_invalid, snapshot.checkout_workflow}}
-
       {:ok, cmd_result} ->
-        handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
+        handle_local_hook_result(cmd_result, workspace, issue_context, hook_name, snapshot)
 
       {:error, :hook_timeout} ->
         Logger.warning("Workspace hook timed out hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local timeout_ms=#{timeout_ms}")
@@ -533,6 +530,12 @@ defmodule SymphonyElixir.Workspace do
         error
     end
   end
+
+  defp handle_local_hook_result({_output, 78}, _workspace, _issue, "before_run", %{profile_id: "qa", checkout_workflow: path}) when is_binary(path),
+    do: {:error, {:checkout_instructions, :checkout_instructions_invalid, path}}
+
+  defp handle_local_hook_result(result, workspace, issue, hook, _snapshot),
+    do: handle_hook_command_result(result, workspace, issue, hook)
 
   defp run_hook_process(["-c", command], workspace, env, timeout_ms, %{hook_started: callback} = snapshot)
        when is_function(callback, 1) do

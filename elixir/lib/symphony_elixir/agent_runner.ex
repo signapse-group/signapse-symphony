@@ -119,28 +119,27 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp prepare_checkout(workspace, issue, recipient, opts) do
-    case opts[:profile_snapshot] do
-      %{checkout_workflow: path, settings: settings} when is_binary(path) ->
-        with {:ok, prompt} <- Instructions.prepare_checkout(workspace, path, issue, settings, opts[:attempt]),
-             {:ok, head} <- Instructions.checkout_head(workspace) do
-          Logger.info("Checkout instructions loaded #{issue_context(issue)} workflow=#{inspect(path)} checkout_head=#{head} checkout_prompt_digest=#{prompt.workflow_digest}")
+  defp prepare_checkout(workspace, issue, recipient, opts),
+    do: prepare_checkout(workspace, issue, recipient, opts, opts[:profile_snapshot])
 
-          if is_pid(recipient) do
-            info = %{worker_pid: self(), checkout_head: head, checkout_prompt_digest: prompt.workflow_digest}
-            send(recipient, {:worker_runtime_info, issue.id, info})
-          end
+  defp prepare_checkout(workspace, issue, recipient, opts, %{checkout_workflow: path, settings: settings}) when is_binary(path) do
+    with {:ok, prompt} <- Instructions.prepare_checkout(workspace, path, issue, settings, opts[:attempt]),
+         {:ok, head} <- Instructions.checkout_head(workspace) do
+      Logger.info("Checkout instructions loaded #{issue_context(issue)} workflow=#{inspect(path)} checkout_head=#{head} checkout_prompt_digest=#{prompt.workflow_digest}")
 
-          {:ok, Keyword.put(opts, :checkout_prompt, prompt)}
-        else
-          {:error, :checkout_head_unavailable} -> {:error, {:checkout_instructions, :checkout_head_unavailable, path}}
-          {:error, _reason} = error -> error
-        end
+      if is_pid(recipient) do
+        info = %{worker_pid: self(), checkout_head: head, checkout_prompt_digest: prompt.workflow_digest}
+        send(recipient, {:worker_runtime_info, issue.id, info})
+      end
 
-      _ ->
-        {:ok, opts}
+      {:ok, Keyword.put(opts, :checkout_prompt, prompt)}
+    else
+      {:error, :checkout_head_unavailable} -> {:error, {:checkout_instructions, :checkout_head_unavailable, path}}
+      {:error, _reason} = error -> error
     end
   end
+
+  defp prepare_checkout(_workspace, _issue, _recipient, opts, _snapshot), do: {:ok, opts}
 
   defp record_workspace(opts, recipient, issue, host, workspace) do
     if opts[:on_workspace], do: :ok, else: send_worker_runtime_info(recipient, issue, host, workspace)

@@ -1950,9 +1950,14 @@ defmodule SymphonyElixir.Orchestrator do
 
     result =
       case pause do
-        {reason, source} -> RuntimeControl.pause_with_retry(control_id(state), payload, reason, control_server(state), source)
-        reason when is_binary(reason) -> RuntimeControl.pause_with_retry(control_id(state), payload, reason, control_server(state))
-        nil -> persist_retry(state, payload)
+        {reason, source} ->
+          RuntimeControl.pause_with_retry(control_id(state), payload, reason, control_server(state), source)
+
+        reason when is_binary(reason) ->
+          RuntimeControl.pause_with_retry(control_id(state), payload, reason, control_server(state))
+
+        nil ->
+          persist_retry(state, payload)
       end
 
     updated =

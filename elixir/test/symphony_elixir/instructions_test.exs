@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.InstructionsTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.{Instructions, Profile, PromptBuilder, Workflow}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.{Instructions, Profile, PromptBuilder, Workflow}
   alias SymphonyElixir.Tracker.Issue
 
   @profiles Path.expand("../fixtures/profiles", __DIR__)
@@ -59,6 +59,11 @@ defmodule SymphonyElixir.InstructionsTest do
 
     assert {:error, {:checkout_instructions, :checkout_required_file_invalid, "CONTRIBUTING.md"}} =
              Instructions.prepare_checkout(workspace, workflow, issue, settings, nil)
+
+    checkout_write(workspace, workflow, "[Escape](../../../docs/runbooks/survey.md)")
+
+    assert {:error, :checkout_required_file_invalid} =
+             Instructions.checkout_prompt(workspace, workflow, issue, settings)
   end
 
   @tag :tmp_dir
@@ -80,15 +85,23 @@ defmodule SymphonyElixir.InstructionsTest do
     assert {:error, :checkout_agents_missing} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
     checkout_write(workspace, "AGENTS.md", "# Agents\n")
     assert {:error, :checkout_skills_missing} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
+    checkout_write(workspace, ".agents/skills", "Not a directory")
+    assert {:error, :checkout_skills_invalid} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
+    File.rm!(Path.join(workspace, ".agents/skills"))
     File.mkdir_p!(Path.join(workspace, ".agents/skills"))
     assert {:error, :checkout_skills_invalid} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
     checkout_write(workspace, ".agents/skills/generic/SKILL.md", "# Skill\n")
-    assert {:error, :checkout_required_file_missing} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
+
+    assert {:error, :checkout_required_file_missing} =
+             Instructions.checkout_prompt(workspace, workflow, issue, settings)
 
     skill = Path.join(workspace, ".agents/skills/code-review/SKILL.md")
     File.mkdir_p!(Path.dirname(skill))
     File.ln_s!(Path.join(workspace, "AGENTS.md"), skill)
-    assert {:error, :checkout_required_file_invalid} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
+
+    assert {:error, :checkout_required_file_invalid} =
+             Instructions.checkout_prompt(workspace, workflow, issue, settings)
+
     File.rm!(skill)
     checkout_write(workspace, ".agents/skills/code-review/SKILL.md", "# Review\n")
     assert {:ok, %{prompt: prompt}} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
@@ -96,7 +109,8 @@ defmodule SymphonyElixir.InstructionsTest do
     assert {:error, :checkout_head_unavailable} = Instructions.checkout_head(workspace)
     assert {_, 0} = System.cmd("git", ["init", "--quiet", workspace])
     git = ["-C", workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
-    assert {_, 0} = System.cmd("git", git ++ ["commit", "--quiet", "--allow-empty", "-m", "Fixture"])
+    commit = ["commit", "--quiet", "--allow-empty", "-m", "Fixture"]
+    assert {_, 0} = System.cmd("git", git ++ commit)
     assert {revision, 0} = System.cmd("git", git ++ ["rev-parse", "HEAD"])
     assert {:ok, String.trim(revision)} == Instructions.checkout_head(workspace)
   end

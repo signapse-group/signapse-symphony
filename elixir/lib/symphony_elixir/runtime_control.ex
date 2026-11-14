@@ -252,7 +252,9 @@ defmodule SymphonyElixir.RuntimeControl do
 
     reply =
       with_connection(state, fn conn ->
-        transaction(conn, fn -> pause_with_retry_in_transaction(conn, state.profile_id, runtime_id, retry, reason, source) end)
+        transaction(conn, fn ->
+          pause_with_retry_in_transaction(conn, state.profile_id, runtime_id, retry, reason, source)
+        end)
       end)
 
     state = log_control_transition(reply, previous_version, state)
@@ -464,13 +466,17 @@ defmodule SymphonyElixir.RuntimeControl do
       if source == "checkout_instructions" and not current? do
         {:ok, status}
       else
-        with {:ok, payload} <- retry_payload(retry),
-             {:ok, changed?} <- write_retry_if_changed(conn, runtime_id, retry.issue_id, payload) do
-          if current? and (changed? or source == "checkout_instructions") and status.mode not in [:paused, :pausing],
-            do: pause_in_transaction(conn, reason, source, profile_id),
-            else: {:ok, status}
-        end
+        write_retry_and_pause(conn, profile_id, runtime_id, retry, reason, source, status, current?)
       end
+    end
+  end
+
+  defp write_retry_and_pause(conn, profile_id, runtime_id, retry, reason, source, status, current?) do
+    with {:ok, payload} <- retry_payload(retry),
+         {:ok, changed?} <- write_retry_if_changed(conn, runtime_id, retry.issue_id, payload) do
+      if current? and (changed? or source == "checkout_instructions") and status.mode not in [:paused, :pausing],
+        do: pause_in_transaction(conn, reason, source, profile_id),
+        else: {:ok, status}
     end
   end
 

@@ -31,19 +31,22 @@ defmodule SymphonyElixir.InstructionReferences do
     rendered
     |> references(workflow)
     |> Enum.filter(&MapSet.member?(authored, &1))
-    |> Enum.reduce_while({:ok, []}, fn {source, target, label}, {:ok, paths} ->
-      [path | anchors] = String.split(target, "#", parts: 2)
-      path = URI.decode(path)
-
-      if not provenance?(label) and checkout_requirement?(path, profile_id) do
-        case resolve_reference_path(root, source, path, List.first(anchors)) do
-          {:ok, relative, anchor} -> {:cont, {:ok, [{relative, anchor} | paths]}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-      else
-        {:cont, {:ok, paths}}
+    |> Enum.reduce_while({:ok, []}, fn link, {:ok, paths} ->
+      case checkout_reference(root, link, profile_id) do
+        {:ok, relative, anchor} -> {:cont, {:ok, [{relative, anchor} | paths]}}
+        :optional -> {:cont, {:ok, paths}}
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
+  end
+
+  defp checkout_reference(root, {source, target, label}, profile_id) do
+    [path | anchors] = String.split(target, "#", parts: 2)
+    path = URI.decode(path)
+
+    if not provenance?(label) and checkout_requirement?(path, profile_id),
+      do: resolve_reference_path(root, source, path, List.first(anchors)),
+      else: :optional
   end
 
   @doc false

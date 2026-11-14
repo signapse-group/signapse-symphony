@@ -5,8 +5,8 @@ defmodule SymphonyElixir.Instructions do
 
   import Bitwise, only: [band: 2]
 
-  alias SymphonyElixir.{InstructionReferences, PathSafety, Profile, PromptBuilder, Workflow, WorkflowStore}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.{InstructionReferences, PathSafety, Profile, PromptBuilder, Workflow, WorkflowStore}
   alias SymphonyElixir.Tracker.Issue
 
   @manifest "instructions.json"
@@ -39,14 +39,18 @@ defmodule SymphonyElixir.Instructions do
   @spec checkout_template(Path.t(), Path.t()) :: {:ok, checkout_template()} | {:error, atom()}
   def checkout_template(workspace, workflow_path) do
     with true <- PathSafety.repository_relative?(workflow_path),
-         {:ok, template} <- checkout_file(workspace, workflow_path, :checkout_workflow_missing, :checkout_workflow_invalid),
+         {:ok, template} <- checkout_workflow_file(workspace, workflow_path),
          false <- Regex.match?(~r/\A(?:\x{FEFF})?---[\t ]*(?:\R|\z)/u, template) do
-      {:ok, %{template: template |> String.replace("\r\n", "\n") |> String.trim(), workflow_path: workflow_path, workflow_digest: digest(template)}}
+      normalized = template |> String.replace("\r\n", "\n") |> String.trim()
+      {:ok, %{template: normalized, workflow_path: workflow_path, workflow_digest: digest(template)}}
     else
       {:error, {:checkout_instructions, code, _path}} -> {:error, code}
       _ -> {:error, :checkout_workflow_invalid}
     end
   end
+
+  defp checkout_workflow_file(workspace, workflow_path),
+    do: checkout_file(workspace, workflow_path, :checkout_workflow_missing, :checkout_workflow_invalid)
 
   @spec checkout_prompt(Path.t(), Path.t(), Issue.t(), Schema.t(), non_neg_integer() | nil) ::
           {:ok, checkout_prompt()} | {:error, atom()}
@@ -118,16 +122,18 @@ defmodule SymphonyElixir.Instructions do
   defp checkout_phase_requirements(workspace, workflow, template, prompt, issue, settings) do
     profile_id = settings.runtime_control.id
 
-    with {:ok, requirements} <- InstructionReferences.checkout_requirements(workspace, workflow, template, prompt, profile_id) do
-      verify_checkout_requirements(workspace, Enum.uniq(required_review_skill(issue, settings) ++ requirements), true)
-    else
-      {:error, _reason} -> checkout_failure(:checkout_required_file_invalid, workflow)
+    case InstructionReferences.checkout_requirements(workspace, workflow, template, prompt, profile_id) do
+      {:ok, requirements} ->
+        verify_checkout_requirements(workspace, Enum.uniq(required_review_skill(issue, settings) ++ requirements), true)
+
+      {:error, _reason} ->
+        checkout_failure(:checkout_required_file_invalid, workflow)
     end
   end
 
   defp verify_checkout_requirements(workspace, requirements, check_runbooks?) do
     Enum.reduce_while(requirements, :ok, fn {path, anchor}, :ok ->
-      with {:ok, content} <- checkout_file(workspace, path, :checkout_required_file_missing, :checkout_required_file_invalid),
+      with {:ok, content} <- checkout_required_file(workspace, path),
            :ok <- InstructionReferences.checkout_anchor(content, anchor),
            :ok <- checkout_runbook_requirements(workspace, path, content, check_runbooks?) do
         {:cont, :ok}
@@ -137,6 +143,9 @@ defmodule SymphonyElixir.Instructions do
       end
     end)
   end
+
+  defp checkout_required_file(workspace, path),
+    do: checkout_file(workspace, path, :checkout_required_file_missing, :checkout_required_file_invalid)
 
   defp checkout_runbook_requirements(workspace, @checkout_runbook_prefix <> _ = path, content, true) do
     with {:ok, requirements} <- InstructionReferences.checkout_requirements(workspace, path, content, content, nil) do
@@ -148,7 +157,9 @@ defmodule SymphonyElixir.Instructions do
 
   defp required_review_skill(%Issue{state: state}, %{runtime_control: %{id: "fe"}, tracker: %{review_state: review}})
        when is_binary(state) and is_binary(review) do
-    if Schema.normalize_issue_state(state) == Schema.normalize_issue_state(review), do: [{".agents/skills/code-review/SKILL.md", nil}], else: []
+    if Schema.normalize_issue_state(state) == Schema.normalize_issue_state(review),
+      do: [{".agents/skills/code-review/SKILL.md", nil}],
+      else: []
   end
 
   defp required_review_skill(_issue, _settings), do: []

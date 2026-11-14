@@ -66,12 +66,16 @@ defmodule SymphonyElixir.ProfileTest do
     for {attributes, expected} <- [
           {%{}, %Profile{id: "planning", control_path: entry["control_path"], error: :invalid_profile_entry}},
           {%{"checkout_workflow" => "../WORKFLOW.md"}, %Profile{id: "planning", control_path: entry["control_path"], error: :invalid_checkout_workflow_path}},
+          {%{"checkout_workflow" => nil}, %Profile{id: "planning", control_path: entry["control_path"], error: :invalid_checkout_workflow_path}},
           {%{"checkout_workflow" => "workflow/symphony/WORKFLOW.md"},
            %Profile{id: "planning", instructions_root: nil, checkout_workflow: "workflow/symphony/WORKFLOW.md", workflow_path: Path.join(root, "planning.md"), control_path: entry["control_path"]}}
         ] do
       File.write!(path, Jason.encode!(%{"profiles" => [Map.merge(entry, attributes)]}))
       assert {:ok, [^expected]} = Profile.load(path, %{})
     end
+
+    start_supervised!({Profile, [%Profile{id: "planning", checkout_workflow: "workflow/symphony/WORKFLOW.md"}]})
+    assert {:error, :checkout_instructions_enabled} = SymphonyElixir.Instructions.pin("planning")
   end
 
   test "missing workflow recovers independently and an invalid reload retains the last good revision", %{root: root} do
