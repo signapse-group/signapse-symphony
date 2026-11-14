@@ -1,16 +1,18 @@
 defmodule SymphonyElixir.Instructions do
   @moduledoc """
-  Validates and pins operator-staged instructions for a grouped profile.
+  Loads checkout instructions or pins operator-staged instructions for a grouped profile.
   """
 
   import Bitwise, only: [band: 2]
 
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{InstructionReferences, PathSafety, Profile, PromptBuilder, Workflow, WorkflowStore}
   alias SymphonyElixir.Tracker.Issue
 
   @manifest "instructions.json"
   @revision_pattern ~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z/
   @qa_operations ~w(qa-generate qa-execute qa-retest)
+  @checkout_runbook_prefix "docs/runbooks/"
 
   @type pin :: %{
           profile_id: String.t(),
@@ -29,6 +31,157 @@ defmodule SymphonyElixir.Instructions do
           required(:workflow) => Workflow.loaded_workflow(),
           optional(:fingerprint) => binary()
         }
+
+  @type checkout_template :: %{template: String.t(), workflow_path: Path.t(), workflow_digest: String.t()}
+  @type checkout_prompt :: %{prompt: String.t(), workflow_path: Path.t(), workflow_digest: String.t()}
+  @type checkout_failure :: {:checkout_instructions, atom(), Path.t()}
+
+  @spec checkout_template(Path.t(), Path.t()) :: {:ok, checkout_template()} | {:error, atom()}
+  def checkout_template(workspace, workflow_path) do
+    with true <- PathSafety.repository_relative?(workflow_path),
+         {:ok, template} <- checkout_workflow_file(workspace, workflow_path),
+         false <- Regex.match?(~r/\A(?:\x{FEFF})?---[\t ]*(?:\R|\z)/u, template) do
+      normalized = template |> String.replace("\r\n", "\n") |> String.trim()
+      {:ok, %{template: normalized, workflow_path: workflow_path, workflow_digest: digest(template)}}
+    else
+      {:error, {:checkout_instructions, code, _path}} -> {:error, code}
+      _ -> {:error, :checkout_workflow_invalid}
+    end
+  end
+
+  defp checkout_workflow_file(workspace, workflow_path),
+    do: checkout_file(workspace, workflow_path, :checkout_workflow_missing, :checkout_workflow_invalid)
+
+  @spec checkout_prompt(Path.t(), Path.t(), Issue.t(), Schema.t(), non_neg_integer() | nil) ::
+          {:ok, checkout_prompt()} | {:error, atom()}
+  def checkout_prompt(workspace, workflow_path, issue, settings, attempt \\ nil) do
+    case prepare_checkout(workspace, workflow_path, issue, settings, attempt) do
+      {:error, {:checkout_instructions, code, _path}} -> {:error, code}
+      {:ok, _prompt} = result -> result
+    end
+  end
+
+  @doc false
+  @spec prepare_checkout(Path.t(), Path.t(), Issue.t(), Schema.t(), non_neg_integer() | nil) ::
+          {:ok, checkout_prompt()} | {:error, checkout_failure()}
+  def prepare_checkout(workspace, workflow_path, issue, settings, attempt) do
+    profile_id = settings.runtime_control.id
+
+    with {:ok, %{template: template, workflow_digest: digest}} <- checkout_template(workspace, workflow_path),
+         {:ok, prompt} <- PromptBuilder.render_checkout(issue, attempt, template, profile_id),
+         {:ok, _agents} <- checkout_file(workspace, "AGENTS.md", :checkout_agents_missing, :checkout_agents_invalid),
+         :ok <- checkout_skills(workspace),
+         :ok <- checkout_phase_requirements(workspace, workflow_path, template, prompt, issue, settings) do
+      opening = "Read AGENTS.md in the working directory. Resolve links in the workflow below relative to #{workflow_path} in this checkout.\n\n"
+      {:ok, %{prompt: opening <> prompt, workflow_path: workflow_path, workflow_digest: digest}}
+    else
+      {:error, {:checkout_instructions, _code, _path}} = error -> error
+      {:error, code} -> checkout_failure(code, workflow_path)
+    end
+  end
+
+  @doc false
+  @spec checkout_head(Path.t()) :: {:ok, String.t()} | {:error, :checkout_head_unavailable}
+  def checkout_head(workspace) do
+    with {:ok, root} <- git(workspace, ["rev-parse", "--show-toplevel"]),
+         true <- Path.expand(String.trim(root)) == Path.expand(workspace),
+         {:ok, revision} <- git(workspace, ["rev-parse", "--verify", "HEAD^{commit}"]),
+         revision = String.trim(revision),
+         true <- Regex.match?(~r/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/, revision) do
+      {:ok, revision}
+    else
+      _ -> {:error, :checkout_head_unavailable}
+    end
+  end
+
+  defp checkout_skills(workspace) do
+    relative = ".agents/skills"
+    path = Path.join(workspace, relative)
+
+    case File.lstat(path) do
+      {:error, :enoent} -> checkout_failure(:checkout_skills_missing, relative)
+      {:ok, %{type: :directory}} -> validate_skills_directory(workspace, path, relative)
+      _ -> checkout_failure(:checkout_skills_invalid, relative)
+    end
+  end
+
+  defp validate_skills_directory(workspace, path, relative) do
+    with {:ok, ^path} <- PathSafety.canonicalize(path),
+         {:ok, entries} <- File.ls(path),
+         true <- Enum.any?(entries, &valid_skill?(workspace, relative, &1)) do
+      :ok
+    else
+      _ -> checkout_failure(:checkout_skills_invalid, relative)
+    end
+  end
+
+  defp valid_skill?(workspace, relative, entry) do
+    match?({:ok, _}, checkout_file(workspace, Path.join([relative, entry, "SKILL.md"]), :checkout_skills_missing, :checkout_skills_invalid))
+  end
+
+  defp checkout_phase_requirements(workspace, workflow, template, prompt, issue, settings) do
+    profile_id = settings.runtime_control.id
+
+    case InstructionReferences.checkout_requirements(workspace, workflow, template, prompt, profile_id) do
+      {:ok, requirements} ->
+        verify_checkout_requirements(workspace, Enum.uniq(required_review_skill(issue, settings) ++ requirements), true)
+
+      {:error, _reason} ->
+        checkout_failure(:checkout_required_file_invalid, workflow)
+    end
+  end
+
+  defp verify_checkout_requirements(workspace, requirements, check_runbooks?) do
+    Enum.reduce_while(requirements, :ok, fn {path, anchor}, :ok ->
+      with {:ok, content} <- checkout_required_file(workspace, path),
+           :ok <- InstructionReferences.checkout_anchor(content, anchor),
+           :ok <- checkout_runbook_requirements(workspace, path, content, check_runbooks?) do
+        {:cont, :ok}
+      else
+        {:error, {:checkout_instructions, _code, _path}} = error -> {:halt, error}
+        {:error, _reason} -> {:halt, checkout_failure(:checkout_required_file_invalid, path)}
+      end
+    end)
+  end
+
+  defp checkout_required_file(workspace, path),
+    do: checkout_file(workspace, path, :checkout_required_file_missing, :checkout_required_file_invalid)
+
+  defp checkout_runbook_requirements(workspace, @checkout_runbook_prefix <> _ = path, content, true) do
+    with {:ok, requirements} <- InstructionReferences.checkout_requirements(workspace, path, content, content, nil) do
+      verify_checkout_requirements(workspace, Enum.uniq(requirements), false)
+    end
+  end
+
+  defp checkout_runbook_requirements(_workspace, _path, _content, _check_runbooks?), do: :ok
+
+  defp required_review_skill(%Issue{state: state}, %{runtime_control: %{id: "fe"}, tracker: %{review_state: review}})
+       when is_binary(state) and is_binary(review) do
+    if Schema.normalize_issue_state(state) == Schema.normalize_issue_state(review),
+      do: [{".agents/skills/code-review/SKILL.md", nil}],
+      else: []
+  end
+
+  defp required_review_skill(_issue, _settings), do: []
+
+  defp checkout_file(workspace, path, missing, invalid) do
+    absolute = Path.join(workspace, path)
+
+    with true <- PathSafety.repository_relative?(path),
+         {:ok, ^absolute} <- PathSafety.canonicalize(absolute),
+         {:ok, %{type: :regular}} <- File.lstat(absolute),
+         {:ok, content} <- File.read(absolute),
+         true <- String.valid?(content) and not String.contains?(content, <<0>>) and String.trim(content) != "" do
+      {:ok, content}
+    else
+      {:error, :enoent} -> checkout_failure(missing, path)
+      _ -> checkout_failure(invalid, path)
+    end
+  end
+
+  defp checkout_failure(code, path), do: {:error, {:checkout_instructions, code, path}}
+
+  defp digest(content), do: Base.encode16(:crypto.hash(:sha256, content), case: :lower)
 
   @spec status(String.t()) :: {:ok, %{revision: String.t()}} | {:error, atom()}
   def status(id) do
@@ -86,6 +239,7 @@ defmodule SymphonyElixir.Instructions do
 
   defp instructions_root(id) do
     case Profile.lookup(id) do
+      {:ok, %{checkout_workflow: path}} when is_binary(path) -> {:error, :checkout_instructions_enabled}
       {:ok, %{instructions_root: root}} when is_binary(root) -> canonical_root(root)
       {:ok, _profile} -> {:error, :missing_instructions_root}
       {:error, reason} -> {:error, reason}

@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Validate pinned QA instructions and keep raw artifacts outside issue clones."""
+"""Validate QA instructions and keep raw artifacts outside issue clones."""
 
 import json
 import os
@@ -10,6 +10,10 @@ import sys
 
 
 APP = Path('/opt/apps/symphony')
+
+
+class InvalidCheckoutInstructions(Exception):
+    """The QA checker reported an instruction violation in the task checkout."""
 
 
 def instructions_root(workspace):
@@ -29,6 +33,29 @@ def instructions_root(workspace):
     return root
 
 
+def check_instructions(workspace, checker):
+    node = str(APP / 'runtime/node-v24.21.0-linux-x64/bin/node')
+    checkout = (os.environ.get('SYMPHONY_PROFILE_ID') == 'qa'
+                and os.environ.get('SYMPHONY_INSTRUCTIONS_SOURCE') == 'checkout')
+    if not checkout:
+        subprocess.run([node, str(checker), str(instructions_root(workspace))],
+                       check=True, stdout=subprocess.DEVNULL)
+        return
+
+    # Only reported instruction violations use the workspace hook's EX_CONFIG result.
+    # Node or checker startup failures use their ordinary exit status.
+    result = subprocess.run([
+        node, '--input-type=module', '--eval',
+        'const { checkLocalInstructions } = await import(process.argv[2]);'
+        'const { errors } = checkLocalInstructions(process.argv[1]);'
+        'if (errors.length) process.exitCode = 78;',
+        '--', str(workspace), checker.as_uri(),
+    ], stdout=subprocess.DEVNULL)
+    if result.returncode == 78:
+        raise InvalidCheckoutInstructions('QA checkout instruction validation failed.')
+    result.check_returncode()
+
+
 def prepare(workspace):
     root = Path(os.environ.get('SYMPHONY_WORKSPACE_ROOT', APP / 'workspaces-qa-jira')).resolve(strict=True)
     stable = (APP / 'runtime/repos/signapse-qa').resolve(strict=True)
@@ -40,8 +67,7 @@ def prepare(workspace):
     reference = APP / 'runtime/README-qa-testing.md'
     if not checker.is_file() or not reference.is_file():
         raise ValueError('QA local instruction deployment is incomplete; operator must reconcile the published context.')
-    subprocess.run([str(APP / 'runtime/node-v24.21.0-linux-x64/bin/node'),
-                    str(checker), str(instructions_root(workspace))], check=True, stdout=subprocess.DEVNULL)
+    check_instructions(workspace, checker)
     durable = APP / 'logs-qa/evidence' / workspace.name
     durable.mkdir(mode=0o700, exist_ok=True)
     if durable.is_symlink() or durable.resolve() != durable:
@@ -61,6 +87,9 @@ if __name__ == '__main__':
     os.umask(0o077)
     try:
         prepare(Path(sys.argv[1] if len(sys.argv) == 2 else os.getcwd()).resolve(strict=True))
+    except InvalidCheckoutInstructions as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(78)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(str(error), file=sys.stderr)
         sys.exit(1)

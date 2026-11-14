@@ -21,12 +21,13 @@ defmodule SymphonyElixir.Profile do
 
   @derive {Inspect, except: [:env]}
   @enforce_keys [:id]
-  defstruct [:id, :workflow_path, :instructions_root, :control_path, :error, env: %{}]
+  defstruct [:id, :workflow_path, :instructions_root, :checkout_workflow, :control_path, :error, env: %{}]
 
   @type t :: %__MODULE__{
           id: String.t(),
           workflow_path: Path.t() | nil,
           instructions_root: Path.t() | nil,
+          checkout_workflow: Path.t() | nil,
           control_path: Path.t() | nil,
           error: term(),
           env: %{String.t() => String.t()}
@@ -183,7 +184,9 @@ defmodule SymphonyElixir.Profile do
   def ownership(_profile, _settings), do: {:error, :grouped_profiles_require_jira}
 
   @doc false
-  @spec paths_overlap?(Path.t(), Path.t()) :: boolean()
+  @spec paths_overlap?(Path.t() | nil, Path.t() | nil) :: boolean()
+  def paths_overlap?(left, right) when is_nil(left) or is_nil(right), do: false
+
   def paths_overlap?(left, right) do
     left_parts = comparable_path(left)
     right_parts = comparable_path(right)
@@ -275,15 +278,28 @@ defmodule SymphonyElixir.Profile do
   end
 
   defp parse_workflow_entry(profile, entry, directory, host_env) do
-    with %{"workflow" => workflow, "instructions_root" => instructions, "env" => env} <- entry,
-         true <- valid_path?(workflow) and valid_path?(instructions),
-         {:ok, instructions_root} <- PathSafety.canonicalize(Path.expand(instructions, directory)),
+    with %{"workflow" => workflow, "env" => env} <- entry,
+         true <- valid_path?(workflow),
+         {:ok, checkout_workflow} <- checkout_workflow(entry),
+         {:ok, instructions_root} <- instructions_root(entry["instructions_root"], checkout_workflow, directory),
          {:ok, env} <- resolve_env(env, host_env) do
-      %{profile | workflow_path: Path.expand(workflow, directory), instructions_root: instructions_root, env: env}
+      %{profile | workflow_path: Path.expand(workflow, directory), instructions_root: instructions_root, checkout_workflow: checkout_workflow, env: env}
     else
       {:error, reason} when is_atom(reason) -> %{profile | error: reason}
       _ -> %{profile | error: :invalid_profile_entry}
     end
+  end
+
+  defp checkout_workflow(%{"checkout_workflow" => path}) do
+    if PathSafety.repository_relative?(path), do: {:ok, path}, else: {:error, :invalid_checkout_workflow_path}
+  end
+
+  defp checkout_workflow(_entry), do: {:ok, nil}
+
+  defp instructions_root(nil, checkout_workflow, _directory) when is_binary(checkout_workflow), do: {:ok, nil}
+
+  defp instructions_root(path, _checkout_workflow, directory) do
+    if valid_path?(path), do: PathSafety.canonicalize(Path.expand(path, directory)), else: {:error, :invalid_profile_entry}
   end
 
   defp manifest_control_path(value, host_env) do

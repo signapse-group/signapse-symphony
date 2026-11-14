@@ -71,9 +71,9 @@ defmodule SymphonyElixir.RuntimeControl do
     call(server, {:persist_retry, runtime_id, retry})
   end
 
-  @spec pause_with_retry(String.t(), map(), String.t(), GenServer.server()) :: :ok | {:error, term()}
-  def pause_with_retry(runtime_id, retry, reason, server) do
-    call(server, {:pause_with_retry, runtime_id, retry, reason})
+  @spec pause_with_retry(String.t(), map(), String.t(), GenServer.server(), String.t()) :: :ok | {:error, term()}
+  def pause_with_retry(runtime_id, retry, reason, server, source \\ "infrastructure") do
+    call(server, {:pause_with_retry, runtime_id, retry, reason, source})
   end
 
   @spec delete_retry(String.t(), String.t(), GenServer.server()) :: :ok | {:error, term()}
@@ -247,12 +247,14 @@ defmodule SymphonyElixir.RuntimeControl do
     {:reply, clean_reply(reply), state}
   end
 
-  def handle_call({:pause_with_retry, runtime_id, retry, reason}, _from, state) do
+  def handle_call({:pause_with_retry, runtime_id, retry, reason, source}, _from, state) do
     previous_version = current_version(state)
 
     reply =
       with_connection(state, fn conn ->
-        transaction(conn, fn -> pause_with_retry_in_transaction(conn, state.profile_id, runtime_id, retry, reason) end)
+        transaction(conn, fn ->
+          pause_with_retry_in_transaction(conn, state.profile_id, runtime_id, retry, reason, source)
+        end)
       end)
 
     state = log_control_transition(reply, previous_version, state)
@@ -457,13 +459,23 @@ defmodule SymphonyElixir.RuntimeControl do
     transaction(conn, fn -> pause_in_transaction(conn, reason, source, profile_id) end)
   end
 
-  defp pause_with_retry_in_transaction(conn, profile_id, runtime_id, retry, reason) do
-    with {:ok, status} <- read_status(conn, profile_id),
-         current? = is_nil(retry[:retry_generation]) or retry.retry_generation == status.retry_generation,
-         {:ok, payload} <- retry_payload(retry),
+  defp pause_with_retry_in_transaction(conn, profile_id, runtime_id, retry, reason, source) do
+    with {:ok, status} <- read_status(conn, profile_id) do
+      current? = is_nil(retry[:retry_generation]) or retry.retry_generation == status.retry_generation
+
+      if source == "checkout_instructions" and not current? do
+        {:ok, status}
+      else
+        write_retry_and_pause(conn, profile_id, runtime_id, retry, reason, source, status, current?)
+      end
+    end
+  end
+
+  defp write_retry_and_pause(conn, profile_id, runtime_id, retry, reason, source, status, current?) do
+    with {:ok, payload} <- retry_payload(retry),
          {:ok, changed?} <- write_retry_if_changed(conn, runtime_id, retry.issue_id, payload) do
-      if current? and changed? and status.mode not in [:paused, :pausing],
-        do: pause_in_transaction(conn, reason, "infrastructure", profile_id),
+      if current? and (changed? or source == "checkout_instructions") and status.mode not in [:paused, :pausing],
+        do: pause_in_transaction(conn, reason, source, profile_id),
         else: {:ok, status}
     end
   end
@@ -633,6 +645,7 @@ defmodule SymphonyElixir.RuntimeControl do
       :attempt,
       :error,
       :reason_code,
+      :checkout_failure_path,
       :worker_host,
       :workspace_path,
       :session_unit,
@@ -842,7 +855,7 @@ defmodule SymphonyElixir.RuntimeControl do
   defp disabled_reply(:pending_retries), do: {:ok, []}
   defp disabled_reply({:pending_retries, _id}), do: {:ok, []}
   defp disabled_reply({:persist_retry, _id, _retry}), do: :ok
-  defp disabled_reply({:pause_with_retry, _id, _retry, _reason}), do: :ok
+  defp disabled_reply({:pause_with_retry, _id, _retry, _reason, _source}), do: :ok
   defp disabled_reply({:delete_retry, _id, _issue}), do: :ok
   defp disabled_reply(:acquire_turn), do: {:ok, "disabled"}
   defp disabled_reply({:release_turn, _token}), do: {:ok, disabled_status()}
@@ -1047,12 +1060,18 @@ defmodule SymphonyElixir.RuntimeControl do
   defp ready_to_resume(%{profile_id: nil}), do: :ok
 
   defp ready_to_resume(%{profile_id: id}) do
-    with {:ok, _snapshot} <- WorkflowStore.snapshot(id),
-         {:ok, _pin} <- SymphonyElixir.Instructions.pin(id) do
+    with {:ok, snapshot} <- WorkflowStore.snapshot(id),
+         :ok <- verify_instruction_source(snapshot) do
       :ok
     else
       {:error, _reason} -> {:error, :profile_not_ready}
     end
+  end
+
+  defp verify_instruction_source(%{checkout_workflow: path}) when is_binary(path), do: :ok
+
+  defp verify_instruction_source(%{profile_id: id}) do
+    with {:ok, _pin} <- SymphonyElixir.Instructions.pin(id), do: :ok
   end
 
   defp read_quota(reader) do

@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.InstructionsTest do
   use ExUnit.Case, async: false
 
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{Instructions, Profile, PromptBuilder, Workflow}
   alias SymphonyElixir.Tracker.Issue
 
@@ -15,6 +16,109 @@ defmodule SymphonyElixir.InstructionsTest do
     end
 
     :ok
+  end
+
+  @tag :tmp_dir
+  test "checkout renders the issue phase and checks only authored instruction links", %{tmp_dir: workspace} do
+    workflow = "workflow/symphony/WORKFLOW.md"
+
+    contents = """
+    # Checkout task {{ issue.identifier }}
+    {{ issue.description }}
+    {% if attempt %}Attempt {{ attempt }}{% endif %}
+    {% if issue.state == 'Ready' %}
+    [Survey](../../docs/runbooks/survey.md#survey).
+    {% else %}
+    [Implement](../../docs/runbooks/implement.md).
+    {% endif %}
+    [Dependency](https://github.com/org/repo/blob/main/docs/contract.md).
+    [Evidence](../../docs/results/task.md).
+    """
+
+    contents = String.replace(contents, "\n", "\r\n")
+    checkout_write(workspace, workflow, contents)
+    checkout_write(workspace, "AGENTS.md", "# Agents\n")
+    checkout_write(workspace, ".agents/skills/generic/SKILL.md", "# Skill\n")
+    checkout_write(workspace, "docs/runbooks/survey.md", "# Survey\nRead [standard](../../CONTRIBUTING.md#verification).")
+    checkout_write(workspace, "CONTRIBUTING.md", "# Verification\n")
+    assert {:ok, settings} = Schema.parse(%{})
+    issue = %{issue("Ready", []) | description: "[Injected](../../docs/runbooks/missing.md)"}
+
+    assert {:ok, workflow_data} = Instructions.checkout_prompt(workspace, workflow, issue, settings, 2)
+    assert workflow_data.prompt =~ "Attempt 2"
+    assert workflow_data.prompt =~ "relative to #{workflow}"
+    assert workflow_data.prompt =~ "[Injected]"
+    refute workflow_data.prompt =~ "Implement"
+    refute workflow_data.prompt =~ "\r"
+    assert workflow_data.workflow_digest == Base.encode16(:crypto.hash(:sha256, contents), case: :lower)
+
+    assert {:error, {:checkout_instructions, :checkout_required_file_missing, "docs/runbooks/implement.md"}} =
+             Instructions.prepare_checkout(workspace, workflow, %{issue | state: "Progress"}, settings, nil)
+
+    checkout_write(workspace, "CONTRIBUTING.md", "# Invalid anchor\n")
+
+    assert {:error, {:checkout_instructions, :checkout_required_file_invalid, "CONTRIBUTING.md"}} =
+             Instructions.prepare_checkout(workspace, workflow, issue, settings, nil)
+
+    checkout_write(workspace, workflow, "[Escape](../../../docs/runbooks/survey.md)")
+
+    assert {:error, :checkout_required_file_invalid} =
+             Instructions.checkout_prompt(workspace, workflow, issue, settings)
+  end
+
+  @tag :tmp_dir
+  test "rejects unusable files and missing mandatory Review skill before launching a task", %{tmp_dir: workspace} do
+    workflow = "WORKFLOW.md"
+    settings = %Schema{runtime_control: %{id: "fe"}, tracker: %{review_state: "In Review"}}
+    issue = issue("In Review", [])
+    assert {:error, :checkout_workflow_missing} = Instructions.checkout_template(workspace, workflow)
+    assert {:error, :checkout_workflow_invalid} = Instructions.checkout_template(workspace, "../WORKFLOW.md")
+
+    for content <- [" ", <<255>>, "---\ntracker:\n  kind: attacker\n---\nVisible"] do
+      checkout_write(workspace, workflow, content)
+      assert {:error, :checkout_workflow_invalid} = Instructions.checkout_template(workspace, workflow)
+    end
+
+    checkout_write(workspace, workflow, "{{ unknown }}")
+    assert {:error, :checkout_prompt_invalid} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
+    checkout_write(workspace, workflow, "Task {{ issue.identifier }}")
+    assert {:error, :checkout_agents_missing} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
+    checkout_write(workspace, "AGENTS.md", "# Agents\n")
+    assert {:error, :checkout_skills_missing} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
+    checkout_write(workspace, ".agents/skills", "Not a directory")
+    assert {:error, :checkout_skills_invalid} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
+    File.rm!(Path.join(workspace, ".agents/skills"))
+    File.mkdir_p!(Path.join(workspace, ".agents/skills"))
+    assert {:error, :checkout_skills_invalid} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
+    checkout_write(workspace, ".agents/skills/generic/SKILL.md", "# Skill\n")
+
+    assert {:error, :checkout_required_file_missing} =
+             Instructions.checkout_prompt(workspace, workflow, issue, settings)
+
+    skill = Path.join(workspace, ".agents/skills/code-review/SKILL.md")
+    File.mkdir_p!(Path.dirname(skill))
+    File.ln_s!(Path.join(workspace, "AGENTS.md"), skill)
+
+    assert {:error, :checkout_required_file_invalid} =
+             Instructions.checkout_prompt(workspace, workflow, issue, settings)
+
+    File.rm!(skill)
+    checkout_write(workspace, ".agents/skills/code-review/SKILL.md", "# Review\n")
+    assert {:ok, %{prompt: prompt}} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
+    assert prompt =~ "Task #{issue.identifier}"
+    assert {:error, :checkout_head_unavailable} = Instructions.checkout_head(workspace)
+    assert {_, 0} = System.cmd("git", ["init", "--quiet", workspace])
+    git = ["-C", workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
+    commit = ["commit", "--quiet", "--allow-empty", "-m", "Fixture"]
+    assert {_, 0} = System.cmd("git", git ++ commit)
+    assert {revision, 0} = System.cmd("git", git ++ ["rev-parse", "HEAD"])
+    assert {:ok, String.trim(revision)} == Instructions.checkout_head(workspace)
+  end
+
+  defp checkout_write(workspace, relative, content) do
+    path = Path.join(workspace, relative)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, content)
   end
 
   @tag :tmp_dir

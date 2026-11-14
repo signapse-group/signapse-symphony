@@ -449,6 +449,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
                         <% else %>
                           <span class="muted">n/a</span>
                         <% end %>
+                        <span :if={entry[:checkout_head]} class="muted mono" title={entry.checkout_head}>
+                          Checkout <%= String.slice(entry.checkout_head, 0, 12) %>
+                        </span>
+                        <span :if={entry[:checkout_prompt_digest]} class="muted mono" title={entry.checkout_prompt_digest}>
+                          Prompt <%= String.slice(entry.checkout_prompt_digest, 0, 12) %>
+                        </span>
                       </div>
                     </td>
                     <td class="numeric"><%= format_runtime_and_turns(entry.started_at, entry.turn_count, @now) %></td>
@@ -553,7 +559,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <% end %>
         </section>
 
-        <section class="section-card">
+        <section id="retry-queue" class="section-card">
           <div class="section-header">
             <div>
               <h2 class="section-title">Retry queue</h2>
@@ -584,7 +590,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     </td>
                     <td><%= entry.attempt %></td>
                     <td class="mono"><%= entry.due_at || "n/a" %></td>
-                    <td><%= entry.error || "n/a" %></td>
+                    <td>
+                      <%= entry.error || "n/a" %>
+                      <code :if={entry[:checkout_failure_path]}><%= entry.checkout_failure_path %></code>
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -646,8 +655,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
       <dl class="profile-revisions">
         <dt>Deployment workflow</dt>
         <dd id="workflow-revision" class="mono"><%= @payload.workflow_revision || "Unavailable" %></dd>
-        <dt>Active instructions</dt>
-        <dd id="instructions-revision" class="mono"><%= @payload.instructions_revision || "Unavailable" %></dd>
+        <dt>Instructions source</dt>
+        <dd id="instructions-source"><%= instructions_source_label(@payload[:instructions_source]) %></dd>
+        <dt :if={@payload[:instructions_source] == "package"}>Active instructions</dt>
+        <dd :if={@payload[:instructions_source] == "package"} id="instructions-revision" class="mono">
+          <%= @payload.instructions_revision || "Unavailable" %>
+        </dd>
       </dl>
       <p :if={@payload[:workflow_reload_error]} class="runtime-control-reason">
         Workflow reload failed: <%= humanize_code(@payload.workflow_reload_error) %>
@@ -655,7 +668,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
       <p :if={@payload[:browser_lock] == "locked"} class="section-copy">
         Shared browser test slot is occupied.
       </p>
-      <form id={"activate-#{@id}"} class="profile-update-form" phx-submit="activate_profile">
+      <form :if={@payload[:instructions_source] == "package"} id={"activate-#{@id}"} class="profile-update-form" phx-submit="activate_profile">
         <input type="hidden" name="profile" value={@id} />
         <label for={"revision-#{@id}"}>Staged instructions revision</label>
         <input type="text" id={"revision-#{@id}"} name="revision" required maxlength="128" spellcheck="false" />
@@ -665,6 +678,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
     </section>
     """
   end
+
+  defp instructions_source_label("checkout"), do: "Task checkout"
+  defp instructions_source_label("package"), do: "Staged package"
+  defp instructions_source_label(_source), do: "Unavailable"
 
   defp humanize_code(code), do: code |> String.replace("_", " ") |> String.capitalize()
 

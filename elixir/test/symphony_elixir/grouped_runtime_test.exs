@@ -59,6 +59,71 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
     if systemd_user?(), do: run_shared_quota_probe(instructions_probe_root(root))
   end
 
+  @tag :tmp_dir
+  @tag timeout: 120_000
+  test "repair and Resume reuse the checkout and open a task with its instructions", %{tmp_dir: root} do
+    if systemd_user?(), do: run_checkout_resume_probe(root)
+  end
+
+  defp run_checkout_resume_probe(root) do
+    put_test_config(:jira_client_module, JiraFixture)
+    repo = Path.join(root, "checkout-source")
+    provision_checkout_repo(repo)
+
+    be = profile(root, "be", write_probe_script(root, "fake-codex-checkout"), 1, repo)
+    start_supervised!({Profile, {[be], Path.join(root, "owners.sqlite3")}})
+    assert eventually(fn -> snapshot("be").readiness.ready end)
+    resume("be")
+
+    assert eventually(fn ->
+             match?(%{runtime_control: %{mode: :paused, source: "checkout_instructions"}, running: []}, snapshot("be"))
+           end)
+
+    assert %{retrying: [%{workspace_path: workspace, checkout_failure_path: "WORKFLOW.md"}]} = snapshot("be")
+    refute File.exists?(trace_path(root, "be"))
+    assert File.read!(Path.join(workspace, "hook-source")) == "checkout\n"
+
+    local_output = Path.join(workspace, "local-output")
+    File.write!(local_output, "preserve me")
+    workflow = "CHECKOUT-ONLY {{ issue.identifier }} from [local AGENTS](AGENTS.md)."
+    File.write!(Path.join(workspace, "WORKFLOW.md"), workflow)
+    digest = Base.encode16(:crypto.hash(:sha256, workflow), case: :lower)
+
+    resume("be")
+    assert eventually(fn -> checkout_turn_started?(root) end), inspect(snapshot("be"))
+    trace = File.read!(trace_path(root, "be"))
+    assert trace =~ "THREAD-CWD:#{workspace}"
+    assert trace =~ "CHECKOUT-ONLY SIGN-10011"
+    assert trace =~ "relative to WORKFLOW.md in this checkout"
+    refute trace =~ "uses instructions revision"
+
+    {head, 0} = System.cmd("git", ["-C", workspace, "rev-parse", "HEAD"])
+    head = String.trim(head)
+
+    assert %{running: [%{checkout_head: ^head, checkout_prompt_digest: ^digest, workspace_path: ^workspace}]} =
+             snapshot("be")
+
+    assert File.read!(local_output) == "preserve me"
+  end
+
+  defp checkout_turn_started?(root) do
+    case File.read(trace_path(root, "be")) do
+      {:ok, trace} -> String.contains?(trace, "CHECKOUT-ONLY SIGN-10011")
+      _ -> false
+    end
+  end
+
+  defp provision_checkout_repo(repo) do
+    {_, 0} = System.cmd("git", ["init", "--quiet", repo])
+    File.write!(Path.join(repo, "AGENTS.md"), "# Checkout instructions\n")
+    skill = Path.join([repo, ".agents", "skills", "example", "SKILL.md"])
+    File.mkdir_p!(Path.dirname(skill))
+    File.write!(skill, "# Example skill\n")
+    git = ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
+    {_, 0} = System.cmd("git", git ++ ["add", "."])
+    {_, 0} = System.cmd("git", git ++ ["commit", "--quiet", "-m", "Prepare checkout"])
+  end
+
   defp run_shared_quota_probe(root) do
     put_test_config(:jira_client_module, JiraFixture)
     limit_candidates = Path.join(root, "limit-candidates")
@@ -212,7 +277,7 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
     assert {:ok, {"fe", ^workspace}} = AssignmentOwners.owner({"https://jira.example.invalid", "SIGN", "10001"})
   end
 
-  defp profile(root, id, script, max_turns \\ 1) do
+  defp profile(root, id, script, max_turns \\ 1, checkout_repo \\ nil) do
     control = Path.join(root, id <> ".sqlite3")
     workspace = Path.join([root, "workspaces", id])
     workflow = Path.join(root, id <> ".md")
@@ -222,22 +287,71 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
     contents = String.replace(contents, "max_concurrent_agents:", "max_turns: #{max_turns}\n  max_concurrent_agents:")
     contents = String.replace(contents, "\nworkspace:", "\npolling:\n  interval_ms: 100\nworkspace:")
 
+    hook_config = if checkout_repo, do: checkout_fixture_hooks(), else: package_fixture_hooks()
+
     fixture_settings = """
     codex:
       command: #{script}
       read_timeout_ms: 15000
-    hooks:
-      before_run: |
-        test -r "$SYMPHONY_INSTRUCTIONS_ROOT/AGENTS.md" &&
-        test "$PROBE_PROFILE" = "$SYMPHONY_PROFILE_ID" &&
-        test -z "${JIRA_API_TOKEN+x}" &&
-        printf '%s\\n' "$SYMPHONY_INSTRUCTIONS_REVISION" > hook-revision
+    #{String.trim_trailing(hook_config)}
     ---
     #{id} fixture
     """
 
     File.write!(workflow, String.replace(contents, "---\n#{id} fixture", String.trim_trailing(fixture_settings)))
 
+    unless checkout_repo, do: prepare_package_fixture(root, id, instructions)
+
+    %Profile{
+      id: id,
+      workflow_path: workflow,
+      instructions_root: if(checkout_repo, do: nil, else: instructions),
+      checkout_workflow: if(checkout_repo, do: "WORKFLOW.md"),
+      control_path: control,
+      env:
+        %{
+          "PATH" => System.fetch_env!("PATH"),
+          "HOME" => System.fetch_env!("HOME"),
+          "XDG_RUNTIME_DIR" => System.fetch_env!("XDG_RUNTIME_DIR"),
+          "DBUS_SESSION_BUS_ADDRESS" => System.fetch_env!("DBUS_SESSION_BUS_ADDRESS"),
+          "JIRA_BASE_URL" => "https://jira.example.invalid",
+          "JIRA_EMAIL" => "probe@example.invalid",
+          "JIRA_API_TOKEN" => "should-not-reach-worker",
+          "SYMPHONY_WORKSPACE_ROOT" => workspace,
+          "CONTROL_DB" => control,
+          "PROBE_PROFILE" => id,
+          "PROBE_TRACE" => trace_path(root, id),
+          "PROBE_LIMIT_CANDIDATES" => Path.join(root, "limit-candidates"),
+          "PROBE_QUOTA_EXHAUSTED" => Path.join(root, "quota-exhausted"),
+          "PROBE_QUOTA_TRACE" => quota_trace_path(root, id)
+        }
+        |> Map.merge(if(checkout_repo, do: %{"PROBE_CHECKOUT_REPO" => checkout_repo}, else: %{}))
+    }
+  end
+
+  defp package_fixture_hooks do
+    ~S"""
+    hooks:
+      before_run: |
+        test -r "$SYMPHONY_INSTRUCTIONS_ROOT/AGENTS.md" &&
+        test "$PROBE_PROFILE" = "$SYMPHONY_PROFILE_ID" &&
+        test -z "${JIRA_API_TOKEN+x}" &&
+        printf '%s\n' "$SYMPHONY_INSTRUCTIONS_REVISION" > hook-revision
+    """
+  end
+
+  defp checkout_fixture_hooks do
+    ~S"""
+    hooks:
+      after_create: git clone --quiet "$PROBE_CHECKOUT_REPO" .
+      before_run: |
+        test "$SYMPHONY_INSTRUCTIONS_SOURCE" = checkout &&
+        test -z "${SYMPHONY_INSTRUCTIONS_ROOT+x}${SYMPHONY_INSTRUCTIONS_REVISION+x}${JIRA_API_TOKEN+x}" &&
+        printf '%s\n' "$SYMPHONY_INSTRUCTIONS_SOURCE" > hook-source
+    """
+  end
+
+  defp prepare_package_fixture(root, id, instructions) do
     case System.get_env("SYMPHONY_TEST_PINNED_PACKAGES") do
       nil ->
         stage_package(root, id, "pinned-probe-v1")
@@ -248,29 +362,6 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
         File.cp_r!(Path.join(dir, id), instructions)
         mount_instruction_fixture(root, package_path(root, id))
     end
-
-    %Profile{
-      id: id,
-      workflow_path: workflow,
-      instructions_root: instructions,
-      control_path: control,
-      env: %{
-        "PATH" => System.fetch_env!("PATH"),
-        "HOME" => System.fetch_env!("HOME"),
-        "XDG_RUNTIME_DIR" => System.fetch_env!("XDG_RUNTIME_DIR"),
-        "DBUS_SESSION_BUS_ADDRESS" => System.fetch_env!("DBUS_SESSION_BUS_ADDRESS"),
-        "JIRA_BASE_URL" => "https://jira.example.invalid",
-        "JIRA_EMAIL" => "probe@example.invalid",
-        "JIRA_API_TOKEN" => "should-not-reach-worker",
-        "SYMPHONY_WORKSPACE_ROOT" => workspace,
-        "CONTROL_DB" => control,
-        "PROBE_PROFILE" => id,
-        "PROBE_TRACE" => trace_path(root, id),
-        "PROBE_LIMIT_CANDIDATES" => Path.join(root, "limit-candidates"),
-        "PROBE_QUOTA_EXHAUSTED" => Path.join(root, "quota-exhausted"),
-        "PROBE_QUOTA_TRACE" => quota_trace_path(root, id)
-      }
-    }
   end
 
   defp stage_package(root, id, revision) do
@@ -317,18 +408,27 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
             result = {"rateLimits": {"primary": {"usedPercent": usage}}}
         elif method == "thread/start":
             thread_started = True
+            if os.environ.get("PROBE_CHECKOUT_REPO"):
+                cwd = msg["params"]["cwd"]
+                assert Path(cwd) == Path.cwd()
+                assert Path("AGENTS.md").is_file()
+                assert Path(".agents/skills/example/SKILL.md").is_file()
+                assert Path("hook-source").read_text().strip() == "checkout"
+                with open(os.environ["PROBE_TRACE"], "a") as trace:
+                    trace.write(f"THREAD-CWD:{cwd}\\n")
             result = {"thread": {"id": f"thread-{os.getpid()}"}}
         elif method == "turn/start":
             prompt = msg["params"]["input"][0]["text"]
-            root = Path(re.search(r"Read AGENTS.md and the required phase instructions from (.+)\\.\\n", prompt)[1])
-            assert os.statvfs(root).f_flag & os.ST_RDONLY
-            assert (root / "AGENTS.md").read_bytes()
-            assert Path("hook-revision").read_text().strip() == root.name
-            files = [path for path in root.rglob("*") if path.is_file()]
-            for path in files:
-                path.read_bytes()
             with open(os.environ["PROBE_TRACE"], "a") as trace:
-                trace.write(f"READ:{root.name}:readonly:{len(files)}\\n")
+                if not os.environ.get("PROBE_CHECKOUT_REPO"):
+                    root = Path(re.search(r"Read AGENTS.md and the required phase instructions from (.+)\\.\\n", prompt)[1])
+                    assert os.statvfs(root).f_flag & os.ST_RDONLY
+                    assert (root / "AGENTS.md").read_bytes()
+                    assert Path("hook-revision").read_text().strip() == root.name
+                    files = [path for path in root.rglob("*") if path.is_file()]
+                    for path in files:
+                        path.read_bytes()
+                    trace.write(f"READ:{root.name}:readonly:{len(files)}\\n")
                 trace.write(f"ENV:{os.environ['PROBE_PROFILE']}:{os.environ.get('JIRA_API_TOKEN', 'unset')}\\n")
                 trace.write(prompt + "\\n")
             result = {"turn": {"id": "probe-turn"}}

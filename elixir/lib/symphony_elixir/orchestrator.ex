@@ -227,6 +227,9 @@ defmodule SymphonyElixir.Orchestrator do
           |> maybe_put_runtime_value(:worker_host, info[:worker_host])
           |> maybe_put_runtime_value(:workspace_path, info[:workspace_path])
           |> maybe_put_runtime_value(:session_process, info[:session_process])
+          |> maybe_put_runtime_value(:checkout_head, info[:checkout_head])
+          |> maybe_put_runtime_value(:checkout_prompt_digest, info[:checkout_prompt_digest])
+          |> clear_resolved_checkout_failure(info)
 
         recovery = boundary_recovery(updated_running_entry.issue, updated_running_entry)
         persist_retry_state(state, Map.put(recovery, :error, interrupted_run_error(recovery)))
@@ -358,6 +361,20 @@ defmodule SymphonyElixir.Orchestrator do
     schedule_issue_retry(state, issue_id, max(metadata.attempt, 1), quota_retry_metadata(metadata, reason))
   end
 
+  defp retry_agent_down(state, issue_id, entry, _session_id, {:session_not_started, {:checkout_instructions, code, path}}) do
+    metadata = boundary_recovery(entry.issue, entry)
+
+    metadata =
+      Map.merge(metadata, %{
+        reason_code: Atom.to_string(code),
+        checkout_failure_path: path,
+        error: "Checkout instructions require operator attention",
+        pause: {"Checkout instructions require operator attention", "checkout_instructions"}
+      })
+
+    schedule_issue_retry(state, issue_id, next_retry_attempt_from_running(entry) || 1, metadata)
+  end
+
   defp retry_agent_down(state, issue_id, running_entry, session_id, reason) do
     failure = if reason == :session_heartbeat_expired, do: "session_heartbeat_expired"
     Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{failure || "worker_exit"}; scheduling retry")
@@ -398,7 +415,7 @@ defmodule SymphonyElixir.Orchestrator do
       workspace_path: entry[:workspace_path],
       reason_code: reason_code,
       error: error,
-      pause_reason: pause_reason
+      pause: pause_reason
     })
   end
 
@@ -635,6 +652,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp quota_admission_error(%State{quota_hold: {reason, _until_ms}}), do: reason
   defp quota_admission_error(_state), do: nil
 
+  defp quota_retry_metadata(%{checkout_failure_path: path} = metadata, _reason) when is_binary(path),
+    do: %{metadata | error: "Checkout instructions require operator attention"}
+
   defp quota_retry_metadata(metadata, reason) do
     reason_code = Atom.to_string(reason)
     Map.merge(metadata, %{error: retry_error(metadata, reason_code), reason_code: reason_code})
@@ -745,6 +765,7 @@ defmodule SymphonyElixir.Orchestrator do
           issue_url: retry.issue_url,
           error: retry.error,
           reason_code: retry[:reason_code],
+          checkout_failure_path: retry[:checkout_failure_path],
           worker_host: retry.worker_host,
           workspace_path: retry.workspace_path,
           infrastructure_failures: Map.get(retry, :infrastructure_failures, 0),
@@ -786,6 +807,7 @@ defmodule SymphonyElixir.Orchestrator do
       issue_url: restored_issue_url(retry, state),
       error: retry["error"],
       reason_code: retry["reason_code"],
+      checkout_failure_path: retry["checkout_failure_path"],
       worker_host: retry["worker_host"],
       workspace_path: retry["workspace_path"],
       infrastructure_failures: retry["infrastructure_failures"] || 0,
@@ -1167,6 +1189,7 @@ defmodule SymphonyElixir.Orchestrator do
       infrastructure_failures: Map.get(entry, :infrastructure_failures, 0),
       retry_generation: entry[:retry_generation],
       reason_code: entry[:reason_code],
+      checkout_failure_path: entry[:checkout_failure_path],
       retry_priority: entry[:retry_priority],
       session_unit: get_in(entry, [:session_process, :containment, :unit]),
       session_invocation: get_in(entry, [:session_process, :containment, :invocation])
@@ -1701,6 +1724,7 @@ defmodule SymphonyElixir.Orchestrator do
       infrastructure_failures: Map.get(metadata, :infrastructure_failures, 0),
       retry_generation: metadata[:retry_generation],
       reason_code: metadata[:reason_code],
+      checkout_failure_path: metadata[:checkout_failure_path],
       retry_priority: metadata[:retry_priority]
     }
 
@@ -1805,6 +1829,7 @@ defmodule SymphonyElixir.Orchestrator do
             infrastructure_failures: Map.get(metadata, :infrastructure_failures, 0),
             retry_generation: metadata[:retry_generation],
             reason_code: metadata[:reason_code],
+            checkout_failure_path: metadata[:checkout_failure_path],
             retry_priority: metadata[:retry_priority],
             started_at: DateTime.utc_now()
           })
@@ -1911,6 +1936,7 @@ defmodule SymphonyElixir.Orchestrator do
             issue_url: issue_url,
             error: error,
             reason_code: metadata[:reason_code],
+            checkout_failure_path: metadata[:checkout_failure_path],
             worker_host: worker_host,
             workspace_path: workspace_path,
             infrastructure_failures: infrastructure_failures,
@@ -1919,18 +1945,23 @@ defmodule SymphonyElixir.Orchestrator do
           })
     }
 
-    write_scheduled_retry(updated_state, issue_id, metadata[:pause_reason])
+    write_scheduled_retry(updated_state, issue_id, metadata[:pause])
   end
 
-  defp write_scheduled_retry(state, issue_id, pause_reason) do
+  defp write_scheduled_retry(state, issue_id, pause) do
     retry = Map.fetch!(state.retry_attempts, issue_id)
     payload = Map.put(retry, :issue_id, issue_id)
 
     result =
-      if pause_reason do
-        RuntimeControl.pause_with_retry(control_id(state), payload, pause_reason, control_server(state))
-      else
-        persist_retry(state, payload)
+      case pause do
+        {reason, source} ->
+          RuntimeControl.pause_with_retry(control_id(state), payload, reason, control_server(state), source)
+
+        reason when is_binary(reason) ->
+          RuntimeControl.pause_with_retry(control_id(state), payload, reason, control_server(state))
+
+        nil ->
+          persist_retry(state, payload)
       end
 
     updated =
@@ -1940,7 +1971,7 @@ defmodule SymphonyElixir.Orchestrator do
 
         {:error, reason} ->
           Logger.error("Unable to persist scheduled retry for issue_id=#{issue_id}: #{inspect(reason)}; deferring dispatch")
-          Map.put(retry, :pending_write, pause_reason)
+          Map.put(retry, :pending_write, pause)
       end
 
     %{state | retry_attempts: Map.put(state.retry_attempts, issue_id, updated)}
@@ -1948,7 +1979,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp flush_retry_persistence(state) do
     Enum.reduce(state.retry_attempts, state, fn
-      {issue_id, %{pending_write: pause_reason}}, acc -> write_scheduled_retry(acc, issue_id, pause_reason)
+      {issue_id, %{pending_write: pause}}, acc -> write_scheduled_retry(acc, issue_id, pause)
       _entry, acc -> acc
     end)
   end
@@ -1961,6 +1992,7 @@ defmodule SymphonyElixir.Orchestrator do
           issue_url: Map.get(retry_entry, :issue_url),
           error: Map.get(retry_entry, :error),
           reason_code: Map.get(retry_entry, :reason_code),
+          checkout_failure_path: retry_entry[:checkout_failure_path],
           worker_host: Map.get(retry_entry, :worker_host),
           workspace_path: Map.get(retry_entry, :workspace_path),
           infrastructure_failures: Map.get(retry_entry, :infrastructure_failures, 0),
@@ -2219,6 +2251,12 @@ defmodule SymphonyElixir.Orchestrator do
     Map.put(running_entry, key, value)
   end
 
+  defp clear_resolved_checkout_failure(%{checkout_failure_path: path} = entry, %{checkout_head: head})
+       when is_binary(path) and is_binary(head),
+       do: Map.drop(entry, [:checkout_failure_path, :reason_code])
+
+  defp clear_resolved_checkout_failure(entry, _info), do: entry
+
   defp select_worker_host(%State{} = state, preferred_worker_host) do
     case settings(state).worker.ssh_hosts do
       [] ->
@@ -2430,6 +2468,8 @@ defmodule SymphonyElixir.Orchestrator do
           state: metadata.issue.state,
           worker_host: Map.get(metadata, :worker_host),
           workspace_path: Map.get(metadata, :workspace_path),
+          checkout_head: metadata[:checkout_head],
+          checkout_prompt_digest: metadata[:checkout_prompt_digest],
           session_id: metadata.session_id,
           codex_app_server_pid: metadata.codex_app_server_pid,
           codex_input_tokens: metadata.codex_input_tokens,
@@ -2456,6 +2496,7 @@ defmodule SymphonyElixir.Orchestrator do
           issue_url: Map.get(retry, :issue_url),
           error: Map.get(retry, :error),
           reason_code: Map.get(retry, :reason_code),
+          checkout_failure_path: retry[:checkout_failure_path],
           worker_host: Map.get(retry, :worker_host),
           workspace_path: Map.get(retry, :workspace_path)
         }
@@ -2774,6 +2815,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp tracker_revision(_state), do: nil
 
   defp pin_instructions(%State{profile_id: nil}), do: {:ok, nil}
+  defp pin_instructions(%State{profile_snapshot: %{checkout_workflow: path}}) when is_binary(path), do: {:ok, nil}
 
   defp pin_instructions(%State{profile_id: id, instructions: instructions} = state) do
     case instructions.pin(id) do
@@ -2788,6 +2830,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp refresh_instructions(%State{profile_id: nil} = state), do: state
   defp refresh_instructions(%State{config_error: error} = state) when not is_nil(error), do: state
+  defp refresh_instructions(%State{profile_snapshot: %{checkout_workflow: path}} = state) when is_binary(path), do: record_instructions_check(state, nil)
 
   defp refresh_instructions(%State{instructions_revision: revision, instructions_check_at: checked, readiness_error: nil} = state)
        when is_integer(checked) do
@@ -2810,6 +2853,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp record_instructions_check(%State{profile_id: nil} = state, nil), do: state
+  defp record_instructions_check(state, nil), do: %{state | readiness_error: nil}
 
   defp record_instructions_check(state, pin) do
     %{

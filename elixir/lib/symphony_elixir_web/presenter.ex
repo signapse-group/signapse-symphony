@@ -156,6 +156,7 @@ defmodule SymphonyElixirWeb.Presenter do
         total_tokens: entry.codex_total_tokens
       }
     }
+    |> put_checkout_revision(entry)
   end
 
   defp retry_entry_payload(entry) do
@@ -170,10 +171,22 @@ defmodule SymphonyElixirWeb.Presenter do
       workspace_path: Map.get(entry, :workspace_path)
     }
     |> put_retry_reason(entry[:reason_code])
+    |> put_checkout_failure_path(entry)
   end
 
   defp put_retry_reason(payload, nil), do: payload
   defp put_retry_reason(payload, reason), do: Map.put(payload, :reason_code, reason)
+
+  defp put_checkout_revision(payload, %{checkout_head: head, checkout_prompt_digest: digest})
+       when is_binary(head) and is_binary(digest),
+       do: Map.merge(payload, %{checkout_head: head, checkout_prompt_digest: digest})
+
+  defp put_checkout_revision(payload, _entry), do: payload
+
+  defp put_checkout_failure_path(payload, %{checkout_failure_path: path}) when is_binary(path),
+    do: Map.put(payload, :checkout_failure_path, path)
+
+  defp put_checkout_failure_path(payload, _entry), do: payload
 
   defp blocked_entry_payload(entry) do
     %{
@@ -210,6 +223,7 @@ defmodule SymphonyElixirWeb.Presenter do
         total_tokens: running.codex_total_tokens
       }
     }
+    |> put_checkout_revision(running)
   end
 
   defp retry_issue_payload(retry) do
@@ -220,6 +234,7 @@ defmodule SymphonyElixirWeb.Presenter do
       worker_host: Map.get(retry, :worker_host),
       workspace_path: Map.get(retry, :workspace_path)
     }
+    |> put_checkout_failure_path(retry)
   end
 
   defp blocked_issue_payload(blocked) do

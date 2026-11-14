@@ -79,3 +79,23 @@ class PrepareGroupedWorkspacesTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'do not match'):
                     qa.prepare(workspace)
                 self.assertEqual(run.call_count, 2)
+
+        checkout_env = {'SYMPHONY_PROFILE_ID': 'qa', 'SYMPHONY_INSTRUCTIONS_SOURCE': 'checkout'}
+        with patch.object(qa, 'APP', self.root), patch.dict(os.environ, checkout_env, clear=True):
+            with patch.object(qa.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                with redirect_stdout(io.StringIO()):
+                    qa.prepare(workspace)
+                self.assertEqual(run.call_args.args[0][-2:], [str(workspace), checker.as_uri()])
+                self.assertEqual((workspace / 'artifacts').resolve(), evidence)
+                self.assertEqual((evidence / 'keep.txt').read_text(), 'retained')
+
+    def test_qa_checkout_validation_distinguishes_instruction_and_host_failures(self):
+        env = {'SYMPHONY_PROFILE_ID': 'qa', 'SYMPHONY_INSTRUCTIONS_SOURCE': 'checkout'}
+        checker = self.root / 'check-local-instructions.mjs'
+        with patch.dict(os.environ, env, clear=True), patch.object(qa.subprocess, 'run') as run:
+            run.return_value = subprocess.CompletedProcess([], 78)
+            with self.assertRaisesRegex(qa.InvalidCheckoutInstructions, 'instruction validation failed'):
+                qa.check_instructions(self.root, checker)
+            run.return_value = subprocess.CompletedProcess([], 1)
+            with self.assertRaises(subprocess.CalledProcessError):
+                qa.check_instructions(self.root, checker)

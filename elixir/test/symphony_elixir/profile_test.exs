@@ -59,6 +59,26 @@ defmodule SymphonyElixir.ProfileTest do
     assert {:ok, %{workspace: %{root: nil}}} = Schema.parse(%{"workspace" => %{"root" => "$PATH"}}, %{})
   end
 
+  test "checkout workflow makes the package root optional only for a safe relative path", %{root: root} do
+    path = Path.join(root, "profiles.json")
+    entry = %{"id" => "planning", "workflow" => "planning.md", "control_path" => Path.join(root, "planning.db"), "env" => %{}}
+
+    for {attributes, expected} <- [
+          {%{}, %Profile{id: "planning", control_path: entry["control_path"], error: :invalid_profile_entry}},
+          {%{"checkout_workflow" => "../WORKFLOW.md"}, %Profile{id: "planning", control_path: entry["control_path"], error: :invalid_checkout_workflow_path}},
+          {%{"checkout_workflow" => nil}, %Profile{id: "planning", control_path: entry["control_path"], error: :invalid_checkout_workflow_path}},
+          {%{"checkout_workflow" => "workflow/symphony/WORKFLOW.md"},
+           %Profile{id: "planning", instructions_root: nil, checkout_workflow: "workflow/symphony/WORKFLOW.md", workflow_path: Path.join(root, "planning.md"), control_path: entry["control_path"]}}
+        ] do
+      File.write!(path, Jason.encode!(%{"profiles" => [Map.merge(entry, attributes)]}))
+      assert {:ok, [^expected]} = Profile.load(path, %{})
+    end
+
+    profile = fixture(root, "planning")
+    start_supervised!({Profile, [%{profile | checkout_workflow: "workflow/symphony/WORKFLOW.md", instructions_root: nil}]})
+    assert {:error, :checkout_instructions_enabled} = SymphonyElixir.Instructions.pin("planning")
+  end
+
   test "missing workflow recovers independently and an invalid reload retains the last good revision", %{root: root} do
     fe = fixture(root, "fe")
     be = fixture(root, "be", copy?: false)

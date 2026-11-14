@@ -12,11 +12,11 @@ and profile readiness. The five legacy units and their configuration are
 retained for rollback.
 
 `runtime/grouped/profiles.json` binds each profile to a deployment workflow,
-isolated environment, control database and instructions directory. Consumer
-repositories own their workflow prompts and instructions. Prepare revisions
-from those repositories and activate a validated revision for each profile.
-Keep `revisions/` read-only and preserve active and previous revisions used by
-running sessions.
+isolated environment and control database. A profile with
+`checkout_workflow` loads its prompt from that path in the task checkout.
+Package profiles still use a validated revision in their instructions
+directory. Keep package `revisions/` read-only and retain the verified
+revision and mount configuration used for rollback.
 
 Keep the five control databases separate, including BE and Landing. Preserve the
 assignment owner database, workspace paths and branches. Keep QA's evidence,

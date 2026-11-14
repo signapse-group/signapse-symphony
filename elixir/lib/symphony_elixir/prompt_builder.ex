@@ -36,6 +36,23 @@ defmodule SymphonyElixir.PromptBuilder do
     })
   end
 
+  @doc false
+  @spec render_checkout(Issue.t(), non_neg_integer() | nil, String.t(), String.t() | nil) ::
+          {:ok, String.t()} | {:error, :checkout_prompt_invalid}
+  def render_checkout(issue, attempt, content, profile_id) do
+    context = %{"profile" => %{"id" => profile_id}}
+
+    with {:ok, template} <- Solid.parse(content),
+         prompt = render(template, issue, attempt, context),
+         false <- String.trim(prompt) == "" do
+      {:ok, prompt}
+    else
+      _ -> {:error, :checkout_prompt_invalid}
+    end
+  rescue
+    _error -> {:error, :checkout_prompt_invalid}
+  end
+
   defp render(template, issue, attempt, context) do
     template
     |> Solid.render!(

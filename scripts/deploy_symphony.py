@@ -71,8 +71,10 @@ def health(expected):
         identity = profile['profile_id']
         control = profile.get('runtime_control', {})
         services = control.get('services', {})
+        source = profile.get('instructions_source', 'package')
         if (profile.get('health') != 'healthy' or profile.get('max_concurrent_agents') != PROFILES[identity]
-                or not profile.get('workflow_revision') or not profile.get('instructions_revision')
+                or not profile.get('workflow_revision') or source not in ('package', 'checkout')
+                or (source == 'package' and not profile.get('instructions_revision'))
                 or not control.get('enabled') or control.get('database_error')
                 or control.get('mode') not in {'running', 'paused', 'pausing', 'checking_quota'}
                 or set(services) != {identity} or services[identity].get('status') != 'online'):

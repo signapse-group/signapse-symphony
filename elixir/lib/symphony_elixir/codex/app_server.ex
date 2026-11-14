@@ -133,7 +133,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     settings = settings(snapshot)
     dynamic_tool_binding = bind_tools(snapshot)
 
-    with :ok <- validate_instructions_pin(snapshot, opts[:instructions]),
+    with :ok <- validate_instructions_source(snapshot, opts[:instructions], opts[:checkout_prompt]),
          {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host, snapshot),
          {:ok, session_process} <- start_port(expanded_workspace, worker_host, dynamic_tool_binding, opts) do
       port = session_process.port
@@ -174,9 +174,17 @@ defmodule SymphonyElixir.Codex.AppServer do
     with_session(session, fn -> {:error, reason} end)
   end
 
-  defp validate_instructions_pin(nil, _pin), do: :ok
-  defp validate_instructions_pin(%{profile_id: id}, %{profile_id: id, root: root}) when is_binary(root), do: :ok
-  defp validate_instructions_pin(_snapshot, _pin), do: {:error, :missing_profile_instructions_pin}
+  defp validate_instructions_source(nil, _pin, _checkout), do: :ok
+
+  defp validate_instructions_source(%{checkout_workflow: path}, pin, checkout) when is_binary(path) do
+    case {pin, checkout} do
+      {nil, %{workflow_path: ^path, prompt: prompt}} when is_binary(prompt) -> :ok
+      _ -> {:error, :missing_checkout_prompt}
+    end
+  end
+
+  defp validate_instructions_source(%{profile_id: id}, %{profile_id: id, root: root}, nil) when is_binary(root), do: :ok
+  defp validate_instructions_source(_snapshot, _pin, _checkout), do: {:error, :missing_profile_instructions_pin}
 
   @spec read_rate_limits() :: {:ok, map()} | {:error, term()}
   def read_rate_limits, do: read_rate_limits(nil)
@@ -639,8 +647,15 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp port_env(snapshot, binding) do
+    unset = binding.secret_environment_names ++ ["BASH_ENV"]
+
+    unset =
+      if is_binary(Map.get(snapshot, :checkout_workflow)),
+        do: ["SYMPHONY_INSTRUCTIONS_ROOT", "SYMPHONY_INSTRUCTIONS_REVISION" | unset],
+        else: unset
+
     snapshot
-    |> Profile.subprocess_env(binding.secret_environment_names ++ ["BASH_ENV"])
+    |> Profile.subprocess_env(unset)
     |> Enum.map(fn {name, value} -> {String.to_charlist(name), if(is_binary(value), do: String.to_charlist(value), else: false)} end)
   end
 

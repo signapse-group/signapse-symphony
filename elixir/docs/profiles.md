@@ -4,6 +4,35 @@ A grouped deployment starts with `symphony --profiles /etc/symphony/profiles.jso
 
 The [five-profile fixture](../test/fixtures/profiles/profiles.json) shows the manifest and per-workflow settings together. The manifest is a JSON object with a `profiles` array. Each entry names `id`, `workflow`, `instructions_root`, `control_path` and `env`. Supported IDs in display order are `fe`, `be`, `qa`, `landing`, `planning`. A test or canary can provide a subset. Relative paths resolve from the manifest directory. The absolute `control_path` can also reference a host variable as `$NAME`. It is available from `Profile.lookup(id)` even when the workflow cannot load, so G2 can persist pause and read desired state using the default control timings. The workflow front matter must name the same DB and a one-member group matching the profile ID. Colliding control paths disable both entries before their DBs can open. Workspace roots come from workflow front matter and resolve relative to the workflow file. Define an explicit workspace root for each profile. Set per-profile PATH, HOME, CODEX_HOME, hooks and wrapper variables explicitly in the manifest. Intentional shared values are set explicitly on each profile. A complete value of the form `$NAME` resolves that named host variable at startup. Use that form for credentials. The manifest and its referenced directories are operator-owned. The runtime resolves canonical workspace/control/instructions paths, which the operator must keep stable while the service runs. The web must never serialize effective settings, credentials or subprocess environment.
 
+## Checkout instructions
+
+Set the optional manifest key `checkout_workflow` to the tracked prompt
+path relative to the assignment checkout. Use `WORKFLOW.md` for FE, BE,
+Landing and QA, or `workflow/symphony/WORKFLOW.md` for Planning.
+Profiles with this key use the checkout instructions. The existing
+`instructions_root` identifies the staged package for a profile without
+`checkout_workflow`.
+
+The operator-owned deployment workflow supplies YAML settings and hooks.
+Keep its YAML front matter and delimiters. The consumer workflow contains
+only the Markdown/Liquid prompt. After workspace preparation, Symphony
+validates and renders that prompt and checks the checkout's `AGENTS.md`,
+`.agents/skills`, and required instruction files before starting Codex in
+the same workspace.
+
+An invalid checkout pauses only the affected profile. Any active turn can
+finish, and new turns and assignments wait for Resume. The pause and the
+issue diagnostic survive restart. Repair the reported checkout, then use
+Resume to recheck it on the next attempt. Configuration issues and transient
+workspace failures retain their existing handling.
+
+The grouped observability API reports `instructions_source` as `checkout`
+or `package`. In checkout mode, the deployment workflow revision describes
+runtime configuration. Once a task has loaded its prompt, its running record
+reports the checkout HEAD and the SHA-256 of the source workflow bytes.
+See the [rollout runbook](../../docs/symphony-grouped-rollout.md) for
+preflight, deployment and recovery.
+
 ## Runtime interfaces
 
 - `Profile.ids/0` lists configured profiles. `Profile.via(id, role)` registers OTP names scoped by profile. The common roles are `:workflow_store`, `:runtime_supervisor`, `:orchestrator`, `:task_supervisor`, and `:runtime_control`. G2 owns runtime names and per-profile log and recovery state; use the profile ID on all session, ownership and recovery keys.
