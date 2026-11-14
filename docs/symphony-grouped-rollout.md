@@ -6,6 +6,92 @@ uses `symphony-grouped.service` with its own drop-ins, a loopback listener on
 4000, and an operator-owned profiles manifest. The initial change of ownership
 is an operator action after the isolated rehearsal has passed.
 
+## Moving an existing grouped service to checkout instructions
+
+Update the binary and the QA hook while every profile still uses its package.
+The [bootstrap manifest](../ops/grouped/profiles.json.example) continues to
+show that package configuration. For each migrated profile, add the
+`checkout_workflow` key to that profile's manifest entry. Use the following
+relative paths within the task checkout.
+
+| Profile | `checkout_workflow` | Branch used for new workspaces |
+| --- | --- | --- |
+| FE | `WORKFLOW.md` | `dev` |
+| BE | `WORKFLOW.md` | `dev` |
+| Landing | `WORKFLOW.md` | `dev` |
+| QA | `WORKFLOW.md` | `main` |
+| Planning | `workflow/symphony/WORKFLOW.md` | `main` |
+
+Verify the branch and hook against the effective deployment workflow before
+changing each profile. Keep each operator-owned `workflows/<profile>.md`
+entry and its YAML front matter, including both delimiters and all settings.
+For a migrated profile, remove the prompt body from that deployment file.
+Its task checkout contains the Markdown/Liquid prompt without YAML front
+matter, along with `AGENTS.md` and the instruction files required for the
+assignment. Keep the existing package directory, active pointer and read-only
+mount available for rollback.
+
+1. Rehearse the mixed manifest on an isolated grouped runtime with disposable
+   workspaces and copied configuration. Verify package profiles still select
+   their pinned revisions, checkout profiles are healthy before any task runs,
+   and both modes preserve their caps and control databases. For QA, verify
+   the operator-installed checker receives the assignment checkout and the
+   `artifacts` link still resolves to its existing durable evidence directory.
+   Test an invalid checkout, profile drain, persistence after restart, and
+   manual Resume after repairing that checkout. Rehearse restoring the prior
+   binary, manifest, workflow, hook and package together.
+2. Before a merge can trigger CD or a restart changes the manifest, record
+   all five profiles' desired states. Coordinate with CD using
+   `runtime/locks/cd.lock` and the existing `runtime/grouped/cutover-complete`
+   marker. Move the marker aside under that lock while making the maintenance
+   changes so other CD runs skip deployment. Confirm active turns and
+   contained sessions have drained and reconcile assignment ownership,
+   retries, blocked tasks and pending external writes. Back up the verified
+   executable, grouped drop-in, manifest, live YAML workflows, QA hook,
+   package pointers and mount configuration. Protect any backup containing
+   runtime settings with operator-only permissions.
+3. Install the verified, compatible binary with the original package
+   manifest. To use the automated deploy job, restore the marker under the
+   lock after drain and release the lock before the job runs. If an earlier
+   run skipped deployment due to the marker, rerun the deploy for the
+   current approved `main` SHA. Check the installed SHA and each profile's
+   engine health, caps, control mode and heartbeat before configuring the
+   first checkout profile.
+4. Validate the candidate and each workspace that can resume before switching
+   its profile. Update the task branch through Git when its checkout still
+   has the combined workflow. Preserve implementation changes, branch
+   ownership and evidence. For FE start with the approved SIGN-591 canary
+   after its PR branch and server checkout contain the compatible prompt.
+   For each change to the grouped manifest, repeat maintenance coordination
+   and drain the grouped service before restarting. Install the matching
+   QA hook before enabling the QA checkout profile.
+5. After restart, verify `instructions_source: "checkout"` and the expected
+   `workflow_revision` for the migrated profile. Package profiles still report
+   an `instructions_revision`. A checkout's commit and prompt hash are
+   per-assignment evidence and appear when Symphony loads that checkout.
+   Check that the intended profile's assigned run opens Codex in the same
+   checkout and loads the required skill. Restore the saved operator intent
+   after preflight, including manual pauses. Confirm FE passes before
+   switching BE, Landing, QA and Planning. Keep the release, configuration
+   revisions, branch heads and canary results in the deployment receipt.
+
+For an invalid checkout, the affected profile stays paused. The operator
+repairs the reported workspace and uses Resume. Before opening Codex,
+Symphony validates the checkout again. The QA hook returns status 78 in
+checkout mode for reported instruction violations. The pinned-mode checker
+and host failures such as a missing installed checker or evidence link
+failure retain their ordinary hook error behavior.
+
+If a migration fails, pause and drain before restoring the previous manifest
+entry and its matching deployment workflow, QA hook and package pointer.
+Use the previous binary and drop-in when the failure requires a binary
+rollback. Verify package readiness and restore the recorded operator intent.
+Preserve the live control and assignment owner databases, workspaces and
+durable evidence. The deploy script's automatic binary rollback restores the
+drop-in. The operator restores any profile or hook files changed separately.
+
+## Initial migration from legacy services
+
 | Profile | Legacy unit | Effective workflow below `/opt/apps/symphony` | Cap | Legacy control |
 | --- | --- | --- | ---: | --- |
 | FE | `symphony-fe.service` | `runtime/repos/signapse-ui/WORKFLOW.md` | 2 | FE database |

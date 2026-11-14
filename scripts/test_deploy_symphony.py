@@ -160,6 +160,21 @@ class DeploymentTests(unittest.TestCase):
         ):
             self.assertEqual(deploy.health({deploy.GROUPED_SERVICE: '/new/symphony'}), ['123'])
             open_url.assert_called_once_with('http://127.0.0.1:4000/api/v1/state', timeout=5)
+            checkout = profiles[0]
+            checkout.pop('instructions_revision')
+            for source in [None, 'package', 'unknown', 'checkout']:
+                with self.subTest(source=source):
+                    checkout.update(instructions_source=source)
+                    expected = {deploy.GROUPED_SERVICE: '/new/symphony'}
+                    if source == 'checkout':
+                        self.assertEqual(deploy.health(expected), ['123'])
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'fe:'):
+                            deploy.health(expected)
+            checkout.pop('workflow_revision')
+            with self.assertRaisesRegex(RuntimeError, 'fe:'):
+                deploy.health({deploy.GROUPED_SERVICE: '/new/symphony'})
+            checkout['workflow_revision'] = 'workflow-sha'
             profiles[1]['runtime_control']['services']['landing'] = {'status': 'online'}
             with self.assertRaisesRegex(RuntimeError, 'be:'):
                 deploy.health({deploy.GROUPED_SERVICE: '/new/symphony'})
