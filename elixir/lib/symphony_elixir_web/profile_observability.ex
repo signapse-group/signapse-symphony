@@ -13,6 +13,9 @@ defmodule SymphonyElixirWeb.ProfileObservability do
     "checkout_agents_invalid" => "Invalid AGENTS.md in checkout",
     "checkout_skills_missing" => "Required skill missing from checkout",
     "checkout_skills_invalid" => "Invalid skill in checkout",
+    "checkout_required_file_missing" => "Required instruction file missing from checkout",
+    "checkout_required_file_invalid" => "Invalid required instruction file in checkout",
+    "checkout_head_unavailable" => "Git revision unavailable in checkout",
     "checkout_instructions_invalid" => "Checkout instruction check failed",
     "checkout_prompt_invalid" => "Checkout prompt could not be rendered"
   }
