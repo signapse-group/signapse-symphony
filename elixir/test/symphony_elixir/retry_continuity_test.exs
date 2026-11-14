@@ -170,6 +170,30 @@ defmodule SymphonyElixir.RetryContinuityTest do
              RuntimeControl.pending_retries("fe")
   end
 
+  test "checkout diagnostic survives quota deferral and is cleared when preparation succeeds" do
+    issue = %Issue{id: "checkout-quota", identifier: "SIGN-1", state: "In Progress"}
+    metadata = %{reason_code: "checkout_workflow_missing", checkout_failure_path: "WORKFLOW.md", error: "Checkout instructions require operator attention"}
+    ref = make_ref()
+    task = %{tracker: Config.settings!().tracker, purpose: {:dispatch, issue, 1, metadata}}
+    state = %Orchestrator.State{retry_restore_pending: false, claimed: MapSet.new([issue.id]), tracker_tasks: %{ref => task}}
+    result = {:quota_deferred, issue, :provider_quota_exhausted}
+    assert {:noreply, state} = Orchestrator.handle_info({ref, result}, state)
+
+    assert %{reason_code: "checkout_workflow_missing", checkout_failure_path: "WORKFLOW.md"} =
+             state.retry_attempts[issue.id]
+
+    cancel(state)
+
+    entry = Map.merge(metadata, %{pid: self(), issue: issue})
+    state = %{state | running: %{issue.id => entry}}
+    head = String.duplicate("0", 40)
+    digest = String.duplicate("0", 64)
+    info = %{worker_pid: self(), checkout_head: head, checkout_prompt_digest: digest}
+    assert {:noreply, state} = Orchestrator.handle_info({:worker_runtime_info, issue.id, info}, state)
+    refute Map.has_key?(state.running[issue.id], :checkout_failure_path)
+    assert {:ok, [%{"reason_code" => nil, "checkout_failure_path" => nil}]} = RuntimeControl.pending_retries("fe")
+  end
+
   @tag :tmp_dir
   test "checkout failure drains only the affected profile and survives a control restart", %{tmp_dir: root} do
     start_supervised!({Registry, keys: :unique, name: SymphonyElixir.ProfileRegistry})

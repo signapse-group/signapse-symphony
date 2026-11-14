@@ -229,6 +229,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> maybe_put_runtime_value(:session_process, info[:session_process])
           |> maybe_put_runtime_value(:checkout_head, info[:checkout_head])
           |> maybe_put_runtime_value(:checkout_prompt_digest, info[:checkout_prompt_digest])
+          |> clear_resolved_checkout_failure(info)
 
         recovery = boundary_recovery(updated_running_entry.issue, updated_running_entry)
         persist_retry_state(state, Map.put(recovery, :error, interrupted_run_error(recovery)))
@@ -650,6 +651,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp quota_admission_error(%State{quota_hold: {reason, _until_ms}}), do: reason
   defp quota_admission_error(_state), do: nil
+
+  defp quota_retry_metadata(%{checkout_failure_path: path} = metadata, _reason) when is_binary(path),
+    do: %{metadata | error: "Checkout instructions require operator attention"}
 
   defp quota_retry_metadata(metadata, reason) do
     reason_code = Atom.to_string(reason)
@@ -2246,6 +2250,12 @@ defmodule SymphonyElixir.Orchestrator do
   defp maybe_put_runtime_value(running_entry, key, value) when is_map(running_entry) do
     Map.put(running_entry, key, value)
   end
+
+  defp clear_resolved_checkout_failure(%{checkout_failure_path: path} = entry, %{checkout_head: head})
+       when is_binary(path) and is_binary(head),
+       do: Map.drop(entry, [:checkout_failure_path, :reason_code])
+
+  defp clear_resolved_checkout_failure(entry, _info), do: entry
 
   defp select_worker_host(%State{} = state, preferred_worker_host) do
     case settings(state).worker.ssh_hosts do
