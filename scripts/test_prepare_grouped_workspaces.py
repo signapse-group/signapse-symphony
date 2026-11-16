@@ -89,6 +89,19 @@ class PrepareGroupedWorkspacesTests(unittest.TestCase):
                 self.assertEqual((workspace / 'artifacts').resolve(), evidence)
                 self.assertEqual((evidence / 'keep.txt').read_text(), 'retained')
 
+        upstream = self.root / 'published-checkout'
+        upstream_checker = upstream / 'scripts/check-local-instructions.mjs'
+        upstream_checker.parent.mkdir(parents=True)
+        upstream_checker.touch()
+        checkout_env |= {'SYMPHONY_INSTRUCTIONS_ROOT': str(upstream), 'SYMPHONY_INSTRUCTIONS_REVISION': 'fresh'}
+        with patch.object(qa, 'APP', self.root), patch.dict(os.environ, checkout_env, clear=True):
+            with patch.object(qa.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                with redirect_stdout(io.StringIO()):
+                    qa.prepare(workspace)
+                self.assertEqual(run.call_args.args[0][-2:], [str(upstream), upstream_checker.as_uri()])
+                self.assertEqual((workspace / 'artifacts').resolve(), evidence)
+                self.assertEqual((evidence / 'keep.txt').read_text(), 'retained')
+
     def test_qa_checkout_validation_distinguishes_instruction_and_host_failures(self):
         env = {'SYMPHONY_PROFILE_ID': 'qa', 'SYMPHONY_INSTRUCTIONS_SOURCE': 'checkout'}
         checker = self.root / 'check-local-instructions.mjs'

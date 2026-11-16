@@ -122,6 +122,74 @@ defmodule SymphonyElixir.InstructionsTest do
   end
 
   @tag :tmp_dir
+  test "a new attempt reads the current upstream instructions and preserves the existing task tree", %{tmp_dir: root} do
+    repo = Path.join(root, "published")
+    workspace = Path.join(root, "existing-task")
+    assert {_, 0} = System.cmd("git", ["init", "--quiet", "--initial-branch=main", repo])
+    checkout_write(repo, "WORKFLOW.md", "Original {{ issue.identifier }}")
+    checkout_write(repo, "AGENTS.md", "# Original instructions")
+    checkout_write(repo, ".agents/skills/example/SKILL.md", "# Original skill")
+    checkout_write(repo, "src/unrelated.bin", "Never materialize product files as instructions")
+    original = commit_checkout!(repo)
+    assert {_, 0} = System.cmd("git", ["clone", "--quiet", repo, workspace])
+    assert {_, 0} = System.cmd("git", ["-C", workspace, "switch", "--quiet", "-c", "codex/issue"])
+    checkout_write(workspace, "AGENTS.md", "# Unsaved task change")
+    checkout_write(workspace, "artifacts/run.json", "{}")
+
+    assert {:ok, settings} = Schema.parse(%{})
+
+    snapshot = %{
+      checkout_workflow: "WORKFLOW.md",
+      checkout_upstream: %{repository: "file://#{repo}", branch: "main"},
+      settings: settings,
+      env: Map.take(System.get_env(), ["PATH", "HOME"])
+    }
+
+    assert ^original = Instructions.with_checkout_upstream(snapshot, nil, & &1.revision)
+
+    checkout_write(repo, "WORKFLOW.md", "Fresh {{ issue.identifier }} from [Implement](docs/runbooks/implement.md).")
+    checkout_write(repo, "docs/runbooks/implement.md", "# Current implementation procedure")
+    checkout_write(repo, "AGENTS.md", "# Published instructions")
+    checkout_write(repo, ".agents/skills/example/SKILL.md", "# Published skill")
+    checkout_write(repo, "scripts/validate-qa-handoff.mjs", "// Published handoff checker")
+    updated = commit_checkout!(repo)
+    refute updated == original
+
+    source_root =
+      Instructions.with_checkout_upstream(snapshot, nil, fn source ->
+        assert source.revision == updated
+        assert {:ok, %{prompt: prompt, source: ^source}} = Instructions.prepare_checkout(source.root, "WORKFLOW.md", issue("Progress", []), settings, 2, source)
+        assert prompt =~ "Fresh SIGN-1"
+        assert prompt =~ Path.join(source.root, "AGENTS.md")
+        assert File.read!(Path.join(source.root, "AGENTS.md")) == "# Published instructions"
+        assert File.read!(Path.join(source.root, ".agents/skills/example/SKILL.md")) == "# Published skill"
+        assert File.exists?(Path.join(source.root, "scripts/validate-qa-handoff.mjs"))
+        refute File.exists?(Path.join(source.root, "src/unrelated.bin"))
+        source.root
+      end)
+
+    refute File.exists?(source_root)
+    assert {:ok, ^original} = Instructions.checkout_head(workspace)
+    assert {"codex/issue\n", 0} == System.cmd("git", ["-C", workspace, "branch", "--show-current"])
+    assert File.read!(Path.join(workspace, "AGENTS.md")) == "# Unsaved task change"
+    assert File.read!(Path.join(workspace, "artifacts/run.json")) == "{}"
+    assert File.read!(Path.join(workspace, "WORKFLOW.md")) == "Original {{ issue.identifier }}"
+
+    missing = put_in(snapshot.checkout_upstream.branch, "dev")
+
+    assert {:error, {:checkout_instructions, :checkout_upstream_unavailable, "WORKFLOW.md"}} =
+             Instructions.with_checkout_upstream(missing, nil, fn _ -> flunk("Started without a fresh instructions source") end)
+  end
+
+  defp commit_checkout!(repo) do
+    git = ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
+    assert {_, 0} = System.cmd("git", git ++ ["add", "."])
+    assert {_, 0} = System.cmd("git", git ++ ["commit", "--quiet", "-m", "Publish fixture"])
+    assert {:ok, revision} = Instructions.checkout_head(repo)
+    revision
+  end
+
+  @tag :tmp_dir
   test "all profiles render local instructions while selected revisions survive a failed update", %{tmp_dir: root} do
     for id <- @ids do
       package = stage(root, id, "v1")

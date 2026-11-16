@@ -44,12 +44,16 @@ def check_instructions(workspace, checker):
 
     # Only reported instruction violations use the workspace hook's EX_CONFIG result.
     # Node or checker startup failures use their ordinary exit status.
+    source = Path(os.environ.get('SYMPHONY_INSTRUCTIONS_ROOT') or workspace)
+    if not source.is_absolute() or source.resolve(strict=True) != source:
+        raise ValueError('QA checkout instructions source must be a canonical directory.')
+    checker = source / 'scripts/check-local-instructions.mjs' if source != workspace else checker
     result = subprocess.run([
         node, '--input-type=module', '--eval',
         'const { checkLocalInstructions } = await import(process.argv[2]);'
         'const { errors } = checkLocalInstructions(process.argv[1]);'
         'if (errors.length) process.exitCode = 78;',
-        '--', str(workspace), checker.as_uri(),
+        '--', str(source), checker.as_uri(),
     ], stdout=subprocess.DEVNULL)
     if result.returncode == 78:
         raise InvalidCheckoutInstructions('QA checkout instruction validation failed.')

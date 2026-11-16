@@ -568,12 +568,16 @@ defmodule SymphonyElixir.Workspace do
     unset = Client.secret_environment_names(snapshot.settings.tracker)
 
     unset =
-      if is_binary(Map.get(snapshot, :checkout_workflow)),
+      if is_binary(Map.get(snapshot, :checkout_workflow)) and is_nil(Map.get(snapshot, :instructions)),
         do: ["SYMPHONY_INSTRUCTIONS_ROOT", "SYMPHONY_INSTRUCTIONS_REVISION" | unset],
         else: unset
 
     env = Profile.subprocess_env(%{env: env}, unset)
     {["-c", command], env, snapshot.settings.hooks.timeout_ms}
+  end
+
+  defp instructions_environment(%{checkout_workflow: path, instructions: %{root: root, revision: revision}}) when is_binary(path) do
+    %{"SYMPHONY_INSTRUCTIONS_SOURCE" => "checkout", "SYMPHONY_INSTRUCTIONS_ROOT" => root, "SYMPHONY_INSTRUCTIONS_REVISION" => revision}
   end
 
   defp instructions_environment(%{checkout_workflow: path}) when is_binary(path), do: %{"SYMPHONY_INSTRUCTIONS_SOURCE" => "checkout"}

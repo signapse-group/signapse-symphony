@@ -22,6 +22,25 @@ relative paths within the task checkout.
 | QA | `WORKFLOW.md` | `main` |
 | Planning | `workflow/symphony/WORKFLOW.md` | `main` |
 
+To refresh instructions for existing task workspaces on their next worker
+launch, add `checkout_upstream` alongside `checkout_workflow`. Use the same
+repository and branch as the operator-owned workspace clone. For example,
+the QA entry adds
+`"checkout_upstream": {"repository": "https://github.com/signapse-group/signapse-qa.git", "branch": "main"}`.
+BE uses `dgminhtam/signapse`, FE uses `signapse-group/signapse-ui`, Landing
+uses `signapse-group/signapse-landing`, and Planning uses
+`signapse-group/signapse-planing`. The table gives each branch. Deploy the
+matching QA hook before enabling this setting so the hook validates the
+pinned instructions with their own checker and continues to set up
+artifacts in the original task workspace.
+
+Rehearse with an isolated worktree on an older topic branch and a fake
+tracker. Publish new instructions to its fixture upstream, then launch
+another worker attempt. Confirm the checked-out branch, local changes and
+artifacts are retained and the load event reports the upstream
+`instructions_head` and prompt digest. Exercise an unavailable upstream
+before enabling the setting in a live manifest.
+
 Verify the branch and hook against the effective deployment workflow before
 changing each profile. Keep each operator-owned `workflows/<profile>.md`
 entry and its YAML front matter, including both delimiters and all settings.

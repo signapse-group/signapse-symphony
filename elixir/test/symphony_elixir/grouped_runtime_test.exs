@@ -65,6 +65,61 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
     if systemd_user?(), do: run_checkout_resume_probe(root)
   end
 
+  @tag :tmp_dir
+  @tag timeout: 120_000
+  test "a resumed task uses the latest read-only instructions while retaining its task cwd", %{tmp_dir: root} do
+    if systemd_user?(), do: run_upstream_resume_probe(root)
+  end
+
+  defp run_upstream_resume_probe(root) do
+    put_test_config(:jira_client_module, JiraFixture)
+    repo = Path.join(root, "published-checkout-source")
+    provision_checkout_repo(repo)
+    {_, 0} = System.cmd("git", ["-C", repo, "branch", "-M", "main"])
+
+    be =
+      profile(root, "be", write_probe_script(root, "fake-codex-upstream"), 1, repo)
+      |> Map.put(:checkout_upstream, %{repository: "file://#{repo}", branch: "main"})
+
+    start_supervised!({Profile, {[be], Path.join(root, "owners.sqlite3")}})
+    assert eventually(fn -> snapshot("be").readiness.ready end)
+    resume("be")
+
+    assert eventually(fn ->
+             match?(%{runtime_control: %{mode: :paused, source: "checkout_instructions"}, running: []}, snapshot("be"))
+           end)
+
+    assert %{retrying: [%{workspace_path: workspace} | _]} = snapshot("be")
+    assert {:ok, original_head} = Instructions.checkout_head(workspace)
+    {_, 0} = System.cmd("git", ["-C", workspace, "switch", "-c", "codex/preserved"])
+    local_agents = Path.join(workspace, "AGENTS.md")
+    File.write!(local_agents, "# Stale uncommitted task instructions")
+    File.write!(Path.join(workspace, "local-output"), "retain me")
+    File.write!(Path.join(repo, "AGENTS.md"), "# Current AGENTS")
+    File.write!(Path.join(repo, "WORKFLOW.md"), "UPSTREAM-ONLY {{ issue.identifier }} from [local AGENTS](AGENTS.md).")
+    git = ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
+    {_, 0} = System.cmd("git", git ++ ["add", "."])
+    {_, 0} = System.cmd("git", git ++ ["commit", "--quiet", "-m", "Publish current instructions"])
+
+    resume("be")
+
+    assert eventually(fn ->
+             case File.read(trace_path(root, "be")) do
+               {:ok, trace} -> trace =~ "UPSTREAM-ONLY SIGN-10011"
+               _ -> false
+             end
+           end),
+           inspect(snapshot("be"))
+
+    trace = File.read!(trace_path(root, "be"))
+    assert trace =~ "THREAD-CWD:#{workspace}"
+    assert trace =~ "UPSTREAM-THREAD:readonly"
+    assert {:ok, ^original_head} = Instructions.checkout_head(workspace)
+    assert {"codex/preserved\n", 0} == System.cmd("git", ["-C", workspace, "branch", "--show-current"])
+    assert File.read!(local_agents) == "# Stale uncommitted task instructions"
+    assert File.read!(Path.join(workspace, "local-output")) == "retain me"
+  end
+
   defp run_checkout_resume_probe(root) do
     put_test_config(:jira_client_module, JiraFixture)
     repo = Path.join(root, "checkout-source")
@@ -346,7 +401,12 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
       after_create: git clone --quiet "$PROBE_CHECKOUT_REPO" .
       before_run: |
         test "$SYMPHONY_INSTRUCTIONS_SOURCE" = checkout &&
-        test -z "${SYMPHONY_INSTRUCTIONS_ROOT+x}${SYMPHONY_INSTRUCTIONS_REVISION+x}${JIRA_API_TOKEN+x}" &&
+        test -z "${JIRA_API_TOKEN+x}" &&
+        if test -n "${SYMPHONY_INSTRUCTIONS_ROOT:-}"; then
+          test -r "$SYMPHONY_INSTRUCTIONS_ROOT/AGENTS.md" && test -n "$SYMPHONY_INSTRUCTIONS_REVISION"
+        else
+          test -z "${SYMPHONY_INSTRUCTIONS_REVISION+x}"
+        fi &&
         printf '%s\n' "$SYMPHONY_INSTRUCTIONS_SOURCE" > hook-source
     """
   end
@@ -416,6 +476,13 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
                 assert Path("hook-source").read_text().strip() == "checkout"
                 with open(os.environ["PROBE_TRACE"], "a") as trace:
                     trace.write(f"THREAD-CWD:{cwd}\\n")
+                    if "developerInstructions" in msg["params"]:
+                        assert msg["params"]["config"]["project_doc_max_bytes"] == 0
+                        policy = msg["params"]["developerInstructions"]
+                        source = Path(policy.splitlines()[0].split(" (", 1)[0].removeprefix("Use the pinned repository instructions at "))
+                        assert os.statvfs(source).f_flag & os.ST_RDONLY
+                        assert (source / "AGENTS.md").read_text() == "# Current AGENTS"
+                        trace.write("UPSTREAM-THREAD:readonly\\n")
             result = {"thread": {"id": f"thread-{os.getpid()}"}}
         elif method == "turn/start":
             prompt = msg["params"]["input"][0]["text"]
