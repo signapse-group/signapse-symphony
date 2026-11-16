@@ -90,16 +90,11 @@ defmodule SymphonyElixir.AgentRunner do
     snapshot = workspace_snapshot(opts)
     Logger.info("Starting worker attempt for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)}")
 
-    case create_workspace(issue, worker_host, snapshot) do
-      {:ok, workspace} ->
-        with :ok <- record_workspace(opts, codex_update_recipient, issue, worker_host, workspace) do
-          Instructions.with_checkout_upstream(snapshot, worker_host, fn source ->
-            run_in_workspace(workspace, issue, codex_update_recipient, opts, worker_host, snapshot, source)
-          end)
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, workspace} <- create_workspace(issue, worker_host, snapshot),
+         :ok <- record_workspace(opts, codex_update_recipient, issue, worker_host, workspace) do
+      Instructions.with_checkout_upstream(snapshot, worker_host, fn source ->
+        run_in_workspace(workspace, issue, codex_update_recipient, opts, worker_host, snapshot, source)
+      end)
     end
   end
 

@@ -21,7 +21,16 @@ defmodule SymphonyElixir.Profile do
 
   @derive {Inspect, except: [:env]}
   @enforce_keys [:id]
-  defstruct [:id, :workflow_path, :instructions_root, :checkout_workflow, :checkout_upstream, :control_path, :error, env: %{}]
+  defstruct [
+    :id,
+    :workflow_path,
+    :instructions_root,
+    :checkout_workflow,
+    :checkout_upstream,
+    :control_path,
+    :error,
+    env: %{}
+  ]
 
   @type t :: %__MODULE__{
           id: String.t(),
