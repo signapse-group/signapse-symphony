@@ -21,13 +21,23 @@ defmodule SymphonyElixir.Profile do
 
   @derive {Inspect, except: [:env]}
   @enforce_keys [:id]
-  defstruct [:id, :workflow_path, :instructions_root, :checkout_workflow, :control_path, :error, env: %{}]
+  defstruct [
+    :id,
+    :workflow_path,
+    :instructions_root,
+    :checkout_workflow,
+    :checkout_upstream,
+    :control_path,
+    :error,
+    env: %{}
+  ]
 
   @type t :: %__MODULE__{
           id: String.t(),
           workflow_path: Path.t() | nil,
           instructions_root: Path.t() | nil,
           checkout_workflow: Path.t() | nil,
+          checkout_upstream: %{repository: String.t(), branch: String.t()} | nil,
           control_path: Path.t() | nil,
           error: term(),
           env: %{String.t() => String.t()}
@@ -281,9 +291,10 @@ defmodule SymphonyElixir.Profile do
     with %{"workflow" => workflow, "env" => env} <- entry,
          true <- valid_path?(workflow),
          {:ok, checkout_workflow} <- checkout_workflow(entry),
+         {:ok, checkout_upstream} <- checkout_upstream(entry, checkout_workflow),
          {:ok, instructions_root} <- instructions_root(entry["instructions_root"], checkout_workflow, directory),
          {:ok, env} <- resolve_env(env, host_env) do
-      %{profile | workflow_path: Path.expand(workflow, directory), instructions_root: instructions_root, checkout_workflow: checkout_workflow, env: env}
+      %{profile | workflow_path: Path.expand(workflow, directory), instructions_root: instructions_root, checkout_workflow: checkout_workflow, checkout_upstream: checkout_upstream, env: env}
     else
       {:error, reason} when is_atom(reason) -> %{profile | error: reason}
       _ -> %{profile | error: :invalid_profile_entry}
@@ -295,6 +306,16 @@ defmodule SymphonyElixir.Profile do
   end
 
   defp checkout_workflow(_entry), do: {:ok, nil}
+
+  defp checkout_upstream(%{"checkout_upstream" => %{"repository" => repository, "branch" => branch}}, workflow)
+       when is_binary(workflow) and is_binary(repository) and is_binary(branch) do
+    if Regex.match?(~r{\Ahttps://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z}, repository) and branch in ["main", "dev"],
+      do: {:ok, %{repository: repository, branch: branch}},
+      else: {:error, :invalid_checkout_upstream}
+  end
+
+  defp checkout_upstream(%{"checkout_upstream" => _}, _workflow), do: {:error, :invalid_checkout_upstream}
+  defp checkout_upstream(_entry, _workflow), do: {:ok, nil}
 
   defp instructions_root(nil, checkout_workflow, _directory) when is_binary(checkout_workflow), do: {:ok, nil}
 

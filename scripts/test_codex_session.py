@@ -59,6 +59,27 @@ class StopDiagnosticsTests(unittest.TestCase):
         self.props = {"Description": self.unit, "ControlGroup": "/app.slice/" + self.unit,
                       "InvocationID": self.invocation, "LoadState": "loaded", "ActiveState": "failed"}
 
+    def test_dynamic_pin_mount_wraps_the_guard_inside_the_unit(self):
+        with tempfile.TemporaryDirectory() as root:
+            for already_readonly in (False, True):
+                with mock.patch.object(self.module, "readonly_instructions", return_value=already_readonly), \
+                        mock.patch.object(self.module, "properties", return_value=self.props), \
+                        mock.patch.object(self.module.os, "execvp") as execvp:
+                    self.module.launch(ENCODED, self.unit, "true", root, "-c", root, "hook", "bwrap")
+                program, argv = execvp.call_args.args
+                self.assertEqual(program, "systemd-run")
+                self.assertIn("--property=KillMode=control-group", argv)
+                if already_readonly:
+                    self.assertNotIn("/usr/bin/bwrap", argv)
+                else:
+                    mount = argv.index("/usr/bin/bwrap")
+                    self.assertEqual(argv[mount:mount + 9],
+                                     ["/usr/bin/bwrap", "--unshare-user", "--dev-bind", "/", "/",
+                                      "--ro-bind", root, root, "--"])
+                    self.assertEqual(argv[mount + 9], sys.executable)
+                self.assertIn("guard", argv)
+                self.assertNotIn("--property=BindReadOnlyPaths=" + root, argv)
+
     def timeout_stop(self, kill=None):
         clock = SimpleNamespace(monotonic=mock.Mock(side_effect=[0, 0, 5]), sleep=mock.Mock())
         with mock.patch.object(self.module, "properties", return_value=self.props), \

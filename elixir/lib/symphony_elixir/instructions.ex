@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Instructions do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{InstructionReferences, PathSafety, Profile, PromptBuilder, Workflow, WorkflowStore}
+  alias SymphonyElixir.Jira.Client
   alias SymphonyElixir.Tracker.Issue
 
   @manifest "instructions.json"
@@ -33,8 +34,96 @@ defmodule SymphonyElixir.Instructions do
         }
 
   @type checkout_template :: %{template: String.t(), workflow_path: Path.t(), workflow_digest: String.t()}
-  @type checkout_prompt :: %{prompt: String.t(), workflow_path: Path.t(), workflow_digest: String.t()}
+  @type checkout_prompt :: %{
+          required(:prompt) => String.t(),
+          required(:workflow_path) => Path.t(),
+          required(:workflow_digest) => String.t(),
+          optional(:source) => upstream()
+        }
   @type checkout_failure :: {:checkout_instructions, atom(), Path.t()}
+  @type upstream :: %{root: Path.t(), revision: String.t()}
+
+  @doc false
+  @spec with_checkout_upstream(map() | nil, String.t() | nil, (upstream() | nil -> term())) :: term()
+  def with_checkout_upstream(%{checkout_upstream: upstream, checkout_workflow: path} = snapshot, worker_host, run) when is_map(upstream) do
+    parent = Path.join(System.tmp_dir!(), "symphony-checkout-#{unique_suffix()}")
+
+    with true <- is_nil(worker_host),
+         :ok <- File.mkdir(parent) do
+      try do
+        result = start_upstream(parent, upstream, path, snapshot, run)
+        File.rm_rf(parent)
+        result
+      catch
+        :exit, {:session_stop_unconfirmed, _reason} = error ->
+          exit(error)
+
+        kind, reason ->
+          File.rm_rf(parent)
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      end
+    else
+      _ -> checkout_failure(:checkout_upstream_unavailable, path)
+    end
+  end
+
+  def with_checkout_upstream(_snapshot, _worker_host, run), do: run.(nil)
+
+  defp start_upstream(parent, upstream, path, snapshot, run) do
+    root = Path.join(parent, "source")
+
+    with :ok <- File.chmod(parent, 0o700),
+         :ok <- clone_upstream(root, upstream, path, snapshot),
+         {:ok, revision} <- checkout_head(root),
+         {:ok, branch} <- git(root, ["symbolic-ref", "--short", "HEAD"]),
+         true <- String.trim(branch) == upstream.branch do
+      run.(%{root: root, revision: revision})
+    else
+      _ -> checkout_failure(:checkout_upstream_unavailable, path)
+    end
+  end
+
+  defp clone_upstream(root, %{repository: repository, branch: branch}, path, snapshot) do
+    auth = credential_args(snapshot.env)
+    env = Profile.subprocess_env(snapshot, Client.secret_environment_names(snapshot.settings.tracker))
+    env = Enum.into([{"GIT_TERMINAL_PROMPT", "0"}, {"GIT_CONFIG_NOSYSTEM", "1"}, {"GIT_CONFIG_GLOBAL", "/dev/null"}], Map.new(env)) |> Map.to_list()
+    args = ["--kill-after=5s", "90s", "git", "-c", "core.hooksPath=/dev/null", "-c", "http.followRedirects=false"] ++ auth
+    clone = ["clone", "--quiet", "--depth=1", "--filter=blob:none", "--no-checkout", "--no-tags", "--branch", branch, "--", repository, root]
+
+    sparse = [
+      "-C",
+      root,
+      "sparse-checkout",
+      "set",
+      "--no-cone",
+      "*.md",
+      "*.mjs",
+      "*.exs",
+      "/.agents/skills/",
+      "/scripts/",
+      "/docs/examples/",
+      "/.env.example",
+      "/" <> path
+    ]
+
+    with :ok <- run_git_upstream(args ++ clone, env),
+         :ok <- run_git_upstream(args ++ sparse, env) do
+      run_git_upstream(args ++ ["-C", root, "checkout", "--force"], env)
+    end
+  end
+
+  defp run_git_upstream(args, env) do
+    case System.cmd("timeout", args, env: env, stderr_to_stdout: true) do
+      {_output, 0} -> :ok
+      {_output, _status} -> {:error, :checkout_upstream_unavailable}
+    end
+  rescue
+    _error in [ArgumentError, ErlangError] -> {:error, :checkout_upstream_unavailable}
+  end
+
+  defp credential_args(%{"SYMPHONY_GIT_CREDENTIAL_HELPER" => helper}) when byte_size(helper) > 0, do: ["-c", "credential.helper=#{helper}"]
+  defp credential_args(%{"GITHUB_TOKEN" => token}) when byte_size(token) > 0, do: ["-c", "credential.helper=!gh auth git-credential"]
+  defp credential_args(_env), do: []
 
   @spec checkout_template(Path.t(), Path.t()) :: {:ok, checkout_template()} | {:error, atom()}
   def checkout_template(workspace, workflow_path) do
@@ -62,9 +151,9 @@ defmodule SymphonyElixir.Instructions do
   end
 
   @doc false
-  @spec prepare_checkout(Path.t(), Path.t(), Issue.t(), Schema.t(), non_neg_integer() | nil) ::
+  @spec prepare_checkout(Path.t(), Path.t(), Issue.t(), Schema.t(), non_neg_integer() | nil, upstream() | nil) ::
           {:ok, checkout_prompt()} | {:error, checkout_failure()}
-  def prepare_checkout(workspace, workflow_path, issue, settings, attempt) do
+  def prepare_checkout(workspace, workflow_path, issue, settings, attempt, source \\ nil) do
     profile_id = settings.runtime_control.id
 
     with {:ok, %{template: template, workflow_digest: digest}} <- checkout_template(workspace, workflow_path),
@@ -72,12 +161,22 @@ defmodule SymphonyElixir.Instructions do
          {:ok, _agents} <- checkout_file(workspace, "AGENTS.md", :checkout_agents_missing, :checkout_agents_invalid),
          :ok <- checkout_skills(workspace),
          :ok <- checkout_phase_requirements(workspace, workflow_path, template, prompt, issue, settings) do
-      opening = "Read AGENTS.md in the working directory. Resolve links in the workflow below relative to #{workflow_path} in this checkout.\n\n"
-      {:ok, %{prompt: opening <> prompt, workflow_path: workflow_path, workflow_digest: digest}}
+      checkout = %{prompt: prompt, workflow_path: workflow_path, workflow_digest: digest}
+      {:ok, checkout_guidance(checkout, source)}
     else
       {:error, {:checkout_instructions, _code, _path}} = error -> error
       {:error, code} -> checkout_failure(code, workflow_path)
     end
+  end
+
+  defp checkout_guidance(checkout, nil) do
+    opening = "Read AGENTS.md in the working directory. Resolve links in the workflow below relative to #{checkout.workflow_path} in this checkout.\n\n"
+    %{checkout | prompt: opening <> checkout.prompt}
+  end
+
+  defp checkout_guidance(checkout, %{root: root, revision: revision} = source) do
+    opening = "Use instructions revision #{revision}. Read #{Path.join(root, "AGENTS.md")} before working. Resolve instruction links from #{Path.join(root, checkout.workflow_path)}.\n\n"
+    checkout |> Map.put(:prompt, opening <> checkout.prompt) |> Map.put(:source, source)
   end
 
   @doc false

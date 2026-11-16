@@ -90,42 +90,49 @@ defmodule SymphonyElixir.AgentRunner do
     snapshot = workspace_snapshot(opts)
     Logger.info("Starting worker attempt for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)}")
 
-    case create_workspace(issue, worker_host, snapshot) do
-      {:ok, workspace} ->
-        result =
-          try do
-            with :ok <- record_workspace(opts, codex_update_recipient, issue, worker_host, workspace),
-                 :ok <- run_workspace_hook(:run_before_run_hook, workspace, issue, worker_host, snapshot),
-                 {:ok, opts} <- prepare_checkout(workspace, issue, codex_update_recipient, opts) do
-              run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
-            end
-          catch
-            :exit, {:session_not_started, _} = reason ->
-              exit(reason)
-
-            :exit, {:session_stop_unconfirmed, _} = reason ->
-              exit(reason)
-
-            kind, reason ->
-              finish_after_run_hook(workspace, issue, worker_host, opts)
-              :erlang.raise(kind, reason, __STACKTRACE__)
-          end
-
-        finish_after_run_hook(workspace, issue, worker_host, opts)
-        result
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, workspace} <- create_workspace(issue, worker_host, snapshot),
+         :ok <- record_workspace(opts, codex_update_recipient, issue, worker_host, workspace) do
+      Instructions.with_checkout_upstream(snapshot, worker_host, fn source ->
+        run_in_workspace(workspace, issue, codex_update_recipient, opts, worker_host, snapshot, source)
+      end)
     end
   end
 
-  defp prepare_checkout(workspace, issue, recipient, opts),
-    do: prepare_checkout(workspace, issue, recipient, opts, opts[:profile_snapshot])
+  defp run_in_workspace(workspace, issue, recipient, opts, host, snapshot, source) do
+    hook_snapshot = if source, do: %{snapshot | instructions: source}, else: snapshot
 
-  defp prepare_checkout(workspace, issue, recipient, opts, %{checkout_workflow: path, settings: settings}) when is_binary(path) do
-    with {:ok, prompt} <- Instructions.prepare_checkout(workspace, path, issue, settings, opts[:attempt]),
+    result =
+      try do
+        with :ok <- run_workspace_hook(:run_before_run_hook, workspace, issue, host, hook_snapshot),
+             {:ok, opts} <- prepare_checkout(workspace, issue, recipient, opts, opts[:profile_snapshot], source) do
+          run_codex_turns(workspace, issue, recipient, opts, host)
+        end
+      catch
+        :exit, {:session_not_started, _} = reason ->
+          exit(reason)
+
+        :exit, {:session_stop_unconfirmed, _} = reason ->
+          exit(reason)
+
+        kind, reason ->
+          finish_after_run_hook(workspace, issue, host, opts)
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      end
+
+    finish_after_run_hook(workspace, issue, host, opts)
+    result
+  end
+
+  defp prepare_checkout(workspace, issue, recipient, opts, %{checkout_workflow: path, settings: settings}, source) when is_binary(path) do
+    root = if source, do: source.root, else: workspace
+
+    with {:ok, prompt} <- Instructions.prepare_checkout(root, path, issue, settings, opts[:attempt], source),
          {:ok, head} <- Instructions.checkout_head(workspace) do
-      Logger.info("Checkout instructions loaded #{issue_context(issue)} workflow=#{inspect(path)} checkout_head=#{head} checkout_prompt_digest=#{prompt.workflow_digest}")
+      source_head = if source, do: source.revision, else: head
+
+      Logger.info(
+        "Checkout instructions loaded #{issue_context(issue)} workflow=#{inspect(path)} checkout_head=#{head} checkout_prompt_digest=#{prompt.workflow_digest} instructions_head=#{source_head}"
+      )
 
       if is_pid(recipient) do
         info = %{worker_pid: self(), checkout_head: head, checkout_prompt_digest: prompt.workflow_digest}
@@ -139,7 +146,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp prepare_checkout(_workspace, _issue, _recipient, opts, _snapshot), do: {:ok, opts}
+  defp prepare_checkout(_workspace, _issue, _recipient, opts, _snapshot, _source), do: {:ok, opts}
 
   defp record_workspace(opts, recipient, issue, host, workspace) do
     if opts[:on_workspace], do: :ok, else: send_worker_runtime_info(recipient, issue, host, workspace)

@@ -13,12 +13,34 @@ Profiles with this key use the checkout instructions. The existing
 `instructions_root` identifies the staged package for a profile without
 `checkout_workflow`.
 
+For a checkout profile that must apply the current published instructions
+after a native resume or worker retry, set `checkout_upstream` in the
+operator-owned manifest. It takes a GitHub HTTPS `repository` URL without
+credentials and a `branch` of `main` or `dev`. Every newly launched worker
+attempt selects the branch tip in an isolated shallow, sparse checkout. It
+materializes Markdown, repository skills, and supporting scripts from one
+commit. The pinned source is read-only inside the Codex session. Codex
+reads its instructions and skills there while retaining the original
+issue workspace as the working directory for Git, application work,
+tests and outputs. An already running session keeps its existing pin.
+
+The clone uses the profile's existing `SYMPHONY_GIT_CREDENTIAL_HELPER`, or
+`gh auth git-credential` when that profile has a `GITHUB_TOKEN`. Git,
+GNU `timeout` and `/usr/bin/bwrap` must be present on the local grouped
+host. Bubblewrap mounts the pin read-only inside the contained systemd
+unit without changing which cgroup owns Codex or the workspace hook. An unavailable
+upstream, inaccessible source or invalid instructions stops that worker
+before Codex and records a checkout diagnostic. Restore access or repair
+the published source before resuming the profile. The task branch,
+working files and evidence stay in place.
+
 The operator-owned deployment workflow supplies YAML settings and hooks.
 Keep its YAML front matter and delimiters. The consumer workflow contains
 only the Markdown/Liquid prompt. After workspace preparation, Symphony
 validates and renders that prompt and checks the checkout's `AGENTS.md`,
 `.agents/skills`, and required instruction files before starting Codex in
-the same workspace.
+the same workspace. A configured upstream supplies these files from its
+separate pinned checkout.
 
 An invalid checkout pauses only the affected profile. Any active turn can
 finish, and new turns and assignments wait for Resume. The pause and the
@@ -29,7 +51,9 @@ workspace failures retain their existing handling.
 The grouped observability API reports `instructions_source` as `checkout`
 or `package`. In checkout mode, the deployment workflow revision describes
 runtime configuration. Once a task has loaded its prompt, its running record
-reports the checkout HEAD and the SHA-256 of the source workflow bytes.
+reports the task checkout HEAD and the SHA-256 of the source workflow
+bytes. The load event also records `instructions_head`, the commit from
+which those bytes and other instructions were selected.
 See the [rollout runbook](../../docs/symphony-grouped-rollout.md) for
 preflight, deployment and recovery.
 

@@ -141,7 +141,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
       with {:ok, session_policies} <- session_policies(expanded_workspace, worker_host, settings),
            {:ok, thread_id} <-
-             do_start_session(port, expanded_workspace, session_policies, dynamic_tool_binding, settings.codex.read_timeout_ms) do
+             do_start_session(port, expanded_workspace, session_policies, dynamic_tool_binding, settings.codex.read_timeout_ms, checkout_thread_options(opts[:checkout_prompt])) do
         {:ok,
          %{
            port: port,
@@ -176,6 +176,17 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   defp validate_instructions_source(nil, _pin, _checkout), do: :ok
 
+  defp validate_instructions_source(%{checkout_workflow: path, checkout_upstream: upstream}, nil, checkout) when is_map(upstream) do
+    case checkout do
+      %{workflow_path: ^path, prompt: prompt, source: %{root: root, revision: revision}}
+      when is_binary(prompt) and is_binary(root) and is_binary(revision) ->
+        :ok
+
+      _ ->
+        {:error, :missing_checkout_prompt}
+    end
+  end
+
   defp validate_instructions_source(%{checkout_workflow: path}, pin, checkout) when is_binary(path) do
     case {pin, checkout} do
       {nil, %{workflow_path: ^path, prompt: prompt}} when is_binary(prompt) -> :ok
@@ -185,6 +196,20 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   defp validate_instructions_source(%{profile_id: id}, %{profile_id: id, root: root}, nil) when is_binary(root), do: :ok
   defp validate_instructions_source(_snapshot, _pin, _checkout), do: {:error, :missing_profile_instructions_pin}
+
+  defp checkout_thread_options(%{source: %{root: root, revision: revision}}) do
+    %{
+      "config" => %{"project_doc_max_bytes" => 0},
+      "developerInstructions" => """
+      Use the pinned repository instructions at #{root} (#{revision}). Read AGENTS.md there before taking action.
+      Treat instructions, local Markdown links to instructions, and repository skills as relative to that source. Read a skill's current file from that source before using it.
+      References in the workflow to local or checkout instructions mean this pinned source. Use its instruction-owned validators, helpers and templates by absolute path.
+      Keep the issue workspace as the working directory for Git, application work, product tests, inputs and outputs.
+      """
+    }
+  end
+
+  defp checkout_thread_options(_checkout), do: %{}
 
   @spec read_rate_limits() :: {:ok, map()} | {:error, term()}
   def read_rate_limits, do: read_rate_limits(nil)
@@ -544,7 +569,14 @@ defmodule SymphonyElixir.Codex.AppServer do
       kind, reason -> exit({:session_not_started, {kind, reason}})
     end
 
-    launch = %{snapshot: snapshot, command: codex.command, instructions_root: get_in(opts, [:instructions, :root])}
+    upstream_root = get_in(opts, [:checkout_prompt, :source, :root])
+
+    launch = %{
+      snapshot: snapshot,
+      command: codex.command,
+      instructions_root: upstream_root || get_in(opts, [:instructions, :root]),
+      upstream_instructions: is_binary(upstream_root)
+    }
 
     with {:ok, port} <- open_port(workspace, worker_host, dynamic_tool_binding, containment || false, launch) do
       heartbeat = if containment, do: SessionProcess.heartbeat(port, Keyword.get(opts, :lifecycle_owner))
@@ -583,14 +615,14 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp open_port(workspace, nil, dynamic_tool_binding, isolated, launch) do
-    %{snapshot: snapshot, command: codex_command, instructions_root: instructions_root} = launch
+    %{snapshot: snapshot, command: codex_command} = launch
     executable = System.find_executable("bash")
 
     if is_nil(executable) do
       {:error, :bash_not_found}
     else
       command = launch_command(dynamic_tool_binding, codex_command)
-      command = isolated_launch_command(command, isolated, workspace, snapshot, instructions_root)
+      command = isolated_launch_command(command, isolated, workspace, launch)
 
       port =
         Port.open(
@@ -610,13 +642,13 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp open_port(workspace, worker_host, dynamic_tool_binding, isolated, %{snapshot: nil, command: codex_command}) when is_binary(worker_host) do
+  defp open_port(workspace, worker_host, dynamic_tool_binding, isolated, %{snapshot: nil, command: codex_command} = launch) when is_binary(worker_host) do
     command = "cd #{shell_escape(workspace)} && #{launch_command(dynamic_tool_binding, codex_command)}"
 
     remote_command =
       [
         tracker_secret_unset_command(dynamic_tool_binding),
-        isolated_launch_command(command, isolated, workspace, nil, nil)
+        isolated_launch_command(command, isolated, workspace, launch)
       ]
       |> Enum.reject(&is_nil/1)
       |> Enum.join(" && ")
@@ -624,10 +656,15 @@ defmodule SymphonyElixir.Codex.AppServer do
     SSH.start_port(worker_host, remote_command, line: @port_line_bytes)
   end
 
-  defp isolated_launch_command(command, false, _workspace, _snapshot, _instructions_root), do: command
+  defp isolated_launch_command(command, false, _workspace, _launch), do: command
 
-  defp isolated_launch_command(command, containment, workspace, snapshot, instructions_root) do
-    opts = [login: is_nil(snapshot), instructions_root: instructions_root]
+  defp isolated_launch_command(command, containment, workspace, launch) do
+    opts = [
+      login: is_nil(launch.snapshot),
+      instructions_root: launch.instructions_root,
+      upstream_instructions: launch[:upstream_instructions]
+    ]
+
     SessionProcess.launch_command(containment, command, workspace, opts)
   end
 
@@ -725,9 +762,9 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp do_start_session(port, workspace, session_policies, dynamic_tool_binding, read_timeout) do
+  defp do_start_session(port, workspace, session_policies, dynamic_tool_binding, read_timeout, thread_options) do
     case send_initialize(port, response_deadline(read_timeout)) do
-      :ok -> start_thread(port, workspace, session_policies, dynamic_tool_binding, read_timeout)
+      :ok -> start_thread(port, workspace, session_policies, dynamic_tool_binding, read_timeout, thread_options)
       {:error, reason} -> {:error, reason}
     end
   end
@@ -737,17 +774,22 @@ defmodule SymphonyElixir.Codex.AppServer do
          workspace,
          %{approval_policy: approval_policy, thread_sandbox: thread_sandbox},
          dynamic_tool_binding,
-         read_timeout
+         read_timeout,
+         thread_options
        ) do
     send_message(port, %{
       "method" => "thread/start",
       "id" => @thread_start_id,
-      "params" => %{
-        "approvalPolicy" => approval_policy,
-        "sandbox" => thread_sandbox,
-        "cwd" => workspace,
-        "dynamicTools" => dynamic_tool_binding.tool_specs
-      }
+      "params" =>
+        Map.merge(
+          %{
+            "approvalPolicy" => approval_policy,
+            "sandbox" => thread_sandbox,
+            "cwd" => workspace,
+            "dynamicTools" => dynamic_tool_binding.tool_specs
+          },
+          thread_options
+        )
     })
 
     case await_response(port, @thread_start_id, response_deadline(read_timeout)) do
