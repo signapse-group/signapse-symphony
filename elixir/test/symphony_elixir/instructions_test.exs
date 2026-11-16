@@ -179,6 +179,46 @@ defmodule SymphonyElixir.InstructionsTest do
 
     assert {:error, {:checkout_instructions, :checkout_upstream_unavailable, "WORKFLOW.md"}} =
              Instructions.with_checkout_upstream(missing, nil, fn _ -> flunk("Started without a fresh instructions source") end)
+
+    assert {:error, {:checkout_instructions, :checkout_upstream_unavailable, "WORKFLOW.md"}} =
+             Instructions.with_checkout_upstream(snapshot, "remote.example.invalid", fn _ -> flunk("Opened a local pin on a remote worker") end)
+
+    for authorization <- [%{"SYMPHONY_GIT_CREDENTIAL_HELPER" => "fixture-helper"}, %{"GITHUB_TOKEN" => "fixture-token"}] do
+      authorized = %{snapshot | env: Map.merge(snapshot.env, authorization)}
+      assert ^updated = Instructions.with_checkout_upstream(authorized, nil, & &1.revision)
+    end
+
+    path = System.fetch_env!("PATH")
+
+    try do
+      System.put_env("PATH", root)
+
+      assert {:error, {:checkout_instructions, :checkout_upstream_unavailable, "WORKFLOW.md"}} =
+               Instructions.with_checkout_upstream(snapshot, nil, fn _ -> flunk("Started without the clone timeout program") end)
+    after
+      System.put_env("PATH", path)
+    end
+
+    assert_raise RuntimeError, "fixture callback failed", fn ->
+      Instructions.with_checkout_upstream(snapshot, nil, fn source ->
+        send(self(), {:failed_source, source.root})
+        raise "fixture callback failed"
+      end)
+    end
+
+    assert_receive {:failed_source, failed_source}
+    refute File.exists?(failed_source)
+
+    assert catch_exit(
+             Instructions.with_checkout_upstream(snapshot, nil, fn source ->
+               send(self(), {:held_source, source.root})
+               exit({:session_stop_unconfirmed, :fixture})
+             end)
+           ) == {:session_stop_unconfirmed, :fixture}
+
+    assert_receive {:held_source, held_source}
+    on_exit(fn -> File.rm_rf!(Path.dirname(held_source)) end)
+    assert File.exists?(Path.join(held_source, "AGENTS.md"))
   end
 
   defp commit_checkout!(repo) do

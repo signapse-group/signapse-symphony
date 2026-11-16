@@ -46,29 +46,24 @@ defmodule SymphonyElixir.Instructions do
   @doc false
   @spec with_checkout_upstream(map() | nil, String.t() | nil, (upstream() | nil -> term())) :: term()
   def with_checkout_upstream(%{checkout_upstream: upstream, checkout_workflow: path} = snapshot, worker_host, run) when is_map(upstream) do
-    if is_nil(worker_host) do
-      parent = Path.join(System.tmp_dir!(), "symphony-checkout-#{unique_suffix()}")
+    parent = Path.join(System.tmp_dir!(), "symphony-checkout-#{unique_suffix()}")
 
-      case File.mkdir(parent) do
-        :ok ->
-          try do
-            result = start_upstream(parent, upstream, path, snapshot, run)
-            File.rm_rf(parent)
-            result
-          catch
-            :exit, {:session_stop_unconfirmed, _reason} = error ->
-              exit(error)
+    with true <- is_nil(worker_host),
+         :ok <- File.mkdir(parent) do
+      try do
+        result = start_upstream(parent, upstream, path, snapshot, run)
+        File.rm_rf(parent)
+        result
+      catch
+        :exit, {:session_stop_unconfirmed, _reason} = error ->
+          exit(error)
 
-            kind, reason ->
-              File.rm_rf(parent)
-              :erlang.raise(kind, reason, __STACKTRACE__)
-          end
-
-        {:error, _reason} ->
-          checkout_failure(:checkout_upstream_unavailable, path)
+        kind, reason ->
+          File.rm_rf(parent)
+          :erlang.raise(kind, reason, __STACKTRACE__)
       end
     else
-      checkout_failure(:checkout_upstream_unavailable, path)
+      _ -> checkout_failure(:checkout_upstream_unavailable, path)
     end
   end
 
@@ -123,7 +118,7 @@ defmodule SymphonyElixir.Instructions do
       {_output, _status} -> {:error, :checkout_upstream_unavailable}
     end
   rescue
-    _error in ArgumentError -> {:error, :checkout_upstream_unavailable}
+    _error in [ArgumentError, ErlangError] -> {:error, :checkout_upstream_unavailable}
   end
 
   defp credential_args(%{"SYMPHONY_GIT_CREDENTIAL_HELPER" => helper}) when byte_size(helper) > 0, do: ["-c", "credential.helper=#{helper}"]
