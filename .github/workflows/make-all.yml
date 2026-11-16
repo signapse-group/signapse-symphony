@@ -41,8 +41,29 @@ jobs:
           sudo mkdir -p /run/sshd
           sudo loginctl enable-linger "$(id -un)"
           sudo systemctl start "user@$(id -u).service"
-          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
-          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+
+          pin=$(mktemp -d)
+          trap 'rmdir "$pin"' EXIT
+          probe_pin() {
+            systemd-run --user --wait --collect --pipe --quiet /usr/bin/bwrap --unshare-user --dev-bind / / \
+              --ro-bind "$pin" "$pin" -- /usr/bin/python3 -c 'import os,sys; assert os.statvfs(sys.argv[1]).f_flag & os.ST_RDONLY' "$pin"
+          }
+          if ! result=$(probe_pin 2>&1); then
+            printf '%s\n' "$result"
+            if [[ "$result" != *"No permissions to create"* && "$result" != *"Operation not permitted"* && "$result" != *"Permission denied"* ]]; then
+              exit 1
+            fi
+            # Hosted runners can install bwrap without enabling its user namespace profile.
+            if ! { test -r /etc/apparmor.d/bwrap && sudo apparmor_parser -r /etc/apparmor.d/bwrap && probe_pin; }; then
+              test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 1
+              sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+              probe_pin
+            fi
+          fi
 
       - name: Verify make all including real SSH phase handoffs
         env:
