@@ -17,7 +17,8 @@ defmodule SymphonyElixir.Codex.SessionProcess do
   def launch_command(identity, command, workspace, opts \\ []) do
     shell_arg = if Keyword.get(opts, :login, true), do: "-lc", else: "-c"
     mode = Keyword.get(opts, :mode, "session")
-    command("launch", identity, [command, workspace, shell_arg, opts[:instructions_root] || "", mode])
+    mount = if opts[:upstream_instructions], do: "bwrap", else: "systemd"
+    command("launch", identity, [command, workspace, shell_arg, opts[:instructions_root] || "", mode, mount])
   end
 
   @doc false
@@ -27,7 +28,14 @@ defmodule SymphonyElixir.Codex.SessionProcess do
     identity = new()
     on_started = snapshot.hook_started
     on_stopped = snapshot.hook_stopped
-    launch_opts = [login: false, mode: "hook", instructions_root: get_in(Map.get(snapshot, :instructions), [:root])]
+
+    launch_opts = [
+      login: false,
+      mode: "hook",
+      instructions_root: get_in(Map.get(snapshot, :instructions), [:root]),
+      upstream_instructions: is_map(Map.get(snapshot, :checkout_upstream))
+    ]
+
     launch = launch_command(identity, command, workspace, launch_opts)
     session = %{containment: identity, worker_host: nil, profile_snapshot: snapshot, heartbeat: nil, recovered: true}
 

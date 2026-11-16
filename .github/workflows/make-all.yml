@@ -37,7 +37,7 @@ jobs:
       - name: Prepare real systemd and SSH session tests
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y openssh-server
+          sudo apt-get install -y openssh-server bubblewrap
           sudo mkdir -p /run/sshd
           sudo loginctl enable-linger "$(id -un)"
           sudo systemctl start "user@$(id -u).service"

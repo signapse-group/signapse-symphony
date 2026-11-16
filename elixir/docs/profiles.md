@@ -25,8 +25,10 @@ issue workspace as the working directory for Git, application work,
 tests and outputs. An already running session keeps its existing pin.
 
 The clone uses the profile's existing `SYMPHONY_GIT_CREDENTIAL_HELPER`, or
-`gh auth git-credential` when that profile has a `GITHUB_TOKEN`. Git and
-GNU `timeout` must be present on the local grouped host. An unavailable
+`gh auth git-credential` when that profile has a `GITHUB_TOKEN`. Git,
+GNU `timeout` and `/usr/bin/bwrap` must be present on the local grouped
+host. Bubblewrap mounts the pin read-only inside the contained systemd
+unit without changing which cgroup owns Codex or the workspace hook. An unavailable
 upstream, inaccessible source or invalid instructions stops that worker
 before Codex and records a checkout diagnostic. Restore access or repair
 the published source before resuming the profile. The task branch,

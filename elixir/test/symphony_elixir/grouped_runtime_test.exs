@@ -87,7 +87,8 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
 
     assert eventually(fn ->
              match?(%{runtime_control: %{mode: :paused, source: "checkout_instructions"}, running: []}, snapshot("be"))
-           end)
+           end),
+           inspect(snapshot("be"))
 
     assert %{retrying: [%{workspace_path: workspace} | _]} = snapshot("be")
     assert {:ok, original_head} = Instructions.checkout_head(workspace)

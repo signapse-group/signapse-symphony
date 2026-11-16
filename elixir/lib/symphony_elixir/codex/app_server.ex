@@ -569,8 +569,14 @@ defmodule SymphonyElixir.Codex.AppServer do
       kind, reason -> exit({:session_not_started, {kind, reason}})
     end
 
-    instructions_root = get_in(opts, [:checkout_prompt, :source, :root]) || get_in(opts, [:instructions, :root])
-    launch = %{snapshot: snapshot, command: codex.command, instructions_root: instructions_root}
+    upstream_root = get_in(opts, [:checkout_prompt, :source, :root])
+
+    launch = %{
+      snapshot: snapshot,
+      command: codex.command,
+      instructions_root: upstream_root || get_in(opts, [:instructions, :root]),
+      upstream_instructions: is_binary(upstream_root)
+    }
 
     with {:ok, port} <- open_port(workspace, worker_host, dynamic_tool_binding, containment || false, launch) do
       heartbeat = if containment, do: SessionProcess.heartbeat(port, Keyword.get(opts, :lifecycle_owner))
@@ -609,14 +615,14 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp open_port(workspace, nil, dynamic_tool_binding, isolated, launch) do
-    %{snapshot: snapshot, command: codex_command, instructions_root: instructions_root} = launch
+    %{snapshot: snapshot, command: codex_command} = launch
     executable = System.find_executable("bash")
 
     if is_nil(executable) do
       {:error, :bash_not_found}
     else
       command = launch_command(dynamic_tool_binding, codex_command)
-      command = isolated_launch_command(command, isolated, workspace, snapshot, instructions_root)
+      command = isolated_launch_command(command, isolated, workspace, launch)
 
       port =
         Port.open(
@@ -636,13 +642,13 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp open_port(workspace, worker_host, dynamic_tool_binding, isolated, %{snapshot: nil, command: codex_command}) when is_binary(worker_host) do
+  defp open_port(workspace, worker_host, dynamic_tool_binding, isolated, %{snapshot: nil, command: codex_command} = launch) when is_binary(worker_host) do
     command = "cd #{shell_escape(workspace)} && #{launch_command(dynamic_tool_binding, codex_command)}"
 
     remote_command =
       [
         tracker_secret_unset_command(dynamic_tool_binding),
-        isolated_launch_command(command, isolated, workspace, nil, nil)
+        isolated_launch_command(command, isolated, workspace, launch)
       ]
       |> Enum.reject(&is_nil/1)
       |> Enum.join(" && ")
@@ -650,10 +656,15 @@ defmodule SymphonyElixir.Codex.AppServer do
     SSH.start_port(worker_host, remote_command, line: @port_line_bytes)
   end
 
-  defp isolated_launch_command(command, false, _workspace, _snapshot, _instructions_root), do: command
+  defp isolated_launch_command(command, false, _workspace, _launch), do: command
 
-  defp isolated_launch_command(command, containment, workspace, snapshot, instructions_root) do
-    opts = [login: is_nil(snapshot), instructions_root: instructions_root]
+  defp isolated_launch_command(command, containment, workspace, launch) do
+    opts = [
+      login: is_nil(launch.snapshot),
+      instructions_root: launch.instructions_root,
+      upstream_instructions: launch[:upstream_instructions]
+    ]
+
     SessionProcess.launch_command(containment, command, workspace, opts)
   end
 

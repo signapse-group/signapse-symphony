@@ -190,20 +190,25 @@ def stop(unit, invocation, prestart=False):
     return stop_failure(unit, "cgroup_populated_timeout", props, kill)
 
 
-def launch(source, unit, command, workspace, shell_arg, instructions_root, mode="session"):
+def launch(source, unit, command, workspace, shell_arg, instructions_root, mode="session", mount="systemd"):
     names = sorted(name for name in os.environ if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
                    and name not in {"INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM", "NOTIFY_SOCKET"})
     args = ["systemd-run", "--user", "--quiet", "--pipe", "--wait", "--collect",
             "--expand-environment=no", "--service-type=exec", "--unit=" + unit,
             "--description=" + unit, "--property=KillMode=control-group",
             "--property=TimeoutStopSec=1s", "--property=SendSIGKILL=yes"]
+    sandbox = []
     if instructions_root:
         if (not instructions_root.startswith("/") or
                 any(c.isspace() or c in ':%\\\"\'' for c in instructions_root) or
                 not Path(instructions_root).is_dir()):
             return 3
         if not readonly_instructions(instructions_root):
-            args += ["--property=BindReadOnlyPaths=" + instructions_root]
+            if mount == "bwrap":
+                sandbox = ["/usr/bin/bwrap", "--unshare-user", "--dev-bind", "/", "/",
+                           "--ro-bind", instructions_root, instructions_root, "--"]
+            else:
+                args += ["--property=BindReadOnlyPaths=" + instructions_root]
     group = Path("/proc/self/cgroup").read_text().strip().removeprefix("0::")
     owner = group.rsplit("/", 1)[-1]
     if owner.endswith(".service") and not owner.startswith("user@"):
@@ -212,7 +217,7 @@ def launch(source, unit, command, workspace, shell_arg, instructions_root, mode=
             args += ["--property=BindsTo=" + owner, "--property=After=" + owner]
     # Copy the filtered caller environment by name so secret values never enter argv.
     args += ["--setenv=" + name for name in names]
-    args += [sys.executable, "-u", "-c", "import base64,sys;exec(base64.b64decode(sys.argv[1]))",
+    args += sandbox + [sys.executable, "-u", "-c", "import base64,sys;exec(base64.b64decode(sys.argv[1]))",
              source, "guard", unit, command, workspace, shell_arg, json.dumps(names), mode, instructions_root]
     os.execvp(args[0], args)
 

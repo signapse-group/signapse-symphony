@@ -32,7 +32,9 @@ uses `signapse-group/signapse-landing`, and Planning uses
 `signapse-group/signapse-planing`. The table gives each branch. Deploy the
 matching QA hook before enabling this setting so the hook validates the
 pinned instructions with their own checker and continues to set up
-artifacts in the original task workspace.
+artifacts in the original task workspace. Check that `/usr/bin/bwrap` can
+create a read-only bind inside a throwaway user systemd unit. The worker
+guard checks that mount before starting any tool or model session.
 
 Rehearse with an isolated worktree on an older topic branch and a fake
 tracker. Publish new instructions to its fixture upstream, then launch
