@@ -6,9 +6,29 @@ if [ "$(dirname "$workspace")" != "$root" ]; then
     echo "Playwright MCP requires a direct QA workspace." >&2
     exit 2
 fi
-config="$workspace/playwright.agents.config.mjs"
+config="$workspace/playwright.config.mjs"
+# Legacy checkouts still need their pinned config during the QA migration.
+legacy_config="$workspace/playwright.agents.config.mjs"
+if [ -e "$legacy_config" ] || [ -L "$legacy_config" ]; then
+    config="$legacy_config"
+fi
+profile_file="$workspace/.playwright-mcp-profile"
+profile=${SIGNAPSE_QA_PLAYWRIGHT_PROFILE:-}
+if [ "$config" != "$legacy_config" ] && [ -z "$profile" ]; then
+    if [ -L "$profile_file" ]; then
+        echo "Use a regular .playwright-mcp-profile file in the QA checkout." >&2
+        exit 2
+    fi
+    if [ -f "$profile_file" ]; then
+        IFS= read -r profile < "$profile_file" || [ -n "$profile" ]
+    fi
+    profile=${profile:-mcp-unconfigured}
+fi
+case "$profile" in
+    *[!a-zA-Z0-9_-]*) echo "Invalid QA fixture profile." >&2; exit 2 ;;
+esac
 if [ -L "$config" ]; then
-    echo "Prepare playwright.agents.config.mjs in this workspace before using Playwright MCP." >&2
+    echo "Prepare a regular Playwright config in this workspace before using Playwright MCP." >&2
     exit 2
 fi
 name=${workspace##*/}
@@ -42,6 +62,7 @@ if [ ! -r "$preload" ] || [ ! -r "$runtime/browser_lease.py" ] || [ ! -r "$lock"
     exit 1
 fi
 exec /usr/bin/env -i PATH="$(dirname "$node"):/usr/bin:/bin" HOME=/tmp LANG=C.UTF-8 \
+    SIGNAPSE_QA_MCP_WORKSPACE="$name" SIGNAPSE_QA_PLAYWRIGHT_PROFILE="$profile" \
     PLAYWRIGHT_BROWSERS_PATH="$runtime/qa-browser-cache" \
     LD_LIBRARY_PATH="$runtime/playwright-deps/usr/lib/x86_64-linux-gnu" \
     FONTCONFIG_FILE="$runtime/playwright-fonts.conf" \
