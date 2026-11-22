@@ -73,12 +73,11 @@ defmodule SymphonyElixir.Instructions do
     root = Path.join(parent, "source")
 
     with :ok <- File.chmod(parent, 0o700),
-         :ok <- clone_upstream(root, upstream, path, snapshot),
+         {:ok, _} <- clone_upstream(root, upstream, path, snapshot),
          {:ok, revision} <- checkout_head(root),
          {:ok, branch} <- git(root, ["symbolic-ref", "--short", "HEAD"]),
-         true <- String.trim(branch) == upstream.branch,
-         {:ok, source_root} <- checkout_source_root(snapshot, root, revision) do
-      run.(%{root: source_root, revision: revision})
+         true <- String.trim(branch) == upstream.branch do
+      run.(%{root: checkout_source_root(snapshot, root, revision), revision: revision})
     else
       _ -> checkout_failure(:checkout_upstream_unavailable, path)
     end
@@ -86,22 +85,23 @@ defmodule SymphonyElixir.Instructions do
 
   defp checkout_source_root(
          %{profile_id: "qa", instructions_root: instructions_root, env: %{"SYMPHONY_QA_SEALED_UPSTREAM" => "1"}},
-         _checkout,
+         checkout,
          revision
-       ) do
+       )
+       when is_binary(instructions_root) do
     sealed = Path.join([instructions_root, "revisions", revision])
 
     with {:ok, ^sealed} <- PathSafety.canonicalize(sealed),
          {:ok, %File.Stat{type: :directory, uid: 0}} <- File.lstat(sealed),
-         {options, 0} <- System.cmd("/usr/bin/findmnt", ["-rn", "-o", "OPTIONS", "--target", sealed]),
+         {:ok, options} <- run_upstream_command("/usr/bin/findmnt", ["-rn", "-o", "OPTIONS", "--target", sealed]),
          true <- "ro" in String.split(String.trim(options), ",") do
-      {:ok, sealed}
+      sealed
     else
-      _ -> {:error, :checkout_upstream_unavailable}
+      _ -> checkout
     end
   end
 
-  defp checkout_source_root(_snapshot, checkout, _revision), do: {:ok, checkout}
+  defp checkout_source_root(_snapshot, checkout, _revision), do: checkout
 
   defp clone_upstream(root, %{repository: repository, branch: branch}, path, snapshot) do
     auth = credential_args(snapshot.env)
@@ -126,15 +126,15 @@ defmodule SymphonyElixir.Instructions do
       "/" <> path
     ]
 
-    with :ok <- run_git_upstream(args ++ clone, env),
-         :ok <- run_git_upstream(args ++ sparse, env) do
-      run_git_upstream(args ++ ["-C", root, "checkout", "--force"], env)
+    with {:ok, _} <- run_upstream_command("timeout", args ++ clone, env),
+         {:ok, _} <- run_upstream_command("timeout", args ++ sparse, env) do
+      run_upstream_command("timeout", args ++ ["-C", root, "checkout", "--force"], env)
     end
   end
 
-  defp run_git_upstream(args, env) do
-    case System.cmd("timeout", args, env: env, stderr_to_stdout: true) do
-      {_output, 0} -> :ok
+  defp run_upstream_command(command, args, env \\ []) do
+    case System.cmd(command, args, env: env, stderr_to_stdout: true) do
+      {output, 0} -> {:ok, output}
       {_output, _status} -> {:error, :checkout_upstream_unavailable}
     end
   rescue

@@ -27,7 +27,7 @@ polling:
 # Dashboard updates need a clean main checkout with WORKFLOW.md at the repository root.
 # This source-development workflow is nested; see README.md#workflow-updates for target services.
 # The Jira-only grouped deployment uses an operator manifest; see docs/profiles.md.
-# QA checkout pins sealed by the host are configured in the profile manifest.
+# QA may opt into host-mounted checkout pins for Playwright MCP compatibility.
 # See ../docs/symphony-grouped-rollout.md for QA Playwright MCP activation.
 runtime_control:
   enabled: false
