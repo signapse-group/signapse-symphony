@@ -44,6 +44,7 @@ multiple Jira profiles while keeping each profile's settings and paths separate.
 The grouped runtime pauses an affected profile after repeated infrastructure failures,
 preserving its workspace and retry record. See [grouped host limits](ops/grouped/host-resources.md)
 and the [shared browser lease](docs/grouped-browser-lease.md).
+QA Resume and dispatch can proceed when the optional Playwright MCP is unavailable.
 The dashboard shows eligible tasks waiting for worker capacity in the current runtime, excluding
 dependency-blocked tasks; see [web dashboard](elixir/README.md#web-dashboard) for refresh semantics.
 The dashboard's **Update workflow** button can fast-forward the current service's clean target

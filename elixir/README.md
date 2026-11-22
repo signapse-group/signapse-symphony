@@ -59,6 +59,8 @@ see [session containment and recovery](../docs/codex-session-containment.md).
 
 Grouped profiles can use the assignment checkout for their prompt and local
 skills through [checkout instructions](docs/profiles.md#checkout-instructions).
+QA uses a read-only upstream checkout when the Playwright MCP compatibility
+mount is unavailable. See the [QA rollout checks](../docs/symphony-grouped-rollout.md#moving-an-existing-grouped-service-to-checkout-instructions).
 Symphony does not require a shared workflow skills package. Each repository maintains its workflow
 and optional skills independently of the Symphony runtime.
 

@@ -71,6 +71,42 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
     if systemd_user?(), do: run_upstream_resume_probe(root)
   end
 
+  @tag :tmp_dir
+  @tag timeout: 120_000
+  test "QA Resume dispatches with read-only instructions when the browser compatibility mount is missing", %{tmp_dir: root} do
+    if systemd_user?() do
+      put_test_config(:jira_client_module, JiraFixture)
+      repo = Path.join(root, "qa-upstream")
+      provision_checkout_repo(repo)
+      {_, 0} = System.cmd("git", ["-C", repo, "branch", "-M", "main"])
+      File.write!(Path.join(repo, "AGENTS.md"), "# Current AGENTS")
+      File.write!(Path.join(repo, "WORKFLOW.md"), "QA-UPSTREAM {{ issue.identifier }} from [local AGENTS](AGENTS.md).")
+      git = ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
+      {_, 0} = System.cmd("git", git ++ ["add", "."])
+      {_, 0} = System.cmd("git", git ++ ["commit", "--quiet", "-m", "Publish QA instructions"])
+
+      qa =
+        profile(root, "qa", write_probe_script(root, "fake-codex-qa"), 1, repo)
+        |> Map.put(:checkout_upstream, %{repository: "file://#{repo}", branch: "main"})
+        |> Map.put(:instructions_root, Path.join(root, "missing-browser-mount"))
+        |> put_in([Access.key(:env), "SYMPHONY_QA_SEALED_UPSTREAM"], "1")
+
+      start_supervised!({Profile, {[qa], Path.join(root, "owners.sqlite3")}})
+      assert eventually(fn -> snapshot("qa").readiness.ready end)
+      resume("qa")
+
+      assert eventually(fn ->
+               case File.read(trace_path(root, "qa")) do
+                 {:ok, trace} -> trace =~ "UPSTREAM-THREAD:readonly" and trace =~ "QA-UPSTREAM SIGN-"
+                 _ -> false
+               end
+             end),
+             inspect(snapshot("qa"))
+
+      assert %{runtime_control: %{mode: :running}, running: [_ | _]} = snapshot("qa")
+    end
+  end
+
   defp run_upstream_resume_probe(root) do
     put_test_config(:jira_client_module, JiraFixture)
     repo = Path.join(root, "published-checkout-source")

@@ -38,15 +38,19 @@ guard checks that mount before starting any tool or model session.
 
 For QA hosts that run Playwright MCP in its own network namespace, the
 operator can pre-mount upstream instructions read-only to avoid nesting
-bubblewrap user namespaces. Add `SYMPHONY_QA_SEALED_UPSTREAM` with value `1` to
-the QA profile's `env` only after the mount is ready. Stage the exact current
-QA upstream revision as a root-owned directory at
+Bubblewrap user namespaces. With `SYMPHONY_QA_SEALED_UPSTREAM=1` in the QA
+profile's `env`, Symphony uses a valid mount for the current QA upstream
+revision when available. Stage it as a root-owned directory at
 `<instructions_root>/revisions/<commit>`, using a read-only mount managed by
 the host. Validate the revision with its own QA instruction checker before
-publishing the directory. Stage each new upstream revision before resuming
-QA. If the exact revision is missing, writable or not root-owned, Symphony
-rejects the checkout. The Codex sandbox, Playwright network isolation and
-browser lease still apply.
+publishing the directory. When the mount is unavailable or fails its checks,
+Symphony validates the fresh upstream checkout and mounts it read-only for
+the worker. Resume and dispatch can proceed. Keep
+`mcp_servers.playwright-test.required` at its default of `false` so startup
+errors are reported at the tool. On hosts where
+nested Bubblewrap is unavailable, stage the exact revision before running
+browser work in a new worker session. The Codex sandbox, Playwright network
+isolation and browser lease still apply.
 
 Rehearse with an isolated worktree on an older topic branch and a fake
 tracker. Publish new instructions to its fixture upstream, then launch
@@ -54,6 +58,10 @@ another worker attempt. Confirm the checked-out branch, local changes and
 artifacts are retained and the load event reports the upstream
 `instructions_head` and prompt digest. Exercise an unavailable upstream
 before enabling the setting in a live manifest.
+For QA, also rehearse Resume with the compatibility mount absent and the
+MCP executable failing. Confirm a worker can open a session and do non-browser
+work, then confirm the browser step reports the tool failure. Restore the
+mount and verify a browser step under the existing network isolation and lease.
 
 Verify the branch and hook against the effective deployment workflow before
 changing each profile. Keep each operator-owned `workflows/<profile>.md`

@@ -186,8 +186,11 @@ defmodule SymphonyElixir.InstructionsTest do
     for writable <- [false, true] do
       if writable, do: checkout_write(sealed, "revisions/#{updated}/AGENTS.md", "# Writable instructions")
 
-      assert {:error, {:checkout_instructions, :checkout_upstream_unavailable, "WORKFLOW.md"}} =
-               Instructions.with_checkout_upstream(sealed_snapshot, nil, fn _ -> flunk("Started without a sealed QA revision") end)
+      assert ^updated =
+               Instructions.with_checkout_upstream(sealed_snapshot, nil, fn source ->
+                 assert File.read!(Path.join(source.root, "AGENTS.md")) == "# Published instructions"
+                 source.revision
+               end)
     end
 
     if System.get_env("SYMPHONY_TEST_BIND_INSTRUCTIONS") == "1" do
@@ -196,8 +199,12 @@ defmodule SymphonyElixir.InstructionsTest do
       assert {_, 0} = System.cmd("sudo", ["-n", "chown", "root", "--", pin])
       on_exit(fn -> assert {_, 0} = System.cmd("sudo", ["-n", "chown", to_string(uid), "--", pin]) end)
 
-      assert {:error, {:checkout_instructions, :checkout_upstream_unavailable, "WORKFLOW.md"}} =
-               Instructions.with_checkout_upstream(sealed_snapshot, nil, fn _ -> flunk("Started with a writable QA revision") end)
+      assert ^updated =
+               Instructions.with_checkout_upstream(sealed_snapshot, nil, fn source ->
+                 refute source.root == pin
+                 assert File.read!(Path.join(source.root, "AGENTS.md")) == "# Published instructions"
+                 source.revision
+               end)
 
       TestSupport.mount_instruction_fixture(fixture_root, pin)
       assert %{root: ^pin, revision: ^updated} = Instructions.with_checkout_upstream(sealed_snapshot, nil, & &1)
