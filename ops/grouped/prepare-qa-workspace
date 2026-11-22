@@ -1,7 +1,6 @@
 #!/usr/bin/python3
 """Validate QA instructions and keep raw artifacts outside issue clones."""
 
-import json
 import os
 from pathlib import Path
 import re
@@ -13,41 +12,27 @@ APP = Path('/opt/apps/symphony')
 
 
 class InvalidCheckoutInstructions(Exception):
-    """The QA checker reported an instruction violation in the task checkout."""
-
-
-def instructions_root(workspace):
-    profile = os.environ.get('SYMPHONY_PROFILE_ID')
-    if profile is None:
-        return workspace
-    if profile != 'qa':
-        raise ValueError('Use the QA prepare hook only for the QA profile.')
-    root = Path(os.environ.get('SYMPHONY_INSTRUCTIONS_ROOT', ''))
-    revision = os.environ.get('SYMPHONY_INSTRUCTIONS_REVISION')
-    if not revision or not root.is_absolute() or root.resolve(strict=True) != root:
-        raise ValueError('Pinned QA instructions are unavailable.')
-    manifest = json.loads((root / 'instructions.json').read_text())
-    if (manifest.get('profile_id') != 'qa' or manifest.get('revision') != revision
-            or root.name != revision or root.parent.name != 'revisions'):
-        raise ValueError('Pinned instructions do not match the QA profile and revision.')
-    return root
+    """The QA checker reported an instruction violation in the upstream checkout."""
 
 
 def check_instructions(workspace, checker):
     node = str(APP / 'runtime/node-v24.21.0-linux-x64/bin/node')
-    checkout = (os.environ.get('SYMPHONY_PROFILE_ID') == 'qa'
-                and os.environ.get('SYMPHONY_INSTRUCTIONS_SOURCE') == 'checkout')
-    if not checkout:
-        subprocess.run([node, str(checker), str(instructions_root(workspace))],
+    profile = os.environ.get('SYMPHONY_PROFILE_ID')
+    if profile is None:
+        subprocess.run([node, str(checker), str(workspace)],
                        check=True, stdout=subprocess.DEVNULL)
         return
+    if profile != 'qa':
+        raise ValueError('Use the QA prepare hook only for the QA profile.')
 
     # Only reported instruction violations use the workspace hook's EX_CONFIG result.
     # Node or checker startup failures use their ordinary exit status.
-    source = Path(os.environ.get('SYMPHONY_INSTRUCTIONS_ROOT') or workspace)
-    if not source.is_absolute() or source.resolve(strict=True) != source:
+    source = Path(os.environ.get('SYMPHONY_INSTRUCTIONS_ROOT', ''))
+    if (os.environ.get('SYMPHONY_INSTRUCTIONS_SOURCE') != 'checkout'
+            or not os.environ.get('SYMPHONY_INSTRUCTIONS_REVISION')
+            or not source.is_absolute() or source.resolve(strict=True) != source):
         raise ValueError('QA checkout instructions source must be a canonical directory.')
-    checker = source / 'scripts/check-local-instructions.mjs' if source != workspace else checker
+    checker = source / 'scripts/check-local-instructions.mjs'
     result = subprocess.run([
         node, '--input-type=module', '--eval',
         'const { checkLocalInstructions } = await import(process.argv[2]);'
@@ -69,7 +54,7 @@ def prepare(workspace):
         raise ValueError('QA Playwright config is missing.')
     checker = stable / 'scripts/check-local-instructions.mjs'
     reference = APP / 'runtime/README-qa-testing.md'
-    if not checker.is_file() or not reference.is_file():
+    if not reference.is_file():
         raise ValueError('QA local instruction deployment is incomplete; operator must reconcile the published context.')
     check_instructions(workspace, checker)
     durable = APP / 'logs-qa/evidence' / workspace.name

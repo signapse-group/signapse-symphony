@@ -19,9 +19,9 @@ defmodule SymphonyElixir.AgentRuntimeSupervisor do
   end
 
   @impl true
-  def init([{:profile_id, id} | _] = opts) do
+  def init([{:profile_id, id} | _]) do
     control = Profile.via(id, :runtime_control)
-    scheduler_opts = [scheduler_children(id, opts), [strategy: :one_for_all]]
+    scheduler_opts = [scheduler_children(id), [strategy: :one_for_all]]
 
     children = [
       {RuntimeControl, name: control, profile_id: id},
@@ -51,12 +51,12 @@ defmodule SymphonyElixir.AgentRuntimeSupervisor do
     Supervisor.init(children, strategy: :one_for_all)
   end
 
-  defp scheduler_children(id, opts) do
+  defp scheduler_children(id) do
     task_supervisor = Profile.via(id, :task_supervisor)
 
     [
       {Task.Supervisor, name: task_supervisor},
-      {Orchestrator, [name: Profile.via(id, :orchestrator), task_supervisor: task_supervisor, profile_id: id] ++ Keyword.take(opts, [:instructions])}
+      {Orchestrator, name: Profile.via(id, :orchestrator), task_supervisor: task_supervisor, profile_id: id}
     ]
   end
 end

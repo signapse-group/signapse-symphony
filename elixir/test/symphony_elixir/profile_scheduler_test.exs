@@ -3,20 +3,11 @@ defmodule SymphonyElixir.ProfileSchedulerTest do
 
   alias SymphonyElixir.{AgentRunner, AgentRuntimeSupervisor, AssignmentOwners, Workspace}
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.Instructions, as: LocalInstructions
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.Profile
   alias SymphonyElixir.RuntimeControl
   alias SymphonyElixir.Tracker.Issue
   alias SymphonyElixir.WorkflowStore
-
-  defmodule Instructions do
-    def pin(id) do
-      {:ok, %{revision: "fixture-#{id}", fingerprint: id}}
-    end
-
-    def status(id), do: {:ok, %{revision: "fixture-#{id}"}}
-  end
 
   setup do
     root = Path.join(System.tmp_dir!(), "symphony-profile-runtime-#{System.unique_integer([:positive])}")
@@ -50,8 +41,6 @@ defmodule SymphonyElixir.ProfileSchedulerTest do
     profile = profile(root, "fe")
     script = Path.join(root, "fake-codex")
     trace = Path.join(root, "quota-trace")
-    instructions = profile.instructions_root
-    File.mkdir_p!(instructions)
     home = Path.join(root, "codex-home")
 
     File.write!(script, """
@@ -103,7 +92,7 @@ defmodule SymphonyElixir.ProfileSchedulerTest do
     start_supervised!({AssignmentOwners, path: Path.join(root, "owners.db")})
 
     for profile <- profiles do
-      start_supervised!({AgentRuntimeSupervisor, profile_id: profile.id, instructions: Instructions})
+      start_supervised!({AgentRuntimeSupervisor, profile_id: profile.id})
     end
 
     assert_eventually(fn ->
@@ -123,7 +112,7 @@ defmodule SymphonyElixir.ProfileSchedulerTest do
       end)
     end
 
-    assert %{runtime_control: %{mode: :paused, reason: "Pause during bad workflow"}, instructions_revision: "fixture-qa"} = snapshot("qa")
+    assert %{runtime_control: %{mode: :paused, reason: "Pause during bad workflow"}} = snapshot("qa")
     assert %{runtime_control: %{mode: :paused, source: "system"}} = snapshot("be")
 
     fe_orchestrator = GenServer.whereis(Profile.via("fe", :orchestrator))
@@ -171,43 +160,6 @@ defmodule SymphonyElixir.ProfileSchedulerTest do
     assert MapSet.equal?(foreign, MapSet.new(["10001"]))
   end
 
-  test "an idle scheduler detects sealed instruction drift without changing the active revision", %{root: root} do
-    profile = profile(root, "fe")
-    package = Path.join([profile.instructions_root, "revisions", "v1"])
-    File.mkdir_p!(package)
-    manifest = %{profile_id: "fe", revision: "v1", workflow: "WORKFLOW.md", required_files: []}
-    write_sealed(Path.join(package, "instructions.json"), Jason.encode!(manifest))
-    write_sealed(Path.join(package, "WORKFLOW.md"), "Use [instructions](AGENTS.md).")
-    guidance = Path.join(package, "AGENTS.md")
-    write_sealed(guidance, "Original guidance")
-
-    start_supervised!({Profile, [profile]})
-    start_supervised!({AssignmentOwners, path: Path.join(root, "owners.db")})
-    assert {:ok, original_pin} = LocalInstructions.activate("fe", "v1")
-    start_supervised!({AgentRuntimeSupervisor, profile_id: "fe"})
-    assert_eventually(fn -> match?(%{readiness: %{ready: true}}, snapshot("fe")) end)
-
-    write_sealed(guidance, "Changed guidance")
-    assert {:ok, %{revision: "v1"}} = LocalInstructions.status("fe")
-    assert {:ok, changed_pin} = LocalInstructions.pin("fe")
-    refute original_pin.fingerprint == changed_pin.fingerprint
-
-    scheduler = Profile.via("fe", :orchestrator)
-    expired = System.monotonic_time(:millisecond) - 1
-    :sys.replace_state(scheduler, fn state -> %{state | instructions_check_at: expired} end)
-    assert %{queued: true} = Orchestrator.request_refresh(scheduler)
-
-    assert_eventually(fn ->
-      match?(%{readiness: %{ready: false, error: :active_instructions_changed}}, snapshot("fe"))
-    end)
-
-    assert %{instructions_revision: "v1"} = snapshot("fe")
-
-    write_sealed(guidance, "Original guidance")
-    assert %{queued: true} = Orchestrator.request_refresh(scheduler)
-    assert_eventually(fn -> match?(%{readiness: %{ready: true}, instructions_revision: "v1"}, snapshot("fe")) end)
-  end
-
   test "QA admission requires exactly one operation and an operation change ends its phase", %{root: root} do
     profile = profile(root, "qa")
     start_supervised!({Profile, [profile]})
@@ -225,9 +177,8 @@ defmodule SymphonyElixir.ProfileSchedulerTest do
     refute AgentRunner.same_agent_task?(generate, execute, snapshot.settings.tracker, "qa")
   end
 
-  test "QA prerequisite hook gives checkout-only typed failures without reading a package", %{root: root} do
+  test "QA prerequisite hook reports typed checkout failures and clears inherited source paths", %{root: root} do
     qa = profile(root, "qa")
-    qa = %{qa | checkout_workflow: "WORKFLOW.md", instructions_root: nil}
 
     workflow = File.read!(qa.workflow_path)
 
@@ -259,7 +210,7 @@ defmodule SymphonyElixir.ProfileSchedulerTest do
     assert {:error, {:workspace_hook_failed, "before_run", 1, _}} = Workspace.run_before_run_hook(workspace, issue, nil, snapshot)
   end
 
-  test "missing checkout instructions stop before a task session and survive scheduler restart", %{root: root} do
+  test "an unavailable upstream stops before a task session and survives scheduler restart", %{root: root} do
     fe = profile(root, "fe")
     workspace = Path.join(fe.env["SYMPHONY_WORKSPACE_ROOT"], "SIGN-101")
     File.mkdir_p!(workspace)
@@ -286,22 +237,21 @@ defmodule SymphonyElixir.ProfileSchedulerTest do
 
     fe = %{
       fe
-      | instructions_root: nil,
-        checkout_workflow: "WORKFLOW.md",
+      | checkout_upstream: %{repository: "file://#{Path.join(root, "missing-upstream")}", branch: "main"},
         env: Map.merge(fe.env, %{"PATH" => System.fetch_env!("PATH"), "CHECKOUT_PROBE" => "1", "CHECKOUT_PROBE_TRACE" => trace})
     }
 
     start_supervised!({Profile, {[fe], Path.join(root, "owners.db")}})
     control = Profile.via("fe", :runtime_control)
     scheduler = Profile.via("fe", :orchestrator)
-    assert_eventually(fn -> match?(%{readiness: %{ready: true}, instructions_revision: nil}, snapshot("fe")) end)
+    assert_eventually(fn -> match?(%{readiness: %{ready: true}}, snapshot("fe")) end)
     assert {:ok, %{mode: :checking_quota}} = RuntimeControl.resume(control)
 
     assert_eventually(fn ->
       match?(%{runtime_control: %{mode: :paused, source: "checkout_instructions"}, running: []}, snapshot("fe"))
     end)
 
-    assert {:ok, [%{"reason_code" => "checkout_workflow_missing", "checkout_failure_path" => "WORKFLOW.md", "workspace_path" => ^workspace}]} =
+    assert {:ok, [%{"reason_code" => "checkout_upstream_unavailable", "checkout_failure_path" => "WORKFLOW.md", "workspace_path" => ^workspace}]} =
              RuntimeControl.pending_retries("fe", control)
 
     assert File.read!(marker) == "existing output"
@@ -326,7 +276,8 @@ defmodule SymphonyElixir.ProfileSchedulerTest do
     %Profile{
       id: id,
       workflow_path: workflow_path,
-      instructions_root: Path.join([root, "instructions", id]),
+      checkout_workflow: "WORKFLOW.md",
+      checkout_upstream: %{repository: "https://github.com/example/fixtures", branch: "main"},
       control_path: control_path,
       env: %{
         "JIRA_BASE_URL" => "https://jira.example.invalid",
@@ -339,12 +290,6 @@ defmodule SymphonyElixir.ProfileSchedulerTest do
   end
 
   defp snapshot(id), do: Orchestrator.snapshot(Profile.via(id, :orchestrator), 1_000)
-
-  defp write_sealed(path, content) do
-    if File.exists?(path), do: File.chmod!(path, 0o644)
-    File.write!(path, content)
-    File.chmod!(path, 0o444)
-  end
 
   defp start_supervised_worker(task_supervisor) do
     {:ok, pid} = Task.Supervisor.start_child(task_supervisor, fn -> Process.sleep(:infinity) end)

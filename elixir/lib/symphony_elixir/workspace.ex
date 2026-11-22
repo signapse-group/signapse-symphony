@@ -582,10 +582,6 @@ defmodule SymphonyElixir.Workspace do
 
   defp instructions_environment(%{checkout_workflow: path}) when is_binary(path), do: %{"SYMPHONY_INSTRUCTIONS_SOURCE" => "checkout"}
 
-  defp instructions_environment(%{instructions: %{root: root, revision: revision}}) do
-    %{"SYMPHONY_INSTRUCTIONS_ROOT" => root, "SYMPHONY_INSTRUCTIONS_REVISION" => revision}
-  end
-
   defp instructions_environment(_snapshot), do: %{}
 
   defp handle_hook_command_result({_output, 0}, _workspace, _issue_id, _hook_name) do

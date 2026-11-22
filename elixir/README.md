@@ -57,10 +57,8 @@ see [session containment and recovery](../docs/codex-session-containment.md).
      prompt, referring to your repository's `AGENTS.md` and optional installed skills as needed.
 5. Follow the instructions below to install the required runtime dependencies and start the service.
 
-Grouped profiles can use the assignment checkout for their prompt and local
-skills through [checkout instructions](docs/profiles.md#checkout-instructions).
-QA uses a read-only upstream checkout when the Playwright MCP compatibility
-mount is unavailable. See the [QA rollout checks](../docs/symphony-grouped-rollout.md#moving-an-existing-grouped-service-to-checkout-instructions).
+Grouped profiles fetch their prompt and local skills from the configured
+upstream at the start of each worker attempt. See [checkout instructions](docs/profiles.md#checkout-instructions).
 Symphony does not require a shared workflow skills package. Each repository maintains its workflow
 and optional skills independently of the Symphony runtime.
 

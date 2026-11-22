@@ -2,7 +2,6 @@ from contextlib import redirect_stdout
 import importlib.machinery
 import importlib.util
 import io
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -55,39 +54,14 @@ class PrepareGroupedWorkspacesTests(unittest.TestCase):
         checker.parent.mkdir(parents=True)
         checker.touch()
         (self.root / 'runtime/README-qa-testing.md').touch()
-        revision = self.root / 'instructions/qa/revisions/v1'
-        revision.mkdir(parents=True)
-        (revision / 'instructions.json').write_text(json.dumps({'profile_id': 'qa', 'revision': 'v1'}))
         evidence = self.root / 'logs-qa/evidence' / workspace.name
         evidence.mkdir(parents=True)
         (evidence / 'keep.txt').write_text('retained')
 
-        env = {
-            'SYMPHONY_PROFILE_ID': 'qa',
-            'SYMPHONY_INSTRUCTIONS_ROOT': str(revision),
-            'SYMPHONY_INSTRUCTIONS_REVISION': 'v1',
-        }
-        with patch.object(qa, 'APP', self.root), patch.dict(os.environ, env, clear=True), redirect_stdout(io.StringIO()):
-            with patch.object(qa.subprocess, 'run') as run:
-                qa.prepare(workspace)
-                qa.prepare(workspace)
-                self.assertEqual(run.call_count, 2)
-                self.assertEqual(run.call_args.args[0][1:], [str(checker), str(revision)])
-                self.assertEqual((workspace / 'artifacts').resolve(), evidence)
-                self.assertEqual((evidence / 'keep.txt').read_text(), 'retained')
-                os.environ['SYMPHONY_INSTRUCTIONS_REVISION'] = 'wrong'
-                with self.assertRaisesRegex(ValueError, 'do not match'):
-                    qa.prepare(workspace)
-                self.assertEqual(run.call_count, 2)
-
         checkout_env = {'SYMPHONY_PROFILE_ID': 'qa', 'SYMPHONY_INSTRUCTIONS_SOURCE': 'checkout'}
         with patch.object(qa, 'APP', self.root), patch.dict(os.environ, checkout_env, clear=True):
-            with patch.object(qa.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
-                with redirect_stdout(io.StringIO()):
-                    qa.prepare(workspace)
-                self.assertEqual(run.call_args.args[0][-2:], [str(workspace), checker.as_uri()])
-                self.assertEqual((workspace / 'artifacts').resolve(), evidence)
-                self.assertEqual((evidence / 'keep.txt').read_text(), 'retained')
+            with self.assertRaisesRegex(ValueError, 'source must be a canonical directory'):
+                qa.prepare(workspace)
 
         upstream = self.root / 'published-checkout'
         upstream_checker = upstream / 'scripts/check-local-instructions.mjs'
@@ -103,7 +77,8 @@ class PrepareGroupedWorkspacesTests(unittest.TestCase):
                 self.assertEqual((evidence / 'keep.txt').read_text(), 'retained')
 
     def test_qa_checkout_validation_distinguishes_instruction_and_host_failures(self):
-        env = {'SYMPHONY_PROFILE_ID': 'qa', 'SYMPHONY_INSTRUCTIONS_SOURCE': 'checkout'}
+        env = {'SYMPHONY_PROFILE_ID': 'qa', 'SYMPHONY_INSTRUCTIONS_SOURCE': 'checkout',
+               'SYMPHONY_INSTRUCTIONS_ROOT': str(self.root), 'SYMPHONY_INSTRUCTIONS_REVISION': 'fresh'}
         checker = self.root / 'check-local-instructions.mjs'
         with patch.dict(os.environ, env, clear=True), patch.object(qa.subprocess, 'run') as run:
             run.return_value = subprocess.CompletedProcess([], 78)

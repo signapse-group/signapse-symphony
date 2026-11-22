@@ -17,7 +17,19 @@ defmodule SymphonyElixir.ProfileManifestTest do
     manifest = Path.join(root, "profiles.json")
     control = Path.join(root, "fe.sqlite3")
     owners = Path.join(root, "owners.sqlite3")
-    input = %{"profiles" => [%{"id" => "fe", "workflow" => "fe.md", "control_path" => control, "instructions_root" => "instructions", "env" => %{}}]}
+
+    input = %{
+      "profiles" => [
+        %{
+          "id" => "fe",
+          "workflow" => "fe.md",
+          "checkout_workflow" => "WORKFLOW.md",
+          "checkout_upstream" => %{"repository" => "https://github.com/example/fe", "branch" => "dev"},
+          "control_path" => control,
+          "env" => %{}
+        }
+      ]
+    }
 
     File.write!(manifest, Jason.encode!(input))
     assert {:error, :invalid_assignment_owners_path} = Profile.load_runtime(manifest, %{})

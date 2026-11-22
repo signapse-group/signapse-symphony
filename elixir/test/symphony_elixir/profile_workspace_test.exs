@@ -1,24 +1,19 @@
 defmodule SymphonyElixir.ProfileWorkspaceTest do
   use ExUnit.Case, async: false
 
-  import SymphonyElixir.TestSupport, only: [instructions_probe_root: 1, mount_instruction_fixture: 2]
-
   alias SymphonyElixir.Workspace
 
   @tag :tmp_dir
-  test "a contained hook cannot write its pin and its background subprocess is stopped", %{tmp_dir: root} do
+  test "a contained hook reads its published instructions and its background subprocess is stopped", %{tmp_dir: root} do
     if System.get_env("SYMPHONY_TEST_SYSTEMD") == "1" do
-      root = instructions_probe_root(root)
       base = snapshot(root, "qa")
       File.mkdir_p!(base.instructions.root)
       File.write!(Path.join(base.instructions.root, "policy"), "pinned")
-      mount_instruction_fixture(root, base.instructions.root)
       env = Map.merge(base.env, Map.take(System.get_env(), ~w(PATH HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS)))
       recipient = self()
 
       script = """
-      test -r "$SYMPHONY_INSTRUCTIONS_ROOT/policy" || exit 5
-      if touch "$SYMPHONY_INSTRUCTIONS_ROOT/should-not-exist"; then exit 6; fi
+      test "$(cat "$SYMPHONY_INSTRUCTIONS_ROOT/policy")" = pinned || exit 5
       sleep 30 &
       printf '%s' "$!" > child.pid
       """
@@ -43,7 +38,6 @@ defmodule SymphonyElixir.ProfileWorkspaceTest do
       assert_receive {:registered, %{invocation: nil}}
       assert_receive {:registered, %{invocation: invocation}} when is_binary(invocation)
       assert_receive :stopped
-      refute File.exists?(Path.join(snapshot.instructions.root, "should-not-exist"))
       pid = File.read!(Path.join(workspace, "child.pid"))
 
       case File.read("/proc/#{pid}/stat") do
@@ -96,6 +90,7 @@ defmodule SymphonyElixir.ProfileWorkspaceTest do
     %{
       profile_id: id,
       env: %{"PROFILE_MARKER" => id, "JIRA_API_TOKEN" => "secret"},
+      checkout_workflow: "WORKFLOW.md",
       instructions: %{root: Path.join(root, "#{id}-instructions"), revision: "v1"},
       settings: %{
         workspace: %{root: Path.join(root, id)},

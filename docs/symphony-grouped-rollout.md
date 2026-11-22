@@ -8,133 +8,45 @@ is an operator action after the isolated rehearsal has passed.
 
 ## Moving an existing grouped service to checkout instructions
 
-Update the binary and the QA hook while every profile still uses its package.
-The [bootstrap manifest](../ops/grouped/profiles.json.example) continues to
-show that package configuration. For each migrated profile, add the
-`checkout_workflow` key to that profile's manifest entry. Use the following
-relative paths within the task checkout.
+Match every live profile to the [manifest example](../ops/grouped/profiles.json.example).
+`checkout_upstream` names the published repository and branch. `checkout_workflow`
+is the repository-relative prompt path. Keep the operator-owned
+`workflows/<profile>.md` YAML front matter, including its delimiters, commands
+and sandbox settings. The consumer repository owns the Markdown/Liquid prompt,
+`AGENTS.md` and skills.
 
-| Profile | `checkout_workflow` | Branch used for new workspaces |
-| --- | --- | --- |
-| FE | `WORKFLOW.md` | `dev` |
-| BE | `WORKFLOW.md` | `dev` |
-| Landing | `WORKFLOW.md` | `dev` |
-| QA | `WORKFLOW.md` | `main` |
-| Planning | `workflow/symphony/WORKFLOW.md` | `main` |
+1. Rehearse on a disposable workspace with an older topic branch. Publish
+   instructions to a newer upstream commit and verify that a new worker attempt
+   reports that `instructions_head` and prompt digest, preserves the task branch
+   and outputs, and starts Codex in the issue workspace. An invalid or inaccessible
+   upstream must pause only the affected profile with a checkout diagnostic.
+   The QA prepare hook validates the upstream source and preserves the issue’s
+   durable `artifacts` link.
+2. Before a merge can trigger CD, record the five profiles’ desired states.
+   Coordinate with CD under `runtime/locks/cd.lock` and the existing
+   `runtime/grouped/cutover-complete` marker. Remove admission during the
+   maintenance window, let active turns finish, verify contained sessions stop,
+   and reconcile pending external writes. Keep operator-only backups of the
+   verified release, manifest, workflow, hook and unit settings.
+3. Deploy the verified release and the reviewed QA hook to its configured path.
+   Use CD with the cutover marker present under its deployment lock. Keep control
+   databases, assignment ownership, and workspace and evidence paths. After
+   restart, verify installed SHA, healthy profiles, caps, heartbeat and
+   `instructions_source: "checkout"`.
+4. Run a QA canary on a published SHA with no staged instructions. In a real
+   Codex session, confirm the five Playwright tools, the correct seed, Planner
+   save, Generator log and write, and release of the browser lease. Verify the
+   new session uses the expected SHA, Codex command and sandbox settings.
+5. When sessions tied to the prior release have exited and the canary passes,
+   retire the instructions mounts and their boot units. Remove retired
+   `instructions_root` entries and rollout environment overrides. Verify all
+   profiles after restart, then restore the saved desired states.
 
-To refresh instructions for existing task workspaces on their next worker
-launch, add `checkout_upstream` alongside `checkout_workflow`. Use the same
-repository and branch as the operator-owned workspace clone. For example,
-the QA entry adds
-`"checkout_upstream": {"repository": "https://github.com/signapse-group/signapse-qa.git", "branch": "main"}`.
-BE uses `dgminhtam/signapse`, FE uses `signapse-group/signapse-ui`, Landing
-uses `signapse-group/signapse-landing`, and Planning uses
-`signapse-group/signapse-planing`. The table gives each branch. Deploy the
-matching QA hook before enabling this setting so the hook validates the
-pinned instructions with their own checker and continues to set up
-artifacts in the original task workspace. Check that `/usr/bin/bwrap` can
-create a read-only bind inside a throwaway user systemd unit. The worker
-guard checks that mount before starting any tool or model session.
-
-For QA hosts that run Playwright MCP in its own network namespace, the
-operator can pre-mount upstream instructions read-only to avoid nesting
-Bubblewrap user namespaces. With `SYMPHONY_QA_SEALED_UPSTREAM=1` in the QA
-profile's `env`, Symphony uses a valid mount for the current QA upstream
-revision when available. Stage it as a root-owned directory at
-`<instructions_root>/revisions/<commit>`, using a read-only mount managed by
-the host. Validate the revision with its own QA instruction checker before
-publishing the directory. When the mount is unavailable or fails its checks,
-Symphony validates the fresh upstream checkout and mounts it read-only for
-the worker. Resume and dispatch can proceed. Keep
-`mcp_servers.playwright-test.required` at its default of `false` so startup
-errors are reported at the tool. On hosts where
-nested Bubblewrap is unavailable, stage the exact revision before running
-browser work in a new worker session. The Codex sandbox, Playwright network
-isolation and browser lease still apply.
-
-Rehearse with an isolated worktree on an older topic branch and a fake
-tracker. Publish new instructions to its fixture upstream, then launch
-another worker attempt. Confirm the checked-out branch, local changes and
-artifacts are retained and the load event reports the upstream
-`instructions_head` and prompt digest. Exercise an unavailable upstream
-before enabling the setting in a live manifest.
-For QA, also rehearse Resume with the compatibility mount absent and the
-MCP executable failing. Confirm a worker can open a session and do non-browser
-work, then confirm the browser step reports the tool failure. Restore the
-mount and verify a browser step under the existing network isolation and lease.
-
-Verify the branch and hook against the effective deployment workflow before
-changing each profile. Keep each operator-owned `workflows/<profile>.md`
-entry and its YAML front matter, including both delimiters and all settings.
-For a migrated profile, remove the prompt body from that deployment file.
-Its task checkout contains the Markdown/Liquid prompt without YAML front
-matter, along with `AGENTS.md` and the instruction files required for the
-assignment. Keep the existing package directory, active pointer and read-only
-mount available for rollback.
-
-1. Rehearse the mixed manifest on an isolated grouped runtime with disposable
-   workspaces and copied configuration. Verify package profiles still select
-   their pinned revisions, checkout profiles are healthy before any task runs,
-   and both modes preserve their caps and control databases. For QA, verify
-   the operator-installed checker receives the assignment checkout and the
-   `artifacts` link still resolves to its existing durable evidence directory.
-   Test an invalid checkout, profile drain, persistence after restart, and
-   manual Resume after repairing that checkout. Rehearse restoring the prior
-   binary, manifest, workflow, hook and package together.
-2. Before a merge can trigger CD or a restart changes the manifest, record
-   all five profiles' desired states. Coordinate with CD using
-   `runtime/locks/cd.lock` and the existing `runtime/grouped/cutover-complete`
-   marker. Move the marker aside under that lock while making the maintenance
-   changes so other CD runs skip deployment. Confirm active turns and
-   contained sessions have drained and reconcile assignment ownership,
-   retries, blocked tasks and pending external writes. Back up the verified
-   executable, grouped drop-in, manifest, live YAML workflows, QA hook,
-   package pointers and mount configuration. Protect any backup containing
-   runtime settings with operator-only permissions.
-   Before updating a stable checkout used by a legacy unit, save its effective
-   combined workflow separately so the unit can still be recovered.
-3. Install the verified, compatible binary with the original package
-   manifest. To use the automated deploy job, restore the marker under the
-   lock after drain and release the lock before the job runs. If an earlier
-   run skipped deployment due to the marker, rerun the deploy for the
-   current approved `main` SHA. Check the installed SHA and each profile's
-   engine health, caps, control mode and heartbeat before configuring the
-   first checkout profile.
-4. Validate the candidate and each workspace that can resume before switching
-   its profile. Update the task branch through Git when its checkout still
-   has the combined workflow. Preserve implementation changes, branch
-   ownership and evidence. For FE start with the approved SIGN-591 canary
-   after its PR branch and server checkout contain the compatible prompt.
-   For each change to the grouped manifest, repeat maintenance coordination
-   and drain the grouped service before restarting. Install the matching
-   QA hook before enabling the QA checkout profile. The deploy job transfers
-   the binary and deploy script, so install the reviewed hook separately at
-   the path selected by the QA workflow. Verify its checksum and confirm the
-   stable QA checkout's installed checker exports `checkLocalInstructions`.
-5. After restart, verify `instructions_source: "checkout"` and the expected
-   `workflow_revision` for the migrated profile. Package profiles still report
-   an `instructions_revision`. A checkout's commit and prompt hash are
-   per-assignment evidence and appear when Symphony loads that checkout.
-   Check that the intended profile's assigned run opens Codex in the same
-   checkout and loads the required skill. Restore the saved operator intent
-   after preflight, including manual pauses. Confirm FE passes before
-   switching BE, Landing, QA and Planning. Keep the release, configuration
-   revisions, branch heads and canary results in the deployment receipt.
-
-For an invalid checkout, the affected profile stays paused. The operator
-repairs the reported workspace and uses Resume. Before opening Codex,
-Symphony validates the checkout again. The QA hook returns status 78 in
-checkout mode for reported instruction violations. The pinned-mode checker
-and host failures such as a missing installed checker or evidence link
-failure retain their ordinary hook error behavior.
-
-If a migration fails, pause and drain before restoring the previous manifest
-entry and its matching deployment workflow, QA hook and package pointer.
-Use the previous binary and drop-in when the failure requires a binary
-rollback. Verify package readiness and restore the recorded operator intent.
-Preserve the live control and assignment owner databases, workspaces and
-durable evidence. The deploy script's automatic binary rollback restores the
-drop-in. The operator restores any profile or hook files changed separately.
+If recovery is necessary, pause and drain before restoring the prior release
+and its matching operator configuration. Preserve live control databases,
+assignment owners, workspaces and evidence. The deploy script restores the
+previous binary drop-in automatically after a failed health check. Restore
+separately changed configuration from the deployment backup.
 
 ## Initial migration from legacy services
 
@@ -149,9 +61,9 @@ drop-in. The operator restores any profile or hook files changed separately.
 Derive each deployment workflow from the effective file. In particular, carry
 the FE and BE local caps, QA's effective wrapper and sandbox, Landing's
 repository/browser wrapper, and Planning's standalone canary and Story filter.
-The release manifest has a separate control path and instructions root for every
-profile, plus a shared assignment owner database outside every workspace and
-instructions tree. Keep the old workspace roots and task branches, QA's durable
+The release manifest has separate control paths and published upstreams and a
+shared assignment owner database outside every workspace. Keep existing workspaces
+and task branches, QA's durable
 evidence, account pool and locks, and provider credentials with the same grants.
 Install the FE and QA prepare hooks at their stable paths. Resolve credentials
 from protected systemd environment files by name; do not put values in the
@@ -186,27 +98,11 @@ browser wrapper and cache, host-platform override and public preview flags.
 For an optional variable absent in the effective service, remove that alias
 from its manifest entry. An unresolved alias makes the profile unavailable.
 
-For each consumer revision, run `mix instructions.prepare PROFILE REVISION
-REPO WORKFLOW REQUIRED_FILE...` with `SYMPHONY_PROFILES` pointing to this
-manifest. Use the original consumer-relative workflow path, including
-`workflow/symphony/WORKFLOW.md` for Planning. Verify each package locally
-before selecting it. Replace the example hostname in both the endpoint URL and
-allowed origin with the deployment's HTTPS hostname. Generate a real Phoenix
-session secret and replace the LiveView signing salt in the protected config. The release
-`-config` replaces the entire endpoint settings list. Retain the Bandit
-adapter, render error formats, PubSub server and LiveView settings in the
-template.
-
-Stage packages as the operator against a separate staging manifest. Publish
-each `revisions/` directory to an operator-owned source, then ask the host
-administrator to bind mount it read-only at the corresponding path below
-`runtime/grouped/instructions/<profile>/revisions`. Persist these mounts in
-the host configuration so they survive restart. Keep the profile directory
-outside the mount and writable by the Symphony service UID so it can replace
-the adjacent `active` pointer. Verify the mount is read-only and the service
-UID can read the files before activating. File mode `0444` alone lets a
-worker sharing the owner's UID replace files through a writable parent.
-Retain previous packages until their sessions exit.
+Replace the example hostname in both the endpoint URL and allowed origin with
+the deployment’s HTTPS hostname. Generate a real Phoenix session secret and
+replace the LiveView signing salt in the protected config. The release
+`-config` replaces the entire endpoint settings list. Retain the Bandit adapter,
+render error formats, PubSub server and LiveView settings in the template.
 
 ### Stage configuration before the handoff
 
@@ -236,8 +132,7 @@ Systemd already provides `HOME`, `XDG_RUNTIME_DIR` and
 `DBUS_SESSION_BUS_ADDRESS` to the user unit. Leave credentials and profile
 path values in the protected source. Verify every `$NAME` in each entry can
 resolve when the service starts, including the FE app environment and the
-QA private/recovery paths. Use systemd's `EnvironmentFile` parser for the
-validation command below.
+QA private/recovery paths. Use systemd’s `EnvironmentFile` parser.
 
 After review, install the manifest, Phoenix config and protected environment
 file into `runtime/grouped`. Install the reviewed per-profile deployment
@@ -254,43 +149,6 @@ done
 python3 scripts/deploy_symphony.py --prepare-grouped "$release_sha" "$candidate"
 sha256sum "$candidate/grouped-90-cd.conf" "$grouped/profiles.json" "$grouped"/workflows/*.md
 ```
-
-The host administrator can bind each prepared revision tree from a protected
-source owned by root, for example `/var/lib/symphony-instructions`. The target
-directories must exist and the service UID must have read/traverse access to
-the source and its files. Create each target as the service operator before
-the administrator mounts it. Keep mount source and target separate from all
-workspace roots:
-
-```sh
-profile=qa
-source="/var/lib/symphony-instructions/$profile/revisions"
-target="$grouped/instructions/$profile/revisions"
-mount --bind "$source" "$target"
-mount -o remount,bind,ro "$target"
-findmnt -no SOURCE,OPTIONS --target "$target"
-```
-
-Persist the mounts before reboot. As the service operator, validate and
-initialize each pointer with its approved consumer revision. Set `mix_bin`
-to the installed Mix executable and `revision` to the approved revision for
-`profile`. Run the block from the reviewed checkout:
-
-```sh
-root="$grouped/instructions/$profile"
-findmnt --mountpoint "$root/revisions" --options ro >/dev/null
-systemd-run --user --wait --pipe --collect \
-  --property="EnvironmentFile=$grouped/service.env" \
-  --working-directory="$PWD/elixir" \
-  --setenv="SYMPHONY_PROFILES=$grouped/profiles.json" \
-  "$mix_bin" instructions.validate "$profile" "$root/revisions/$revision"
-pointer=$(mktemp "$root/.active.XXXXXX")
-printf '%s\n' "$revision" > "$pointer"
-mv -fT -- "$pointer" "$root/active"
-```
-
-The commands assume a shell configured to stop on error, so a failed mount
-check or package validation leaves the current `active` pointer in place.
 
 Before changing ownership, archive the verified legacy binary and source SHA,
 unit files and drop-ins, Serve mapping, effective workflows, control database
@@ -326,7 +184,7 @@ systemctl --user start symphony-grouped.service
 
 Confirm all five legacy units are inactive and the grouped service has one
 MainPID. Check that all five profile state endpoints report healthy, paused,
-the expected cap and the approved instructions revision. Verify the dashboard
+the expected cap and `instructions_source: "checkout"`. Verify the dashboard
 through HTTPS 443 and its `/live` WebSocket using the configured HTTPS origin.
 After these checks, use each profile's own Resume action for profiles recorded
 as running. Confirm the quota check passed and leave the profiles recorded as

@@ -4,7 +4,8 @@
     {
       "id": "fe",
       "workflow": "fe.md",
-      "instructions_root": "instructions/fe",
+      "checkout_workflow": "WORKFLOW.md",
+      "checkout_upstream": {"repository": "https://github.com/example/fe", "branch": "main"},
       "env": {
         "JIRA_API_TOKEN": "$FE_TOKEN",
         "JIRA_EMAIL": "fe@example.invalid",
@@ -18,7 +19,8 @@
     {
       "id": "be",
       "workflow": "be.md",
-      "instructions_root": "instructions/be",
+      "checkout_workflow": "WORKFLOW.md",
+      "checkout_upstream": {"repository": "https://github.com/example/be", "branch": "main"},
       "env": {
         "JIRA_API_TOKEN": "$BE_TOKEN",
         "JIRA_EMAIL": "be@example.invalid",
@@ -32,7 +34,8 @@
     {
       "id": "qa",
       "workflow": "qa.md",
-      "instructions_root": "instructions/qa",
+      "checkout_workflow": "WORKFLOW.md",
+      "checkout_upstream": {"repository": "https://github.com/example/qa", "branch": "main"},
       "env": {
         "JIRA_API_TOKEN": "$QA_TOKEN",
         "JIRA_EMAIL": "qa@example.invalid",
@@ -46,7 +49,8 @@
     {
       "id": "landing",
       "workflow": "landing.md",
-      "instructions_root": "instructions/landing",
+      "checkout_workflow": "WORKFLOW.md",
+      "checkout_upstream": {"repository": "https://github.com/example/landing", "branch": "main"},
       "env": {
         "JIRA_API_TOKEN": "$LANDING_TOKEN",
         "JIRA_EMAIL": "landing@example.invalid",
@@ -60,7 +64,8 @@
     {
       "id": "planning",
       "workflow": "planning.md",
-      "instructions_root": "instructions/planning",
+      "checkout_workflow": "WORKFLOW.md",
+      "checkout_upstream": {"repository": "https://github.com/example/planning", "branch": "main"},
       "env": {
         "JIRA_API_TOKEN": "$PLANNING_TOKEN",
         "JIRA_EMAIL": "planning@example.invalid",

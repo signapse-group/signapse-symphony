@@ -190,25 +190,13 @@ def stop(unit, invocation, prestart=False):
     return stop_failure(unit, "cgroup_populated_timeout", props, kill)
 
 
-def launch(source, unit, command, workspace, shell_arg, instructions_root, mode="session", mount="systemd"):
+def launch(source, unit, command, workspace, shell_arg, mode="session"):
     names = sorted(name for name in os.environ if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
                    and name not in {"INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM", "NOTIFY_SOCKET"})
     args = ["systemd-run", "--user", "--quiet", "--pipe", "--wait", "--collect",
             "--expand-environment=no", "--service-type=exec", "--unit=" + unit,
             "--description=" + unit, "--property=KillMode=control-group",
             "--property=TimeoutStopSec=1s", "--property=SendSIGKILL=yes"]
-    sandbox = []
-    if instructions_root:
-        if (not instructions_root.startswith("/") or
-                any(c.isspace() or c in ':%\\\"\'' for c in instructions_root) or
-                not Path(instructions_root).is_dir()):
-            return 3
-        if not readonly_instructions(instructions_root):
-            if mount == "bwrap":
-                sandbox = ["/usr/bin/bwrap", "--unshare-user", "--dev-bind", "/", "/",
-                           "--ro-bind", instructions_root, instructions_root, "--"]
-            else:
-                args += ["--property=BindReadOnlyPaths=" + instructions_root]
     group = Path("/proc/self/cgroup").read_text().strip().removeprefix("0::")
     owner = group.rsplit("/", 1)[-1]
     if owner.endswith(".service") and not owner.startswith("user@"):
@@ -217,26 +205,17 @@ def launch(source, unit, command, workspace, shell_arg, instructions_root, mode=
             args += ["--property=BindsTo=" + owner, "--property=After=" + owner]
     # Copy the filtered caller environment by name so secret values never enter argv.
     args += ["--setenv=" + name for name in names]
-    args += sandbox + [sys.executable, "-u", "-c", "import base64,sys;exec(base64.b64decode(sys.argv[1]))",
-             source, "guard", unit, command, workspace, shell_arg, json.dumps(names), mode, instructions_root]
+    args += [sys.executable, "-u", "-c", "import base64,sys;exec(base64.b64decode(sys.argv[1]))",
+             source, "guard", unit, command, workspace, shell_arg, json.dumps(names), mode]
     os.execvp(args[0], args)
 
 
-def readonly_instructions(path):
-    try:
-        return bool(os.statvfs(path).f_flag & os.ST_RDONLY)
-    except OSError:
-        return False
-
-
-def guard(unit, command, workspace, shell_arg, names, mode="session", instructions_root=""):
+def guard(unit, command, workspace, shell_arg, names, mode="session"):
     environment = {name: os.environ[name] for name in names if name in os.environ}
     props = properties(unit)
     group = Path("/proc/self/cgroup").read_text().strip().removeprefix("0::")
     if not identity(unit, props) or props["ControlGroup"] != group or not props.get("InvocationID"):
         return 3
-    if instructions_root and not readonly_instructions(instructions_root):
-        exit_guard(3, "SYMPHONY_SESSION_EXIT reason=instructions_not_readonly")
     child = None
     last_heartbeat = time.monotonic()
 

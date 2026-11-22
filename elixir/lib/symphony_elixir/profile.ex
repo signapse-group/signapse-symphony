@@ -24,7 +24,6 @@ defmodule SymphonyElixir.Profile do
   defstruct [
     :id,
     :workflow_path,
-    :instructions_root,
     :checkout_workflow,
     :checkout_upstream,
     :control_path,
@@ -35,7 +34,6 @@ defmodule SymphonyElixir.Profile do
   @type t :: %__MODULE__{
           id: String.t(),
           workflow_path: Path.t() | nil,
-          instructions_root: Path.t() | nil,
           checkout_workflow: Path.t() | nil,
           checkout_upstream: %{repository: String.t(), branch: String.t()} | nil,
           control_path: Path.t() | nil,
@@ -77,7 +75,7 @@ defmodule SymphonyElixir.Profile do
   end
 
   defp overlaps_owners_path?(profile, owners_path) do
-    [profile.control_path, profile.instructions_root, profile.workflow_path]
+    [profile.control_path, profile.workflow_path]
     |> Enum.any?(&(is_binary(&1) and paths_overlap?(&1, owners_path)))
   end
 
@@ -174,19 +172,18 @@ defmodule SymphonyElixir.Profile do
          {:ok, states} <- assignment_states(tracker),
          :ok <- validate_assignment(profile.id, assignment, states, tracker.required_labels),
          {:ok, workspace} <- workspace_path(settings.workspace.root),
-         instructions = profile.instructions_root,
          {:ok, control} <- control_path(profile, settings.runtime_control),
-         :ok <- check_profile_paths(workspace, instructions, control) do
+         false <- paths_overlap?(workspace, control) do
       {:ok,
        %{
          assignment: assignment,
          assignment_states: states,
          required_labels: Enum.sort(tracker.required_labels),
          workspace: workspace,
-         instructions: instructions,
          control: control
        }}
     else
+      true -> {:error, :workspace_overlaps_profile_data}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -214,10 +211,7 @@ defmodule SymphonyElixir.Profile do
       paths_overlap?(left.workspace, right.workspace) ->
         :overlapping_workspace_roots
 
-      paths_overlap?(left.instructions, right.instructions) ->
-        :overlapping_instructions_roots
-
-      overlaps_profile_data?(left.workspace, right) or overlaps_profile_data?(right.workspace, left) ->
+      paths_overlap?(left.workspace, right.control) or paths_overlap?(right.workspace, left.control) ->
         :workspace_overlaps_profile_data
 
       true ->
@@ -235,23 +229,6 @@ defmodule SymphonyElixir.Profile do
 
       true ->
         nil
-    end
-  end
-
-  defp overlaps_profile_data?(workspace, profile) do
-    paths_overlap?(workspace, profile.instructions) or paths_overlap?(workspace, profile.control)
-  end
-
-  defp check_profile_paths(workspace, instructions, control) do
-    cond do
-      overlaps_profile_data?(workspace, %{instructions: instructions, control: control}) ->
-        {:error, :workspace_overlaps_profile_data}
-
-      paths_overlap?(instructions, control) ->
-        {:error, :control_overlaps_instructions}
-
-      true ->
-        :ok
     end
   end
 
@@ -291,10 +268,9 @@ defmodule SymphonyElixir.Profile do
     with %{"workflow" => workflow, "env" => env} <- entry,
          true <- valid_path?(workflow),
          {:ok, checkout_workflow} <- checkout_workflow(entry),
-         {:ok, checkout_upstream} <- checkout_upstream(entry, checkout_workflow),
-         {:ok, instructions_root} <- instructions_root(entry["instructions_root"], checkout_workflow, directory),
+         {:ok, checkout_upstream} <- checkout_upstream(entry),
          {:ok, env} <- resolve_env(env, host_env) do
-      %{profile | workflow_path: Path.expand(workflow, directory), instructions_root: instructions_root, checkout_workflow: checkout_workflow, checkout_upstream: checkout_upstream, env: env}
+      %{profile | workflow_path: Path.expand(workflow, directory), checkout_workflow: checkout_workflow, checkout_upstream: checkout_upstream, env: env}
     else
       {:error, reason} when is_atom(reason) -> %{profile | error: reason}
       _ -> %{profile | error: :invalid_profile_entry}
@@ -305,23 +281,16 @@ defmodule SymphonyElixir.Profile do
     if PathSafety.repository_relative?(path), do: {:ok, path}, else: {:error, :invalid_checkout_workflow_path}
   end
 
-  defp checkout_workflow(_entry), do: {:ok, nil}
+  defp checkout_workflow(_entry), do: {:error, :invalid_checkout_workflow_path}
 
-  defp checkout_upstream(%{"checkout_upstream" => %{"repository" => repository, "branch" => branch}}, workflow)
-       when is_binary(workflow) and is_binary(repository) and is_binary(branch) do
+  defp checkout_upstream(%{"checkout_upstream" => %{"repository" => repository, "branch" => branch}})
+       when is_binary(repository) and is_binary(branch) do
     if Regex.match?(~r{\Ahttps://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z}, repository) and branch in ["main", "dev"],
       do: {:ok, %{repository: repository, branch: branch}},
       else: {:error, :invalid_checkout_upstream}
   end
 
-  defp checkout_upstream(%{"checkout_upstream" => _}, _workflow), do: {:error, :invalid_checkout_upstream}
-  defp checkout_upstream(_entry, _workflow), do: {:ok, nil}
-
-  defp instructions_root(nil, checkout_workflow, _directory) when is_binary(checkout_workflow), do: {:ok, nil}
-
-  defp instructions_root(path, _checkout_workflow, directory) do
-    if valid_path?(path), do: PathSafety.canonicalize(Path.expand(path, directory)), else: {:error, :invalid_profile_entry}
-  end
+  defp checkout_upstream(_entry), do: {:error, :invalid_checkout_upstream}
 
   defp manifest_control_path(value, host_env) do
     with {:ok, path} <- resolve_env_value(value, host_env),
@@ -475,6 +444,6 @@ defmodule SymphonyElixir.Profile.Reservations do
   end
 
   defp overlaps_control_path?(ownership, path) do
-    Profile.paths_overlap?(ownership.workspace, path) or Profile.paths_overlap?(ownership.instructions, path)
+    Profile.paths_overlap?(ownership.workspace, path)
   end
 end

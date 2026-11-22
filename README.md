@@ -40,7 +40,7 @@ Each target repository owns its `WORKFLOW.md` configuration and agent prompt, in
 implementation, verification, and PR handoff rules. Symphony loads that file; optional agent skills
 are maintained by the target repository independently of Symphony releases.
 The [profile runtime contract](elixir/docs/profiles.md) defines how Signapse loads
-multiple Jira profiles while keeping each profile's settings and paths separate.
+multiple Jira profiles with independent settings and one upstream instructions branch per profile.
 The grouped runtime pauses an affected profile after repeated infrastructure failures,
 preserving its workspace and retry record. See [grouped host limits](ops/grouped/host-resources.md)
 and the [shared browser lease](docs/grouped-browser-lease.md).

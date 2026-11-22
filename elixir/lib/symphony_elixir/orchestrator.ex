@@ -12,7 +12,6 @@ defmodule SymphonyElixir.Orchestrator do
   alias SymphonyElixir.Codex.AppServer
   alias SymphonyElixir.Config
   alias SymphonyElixir.HostResources
-  alias SymphonyElixir.Instructions
   alias SymphonyElixir.Jira.Client, as: JiraClient
   alias SymphonyElixir.Profile
   alias SymphonyElixir.RuntimeControl
@@ -27,7 +26,6 @@ defmodule SymphonyElixir.Orchestrator do
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
   @quota_retry_delay_ms 5_000
-  @instructions_check_interval_ms 60_000
   @handoff_recovery "Phase boundary handoff requires operator confirmation"
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
@@ -52,15 +50,10 @@ defmodule SymphonyElixir.Orchestrator do
       :tick_token,
       :profile_id,
       :profile_snapshot,
-      :instructions_revision,
-      :instructions_fingerprint,
-      :instructions_check_at,
-      :readiness_error,
       :config_error,
       :recovery_error,
       :assignment_scope,
       :quota_hold,
-      instructions: Instructions,
       task_supervisor: SymphonyElixir.TaskSupervisor,
       running: %{},
       completed: MapSet.new(),
@@ -96,9 +89,7 @@ defmodule SymphonyElixir.Orchestrator do
           profile_id: id,
           poll_interval_ms: 1_000,
           task_supervisor: Keyword.fetch!(opts, :task_supervisor),
-          instructions: Keyword.get(opts, :instructions, Instructions),
-          codex_totals: @empty_codex_totals,
-          readiness_error: :starting
+          codex_totals: @empty_codex_totals
         }
 
         {:ok, schedule_tick(state, 0)}
@@ -425,7 +416,7 @@ defmodule SymphonyElixir.Orchestrator do
     if state.profile_id && !state.profile_snapshot do
       finish_poll(%{state | candidate_snapshot: nil})
     else
-      state |> refresh_instructions() |> run_poll()
+      run_poll(state)
     end
   end
 
@@ -701,7 +692,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp dispatch_ready?(%State{retry_restore_pending: true}), do: false
   defp dispatch_ready?(%State{config_error: error}) when not is_nil(error), do: false
-  defp dispatch_ready?(%State{readiness_error: error}) when not is_nil(error), do: false
 
   defp dispatch_ready?(%State{profile_id: id} = state) when is_binary(id),
     do: retry_persistence_ready?(state) and AssignmentOwners.ready(state.assignment_scope) == :ok and runtime_dispatch_enabled?(state)
@@ -1728,23 +1718,15 @@ defmodule SymphonyElixir.Orchestrator do
       retry_priority: metadata[:retry_priority]
     }
 
-    case pin_instructions(state) do
-      {:ok, pin} ->
-        state = record_instructions_check(state, pin)
-        claim_and_start_issue(state, issue, attempt, recipient, metadata, recovery, pin)
-
-      {:error, reason} ->
-        state = record_instructions_error(state, reason)
-        defer_dispatch_retry(state, issue, attempt, worker_host, metadata)
-    end
+    claim_and_start_issue(state, issue, attempt, recipient, metadata, recovery)
   end
 
-  defp claim_and_start_issue(state, issue, attempt, recipient, metadata, recovery, pin) do
+  defp claim_and_start_issue(state, issue, attempt, recipient, metadata, recovery) do
     worker_host = recovery.worker_host
 
     with :ok <- claim_assignment(state, issue.id),
          :ok <- persist_retry(state, recovery) do
-      start_issue_child(state, issue, attempt, recipient, worker_host, metadata, pin)
+      start_issue_child(state, issue, attempt, recipient, worker_host, metadata)
     else
       {:error, reason} ->
         Logger.warning("Profile admission deferred #{issue_context(issue)} reason=#{safe_error(reason)}")
@@ -1755,7 +1737,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp start_issue_child(state, issue, attempt, recipient, worker_host, metadata, pin) do
+  defp start_issue_child(state, issue, attempt, recipient, worker_host, metadata) do
     read_timeout = settings(state).codex.read_timeout_ms
 
     on_boundary = fn ->
@@ -1778,7 +1760,6 @@ defmodule SymphonyElixir.Orchestrator do
       attempt: attempt,
       worker_host: worker_host,
       profile_snapshot: state.profile_snapshot,
-      instructions: pin,
       on_boundary: on_boundary,
       on_session_process: on_session_process,
       on_session_closed: on_session_closed,
@@ -2547,7 +2528,6 @@ defmodule SymphonyElixir.Orchestrator do
        waiting_updated_at: waiting_updated_at,
        readiness: readiness(state, runtime_control),
        admission_error: quota_admission_error(state),
-       instructions_revision: state.instructions_revision,
        max_concurrent_agents: state.max_concurrent_agents,
        runtime_control: runtime_control,
        codex_totals: state.codex_totals,
@@ -2561,7 +2541,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   def handle_call(:workflow_update_ready, _from, %{profile_id: id} = state) when is_binary(id) do
-    {:reply, {:error, "Use profile instructions activation for grouped runtime."}, state}
+    {:reply, {:error, "Publish instructions on the profile's upstream branch."}, state}
   end
 
   def handle_call(:workflow_update_ready, _from, state) do
@@ -2569,7 +2549,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   def handle_call({:apply_workflow_update, _candidate}, _from, %{profile_id: id} = state) when is_binary(id) do
-    {:reply, {:error, "Use profile instructions activation for grouped runtime."}, state}
+    {:reply, {:error, "Publish instructions on the profile's upstream branch."}, state}
   end
 
   def handle_call({:apply_workflow_update, candidate}, _from, state) do
@@ -2814,62 +2794,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp tracker_revision(%State{profile_snapshot: %{revision: revision}}), do: revision
   defp tracker_revision(_state), do: nil
 
-  defp pin_instructions(%State{profile_id: nil}), do: {:ok, nil}
-  defp pin_instructions(%State{profile_snapshot: %{checkout_workflow: path}}) when is_binary(path), do: {:ok, nil}
-
-  defp pin_instructions(%State{profile_id: id, instructions: instructions} = state) do
-    case instructions.pin(id) do
-      {:ok, %{revision: revision, fingerprint: fingerprint}}
-      when revision == state.instructions_revision and fingerprint != state.instructions_fingerprint ->
-        {:error, :active_instructions_changed}
-
-      result ->
-        result
-    end
-  end
-
-  defp refresh_instructions(%State{profile_id: nil} = state), do: state
-  defp refresh_instructions(%State{config_error: error} = state) when not is_nil(error), do: state
-  defp refresh_instructions(%State{profile_snapshot: %{checkout_workflow: path}} = state) when is_binary(path), do: record_instructions_check(state, nil)
-
-  defp refresh_instructions(%State{instructions_revision: revision, instructions_check_at: checked, readiness_error: nil} = state)
-       when is_integer(checked) do
-    now = System.monotonic_time(:millisecond)
-
-    if now < checked and state.instructions.status(state.profile_id) == {:ok, %{revision: revision}} do
-      state
-    else
-      validate_instructions(state)
-    end
-  end
-
-  defp refresh_instructions(state), do: validate_instructions(state)
-
-  defp validate_instructions(state) do
-    case pin_instructions(state) do
-      {:ok, pin} -> record_instructions_check(state, pin)
-      {:error, reason} -> record_instructions_error(state, reason)
-    end
-  end
-
-  defp record_instructions_check(%State{profile_id: nil} = state, nil), do: state
-  defp record_instructions_check(state, nil), do: %{state | readiness_error: nil}
-
-  defp record_instructions_check(state, pin) do
-    %{
-      state
-      | readiness_error: nil,
-        instructions_revision: pin.revision,
-        instructions_fingerprint: pin.fingerprint,
-        instructions_check_at: System.monotonic_time(:millisecond) + @instructions_check_interval_ms
-    }
-  end
-
-  defp record_instructions_error(state, reason), do: %{state | readiness_error: safe_error(reason)}
-
   defp readiness(state, runtime_control) do
     error =
-      state.config_error || state.readiness_error || state.recovery_error ||
+      state.config_error || state.recovery_error ||
         if(runtime_control.mode == :unknown,
           do: :runtime_control_unavailable,
           else: if(state.retry_restore_pending and state.profile_id, do: :recovery_pending)

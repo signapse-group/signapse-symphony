@@ -4,7 +4,8 @@
     {
       "id": "fe",
       "workflow": "workflows/fe.md",
-      "instructions_root": "instructions/fe",
+      "checkout_workflow": "WORKFLOW.md",
+      "checkout_upstream": {"repository": "https://github.com/signapse-group/signapse-ui.git", "branch": "dev"},
       "control_path": "/opt/apps/symphony/runtime/state/grouped/fe.sqlite3",
       "env": {
         "PATH": "$FE_PATH",
@@ -29,7 +30,8 @@
     {
       "id": "be",
       "workflow": "workflows/be.md",
-      "instructions_root": "instructions/be",
+      "checkout_workflow": "WORKFLOW.md",
+      "checkout_upstream": {"repository": "https://github.com/dgminhtam/signapse.git", "branch": "dev"},
       "control_path": "/opt/apps/symphony/runtime/state/grouped/be.sqlite3",
       "env": {
         "PATH": "$BE_PATH",
@@ -51,7 +53,8 @@
     {
       "id": "qa",
       "workflow": "workflows/qa.md",
-      "instructions_root": "instructions/qa",
+      "checkout_workflow": "WORKFLOW.md",
+      "checkout_upstream": {"repository": "https://github.com/signapse-group/signapse-qa.git", "branch": "main"},
       "control_path": "/opt/apps/symphony/runtime/state/grouped/qa.sqlite3",
       "env": {
         "PATH": "$QA_PATH",
@@ -77,7 +80,8 @@
     {
       "id": "landing",
       "workflow": "workflows/landing.md",
-      "instructions_root": "instructions/landing",
+      "checkout_workflow": "WORKFLOW.md",
+      "checkout_upstream": {"repository": "https://github.com/signapse-group/signapse-landing.git", "branch": "dev"},
       "control_path": "/opt/apps/symphony/runtime/state/grouped/landing.sqlite3",
       "env": {
         "PATH": "$LANDING_PATH",
@@ -105,7 +109,8 @@
     {
       "id": "planning",
       "workflow": "workflows/planning.md",
-      "instructions_root": "instructions/planning",
+      "checkout_workflow": "workflow/symphony/WORKFLOW.md",
+      "checkout_upstream": {"repository": "https://github.com/signapse-group/signapse-planing.git", "branch": "main"},
       "control_path": "/opt/apps/symphony/runtime/state/grouped/planning.sqlite3",
       "env": {
         "PATH": "$PLANNING_PATH",

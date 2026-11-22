@@ -15,34 +15,36 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
   defmodule Runtime do
     use GenServer
 
-    def start_link({profile, role, test, checkout?}) do
+    def start_link({profile, role, test, checkout?, slow?}) do
       mode = if checkout?, do: :paused, else: :running
-      GenServer.start_link(__MODULE__, {profile, test, mode, checkout?}, name: Profile.via(profile, role))
+      GenServer.start_link(__MODULE__, {profile, test, mode, checkout?, slow?}, name: Profile.via(profile, role))
     end
 
     @impl true
     def init(state), do: {:ok, state}
 
     @impl true
-    def handle_call(:snapshot, _from, {id, _, _, checkout?} = state) do
+    def handle_call(:snapshot, _from, {_id, _, _, _, true} = state), do: {:noreply, state}
+
+    def handle_call(:snapshot, _from, {id, _, _, checkout?, false} = state) do
       {:reply, snapshot(id, checkout?), state}
     end
 
-    def handle_call(:request_refresh, _from, {id, test, _, _} = state) do
+    def handle_call(:request_refresh, _from, {id, test, _, _, _} = state) do
       send(test, {:refresh, id})
       {:reply, %{queued: true, coalesced: false, requested_at: DateTime.utc_now(), operations: ["poll"]}, state}
     end
 
-    def handle_call(:status, _from, {id, _, mode, checkout?} = state), do: {:reply, {:ok, status(id, mode, checkout?)}, state}
+    def handle_call(:status, _from, {id, _, mode, checkout?, _} = state), do: {:reply, {:ok, status(id, mode, checkout?)}, state}
 
-    def handle_call({:pause, _reason, "manual"}, _from, {id, test, _, checkout?}) do
+    def handle_call({:pause, _reason, "manual"}, _from, {id, test, _, checkout?, slow?}) do
       send(test, {:pause, id})
-      {:reply, {:ok, status(id, :paused, checkout?)}, {id, test, :paused, checkout?}}
+      {:reply, {:ok, status(id, :paused, checkout?)}, {id, test, :paused, checkout?, slow?}}
     end
 
-    def handle_call(:resume, _from, {id, test, _, checkout?}) do
+    def handle_call(:resume, _from, {id, test, _, checkout?, slow?}) do
       send(test, {:resume, id})
-      {:reply, {:ok, status(id, :checking_quota, checkout?)}, {id, test, :checking_quota, checkout?}}
+      {:reply, {:ok, status(id, :checking_quota, checkout?)}, {id, test, :checking_quota, checkout?, slow?}}
     end
 
     defp status(id, mode, checkout?) do
@@ -106,9 +108,8 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
         end
 
       %{
-        readiness: if(id == "qa", do: %{ready: false, error: :instructions_missing}, else: %{ready: true, error: nil}),
+        readiness: readiness(id),
         admission_error: admission_error(id),
-        instructions_revision: "fixture-#{id}",
         running: if(id == "fe", do: [item, held], else: [item]),
         retrying: retrying,
         waiting: [],
@@ -118,42 +119,16 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
       }
     end
 
+    defp readiness("qa"), do: %{ready: false, error: :invalid_checkout_upstream}
+    defp readiness(_id), do: %{ready: true, error: nil}
+
     defp admission_error("fe"), do: :provider_quota_exhausted
     defp admission_error("be"), do: :provider_quota_unavailable
     defp admission_error("landing"), do: {:internal_error, "private fixture-secret"}
     defp admission_error(_id), do: nil
   end
 
-  defmodule Instructions do
-    def activate(id, revision) do
-      test = Endpoint.config(:instructions_test_pid)
-      send(test, {:activate, self(), id, revision})
-
-      receive do
-        :finish_activation -> {:ok, %{profile_id: id, revision: revision}}
-      end
-    end
-
-    def status(_id), do: {:error, :missing}
-  end
-
-  defmodule SlowInstructions do
-    def status("fe"), do: Process.sleep(:infinity)
-    def status("be"), do: raise("private fixture-secret")
-    def status(_id), do: {:error, :missing}
-  end
-
   setup context do
-    config = Application.get_env(:symphony_elixir, Endpoint)
-    instructions = if context[:slow_instructions], do: SlowInstructions, else: Instructions
-    on_exit(fn -> Application.put_env(:symphony_elixir, Endpoint, config) end)
-
-    Application.put_env(
-      :symphony_elixir,
-      Endpoint,
-      Keyword.merge(config, instructions: instructions, instructions_test_pid: self())
-    )
-
     root = Path.join(System.tmp_dir!(), "symphony-profile-dashboard-#{System.unique_integer([:positive])}")
 
     env =
@@ -172,13 +147,14 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
     {:ok, profiles} = Profile.load(@fixture, env)
     checkout? = context[:checkout] == true
 
-    profiles =
-      if checkout?, do: Enum.map(profiles, fn profile -> if profile.id == "fe", do: Map.put(profile, :checkout_workflow, "WORKFLOW.md"), else: profile end), else: profiles
-
     start_supervised!({Profile, profiles})
 
     for id <- @ids, role <- [:orchestrator, :runtime_control] do
-      start_supervised!(Supervisor.child_spec({Runtime, {id, role, self(), checkout? and id == "fe"}}, id: {id, role}))
+      if role != :orchestrator or not (context[:snapshot_faults] == true and id == "be") do
+        slow? = context[:snapshot_faults] == true and role == :orchestrator and id == "fe"
+        runtime = {Runtime, {id, role, self(), checkout? and id == "fe", slow?}}
+        start_supervised!(Supervisor.child_spec(runtime, id: {id, role}))
+      end
     end
 
     start_supervised!({HttpServer, mode: :profiles, port: 0, snapshot_timeout_ms: context[:snapshot_timeout_ms] || 500})
@@ -194,15 +170,14 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
     assert overview["mode"] == "profiles"
     assert overview["health"] == "partial"
     assert Enum.map(overview["profiles"], & &1["profile_id"]) == @ids
-    assert Enum.find(overview["profiles"], &(&1["profile_id"] == "qa"))["reason"] == "instructions_missing"
+    assert Enum.find(overview["profiles"], &(&1["profile_id"] == "qa"))["reason"] == "invalid_checkout_upstream"
 
     for {id, cap} <- Enum.zip(@ids, [2, 1, 2, 1, 1]) do
       conn = get(build_conn(), "/api/v1/profiles/#{id}/state")
       payload = json_response(conn, 200)
       assert payload["profile_id"] == id
       assert payload["max_concurrent_agents"] == cap
-      assert payload["instructions_source"] == "package"
-      assert payload["instructions_revision"] == "fixture-#{id}"
+      assert payload["instructions_source"] == "checkout"
       assert byte_size(payload["workflow_revision"]) == 64
       assert payload["counts"] == %{"running" => 1, "retrying" => 0, "blocked" => if(id == "fe", do: 1, else: 0), "waiting" => 0}
       assert payload["runtime_control"]["services"] == %{id => %{"status" => "online"}}
@@ -212,12 +187,11 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
     end
   end
 
-  @tag checkout: true, slow_instructions: true
+  @tag checkout: true
   test "checkout diagnostics are safe and the profile can resume without an active package" do
     conn = get(build_conn(), "/api/v1/profiles/fe/state")
     payload = json_response(conn, 200)
     assert payload["instructions_source"] == "checkout"
-    assert payload["instructions_revision"] == nil
     assert payload["health"] == "healthy"
     assert payload["runtime_control"]["mode"] == "paused"
     assert payload["runtime_control"]["reason"] == "Fix the checkout instructions before resuming"
@@ -234,7 +208,7 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
     assert issue["retry"]["checkout_failure_path"] == retry["checkout_failure_path"]
 
     {:ok, view, _html} = live(build_conn(), "/profiles/fe")
-    assert has_element?(view, "#instructions-source", "Task checkout")
+    assert has_element?(view, "#instructions-source", "Upstream checkout")
     assert has_element?(view, "#retry-queue", "Required skill missing from checkout")
     assert has_element?(view, "#retry-queue", retry["checkout_failure_path"])
     refute has_element?(view, "#activate-fe")
@@ -270,7 +244,7 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
     assert has_element?(view, "a[href='/api/v1/profiles/fe/issues/FE-456']", "JSON details")
   end
 
-  @tag slow_instructions: true, snapshot_timeout_ms: 50
+  @tag snapshot_faults: true, snapshot_timeout_ms: 50
   test "an entire profile read can time out or crash without taking down the overview or LiveView" do
     conn = get(build_conn(), "/api/v1/state")
     overview = json_response(conn, 200)
@@ -341,7 +315,7 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
   test "tabs link to each profile, reload selects the same profile, and foreign events do not change the tab" do
     {:ok, view, _html} = live(build_conn(), "/profiles/qa")
     assert has_element?(view, "#tab-qa[aria-current=page]", "QA")
-    assert has_element?(view, "#profile-health", "Instructions missing")
+    assert has_element?(view, "#profile-health", "Invalid checkout upstream")
     assert has_element?(view, "#service-health", "Service partially operational")
 
     for id <- @ids do
@@ -362,23 +336,6 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
     {:ok, invalid, _html} = live(build_conn(), "/profiles/missing")
     assert has_element?(invalid, "[role=alert]", "Profile not found.")
     refute has_element?(invalid, "#pause-profile")
-  end
-
-  test "an activation result belongs to the submitting profile across tab changes" do
-    {:ok, view, _html} = live(build_conn(), "/profiles/fe")
-    render_submit(element(view, "#activate-fe"), %{"profile" => "fe", "revision" => "v2"})
-    assert_receive {:activate, task, "fe", "v2"}
-
-    view |> element("#tab-be") |> render_click()
-    assert_patch(view, "/profiles/be")
-    send(task, :finish_activation)
-    render_async(view)
-
-    assert has_element?(view, "#tab-be[aria-current=page]")
-    refute has_element?(view, "#profile-action-result")
-    view |> element("#tab-fe") |> render_click()
-    assert_patch(view, "/profiles/fe")
-    assert has_element?(view, "#profile-action-result", "Workflow revision activated.")
   end
 
   test "pause is available for an unhealthy profile and resume validates current readiness" do
