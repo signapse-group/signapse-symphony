@@ -1,7 +1,7 @@
 defmodule SymphonyElixirWeb.ProfileObservability do
   @moduledoc false
 
-  alias SymphonyElixir.{HostResources, Instructions, Profile, RuntimeControl, WorkflowStore}
+  alias SymphonyElixir.{HostResources, Profile, RuntimeControl, WorkflowStore}
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   @control_keys ~w(enabled mode desired_state changed_at version active_turns quota_checked_at)a
@@ -110,7 +110,6 @@ defmodule SymphonyElixirWeb.ProfileObservability do
       error: error,
       workflow_revision: nil,
       instructions_source: instructions_source(id),
-      instructions_revision: nil,
       max_concurrent_agents: nil,
       generated_at: generated_at(),
       runtime_control: public_control(id, %{database_error: true})
@@ -145,15 +144,15 @@ defmodule SymphonyElixirWeb.ProfileObservability do
     end
   end
 
-  @spec perform(String.t(), :pause | :resume | :activate, term()) :: String.t()
-  def perform(id, :pause, _revision) do
+  @spec perform(String.t(), :pause | :resume) :: String.t()
+  def perform(id, :pause) do
     case RuntimeControl.pause("Paused by operator from the dashboard", "manual", control_server(id)) do
       {:ok, _status} -> "Pause requested."
       {:error, _reason} -> "Could not pause this profile."
     end
   end
 
-  def perform(id, :resume, _revision) do
+  def perform(id, :resume) do
     case summary(id) do
       %{health: "healthy"} ->
         case RuntimeControl.resume(control_server(id)) do
@@ -165,21 +164,6 @@ defmodule SymphonyElixirWeb.ProfileObservability do
         "This profile must be healthy before it can resume."
     end
   end
-
-  def perform(id, :activate, revision) when is_binary(revision) and byte_size(revision) <= 128 do
-    case instructions_source(id) do
-      "checkout" ->
-        "This profile reads instructions from the task checkout."
-
-      _ ->
-        case instruction_call(:activate, [id, revision]) do
-          {:ok, _pin} -> "Workflow revision activated."
-          {:error, reason} -> "Workflow activation failed (#{safe_code(reason, "invalid_instructions")})."
-        end
-    end
-  end
-
-  def perform(_id, :activate, _revision), do: "Enter a staged instructions revision."
 
   @spec issue_path(String.t() | nil, String.t()) :: String.t()
   def issue_path(nil, identifier), do: "/api/v1/#{URI.encode(identifier, &URI.char_unreserved?/1)}"
@@ -199,7 +183,6 @@ defmodule SymphonyElixirWeb.ProfileObservability do
     config = workflow_status(id)
     control = control_status(id, snapshot)
     reason = unavailable_reason(config, snapshot, control)
-    source = instructions_source(id)
 
     %{
       profile_id: id,
@@ -209,8 +192,7 @@ defmodule SymphonyElixirWeb.ProfileObservability do
       admission_error: admission_error(snapshot),
       workflow_revision: config.revision,
       workflow_reload_error: config.reload_error,
-      instructions_source: source,
-      instructions_revision: if(source == "package", do: instructions_revision(id, snapshot)),
+      instructions_source: instructions_source(id),
       max_concurrent_agents: max_concurrent_agents(id, snapshot),
       runtime_control: control
     }
@@ -219,8 +201,7 @@ defmodule SymphonyElixirWeb.ProfileObservability do
   defp instructions_source(id) do
     case Profile.lookup(id) do
       {:ok, %{checkout_workflow: path}} when is_binary(path) -> "checkout"
-      {:ok, _profile} -> "package"
-      {:error, _reason} -> nil
+      _ -> nil
     end
   end
 
@@ -264,23 +245,6 @@ defmodule SymphonyElixirWeb.ProfileObservability do
     case WorkflowStore.snapshot(id) do
       {:ok, config} -> config.settings.agent.max_concurrent_agents
       {:error, _reason} -> nil
-    end
-  end
-
-  defp instructions_revision(id, snapshot) do
-    case instruction_call(:status, [id]) do
-      {:ok, %{revision: revision}} -> revision
-      _ -> if is_map(snapshot), do: snapshot[:instructions_revision]
-    end
-  end
-
-  defp instruction_call(function, args) do
-    module = Endpoint.config(:instructions, Instructions)
-
-    if Code.ensure_loaded?(module) and function_exported?(module, function, length(args)) do
-      apply(module, function, args)
-    else
-      {:error, :instructions_unavailable}
     end
   end
 

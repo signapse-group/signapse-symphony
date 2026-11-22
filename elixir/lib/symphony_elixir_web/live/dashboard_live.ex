@@ -81,16 +81,15 @@ defmodule SymphonyElixirWeb.DashboardLive do
   def handle_info({:observability_updated, _id}, socket), do: {:noreply, socket}
 
   @impl true
-  def handle_event(event, %{"profile" => id} = params, %{assigns: %{mode: :profiles, profile: id}} = socket)
-      when event in ["pause_profile", "resume_profile", "activate_profile"] do
+  def handle_event(event, %{"profile" => id}, %{assigns: %{mode: :profiles, profile: id}} = socket)
+      when event in ["pause_profile", "resume_profile"] do
     if ProfileObservability.known?(id) and get_in(socket.assigns.profile_actions, [id, :pending]) != true do
-      revision = Map.get(params, "revision")
       operation = profile_operation(event)
 
       {:noreply,
        socket
        |> assign_profile_action(id, pending: true, message: nil)
-       |> start_async({:profile_action, id}, fn -> ProfileObservability.perform(id, operation, revision) end)}
+       |> start_async({:profile_action, id}, fn -> ProfileObservability.perform(id, operation) end)}
     else
       {:noreply, socket}
     end
@@ -657,10 +656,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
         <dd id="workflow-revision" class="mono"><%= @payload.workflow_revision || "Unavailable" %></dd>
         <dt>Instructions source</dt>
         <dd id="instructions-source"><%= instructions_source_label(@payload[:instructions_source]) %></dd>
-        <dt :if={@payload[:instructions_source] == "package"}>Active instructions</dt>
-        <dd :if={@payload[:instructions_source] == "package"} id="instructions-revision" class="mono">
-          <%= @payload.instructions_revision || "Unavailable" %>
-        </dd>
       </dl>
       <p :if={@payload[:workflow_reload_error]} class="runtime-control-reason">
         Workflow reload failed: <%= humanize_code(@payload.workflow_reload_error) %>
@@ -668,19 +663,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
       <p :if={@payload[:browser_lock] == "locked"} class="section-copy">
         Shared browser test slot is occupied.
       </p>
-      <form :if={@payload[:instructions_source] == "package"} id={"activate-#{@id}"} class="profile-update-form" phx-submit="activate_profile">
-        <input type="hidden" name="profile" value={@id} />
-        <label for={"revision-#{@id}"}>Staged instructions revision</label>
-        <input type="text" id={"revision-#{@id}"} name="revision" required maxlength="128" spellcheck="false" />
-        <button type="submit" disabled={@action[:pending] == true}>Update workflow</button>
-      </form>
       <p :if={@action[:message]} id="profile-action-result" role="status"><%= @action.message %></p>
     </section>
     """
   end
 
-  defp instructions_source_label("checkout"), do: "Task checkout"
-  defp instructions_source_label("package"), do: "Staged package"
+  defp instructions_source_label("checkout"), do: "Upstream checkout"
   defp instructions_source_label(_source), do: "Unavailable"
 
   defp humanize_code(code), do: code |> String.replace("_", " ") |> String.capitalize()
@@ -701,7 +689,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp profile_operation("pause_profile"), do: :pause
   defp profile_operation("resume_profile"), do: :resume
-  defp profile_operation("activate_profile"), do: :activate
 
   defp assign_profile_action(socket, id, result) do
     assign(socket, :profile_actions, Map.put(socket.assigns.profile_actions, id, Map.new(result)))

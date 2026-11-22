@@ -24,11 +24,10 @@ defmodule SymphonyElixir.WorkflowStore do
     @moduledoc "Validated configuration captured for a profile operation."
 
     @derive {Inspect, except: [:env, :workflow, :settings]}
-    @enforce_keys [:profile_id, :workflow_path, :instructions_root, :workflow, :settings, :revision, :env]
+    @enforce_keys ~w(profile_id workflow_path checkout_workflow checkout_upstream workflow settings revision env)a
     defstruct [
       :profile_id,
       :workflow_path,
-      :instructions_root,
       :checkout_workflow,
       :checkout_upstream,
       :workflow,
@@ -45,14 +44,13 @@ defmodule SymphonyElixir.WorkflowStore do
     @type t :: %__MODULE__{
             profile_id: String.t(),
             workflow_path: Path.t(),
-            instructions_root: Path.t() | nil,
-            checkout_workflow: Path.t() | nil,
-            checkout_upstream: %{repository: String.t(), branch: String.t()} | nil,
+            checkout_workflow: Path.t(),
+            checkout_upstream: %{repository: String.t(), branch: String.t()},
             workflow: Workflow.loaded_workflow(),
             settings: Schema.t(),
             revision: String.t(),
             env: %{String.t() => String.t()},
-            instructions: SymphonyElixir.Instructions.pin() | SymphonyElixir.Instructions.upstream() | nil,
+            instructions: SymphonyElixir.Instructions.upstream() | nil,
             workspace_prepared: (Path.t() -> term()) | nil,
             hook_started: (map() -> term()) | nil,
             hook_stopped: (-> term()) | nil,
@@ -85,7 +83,6 @@ defmodule SymphonyElixir.WorkflowStore do
            %Snapshot{
              profile_id: id,
              workflow_path: state.path,
-             instructions_root: state.profile.instructions_root,
              checkout_workflow: state.profile.checkout_workflow,
              checkout_upstream: state.profile.checkout_upstream,
              workflow: state.workflow,

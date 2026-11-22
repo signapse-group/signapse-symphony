@@ -1060,18 +1060,10 @@ defmodule SymphonyElixir.RuntimeControl do
   defp ready_to_resume(%{profile_id: nil}), do: :ok
 
   defp ready_to_resume(%{profile_id: id}) do
-    with {:ok, snapshot} <- WorkflowStore.snapshot(id),
-         :ok <- verify_instruction_source(snapshot) do
-      :ok
-    else
+    case WorkflowStore.snapshot(id) do
+      {:ok, _snapshot} -> :ok
       {:error, _reason} -> {:error, :profile_not_ready}
     end
-  end
-
-  defp verify_instruction_source(%{checkout_workflow: path}) when is_binary(path), do: :ok
-
-  defp verify_instruction_source(%{profile_id: id}) do
-    with {:ok, _pin} <- SymphonyElixir.Instructions.pin(id), do: :ok
   end
 
   defp read_quota(reader) do

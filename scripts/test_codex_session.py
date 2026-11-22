@@ -59,26 +59,18 @@ class StopDiagnosticsTests(unittest.TestCase):
         self.props = {"Description": self.unit, "ControlGroup": "/app.slice/" + self.unit,
                       "InvocationID": self.invocation, "LoadState": "loaded", "ActiveState": "failed"}
 
-    def test_dynamic_pin_mount_wraps_the_guard_inside_the_unit(self):
-        with tempfile.TemporaryDirectory() as root:
-            for already_readonly in (False, True):
-                with mock.patch.object(self.module, "readonly_instructions", return_value=already_readonly), \
-                        mock.patch.object(self.module, "properties", return_value=self.props), \
-                        mock.patch.object(self.module.os, "execvp") as execvp:
-                    self.module.launch(ENCODED, self.unit, "true", root, "-c", root, "hook", "bwrap")
-                program, argv = execvp.call_args.args
-                self.assertEqual(program, "systemd-run")
-                self.assertIn("--property=KillMode=control-group", argv)
-                if already_readonly:
-                    self.assertNotIn("/usr/bin/bwrap", argv)
-                else:
-                    mount = argv.index("/usr/bin/bwrap")
-                    self.assertEqual(argv[mount:mount + 9],
-                                     ["/usr/bin/bwrap", "--unshare-user", "--dev-bind", "/", "/",
-                                      "--ro-bind", root, root, "--"])
-                    self.assertEqual(argv[mount + 9], sys.executable)
-                self.assertIn("guard", argv)
-                self.assertNotIn("--property=BindReadOnlyPaths=" + root, argv)
+    def test_launch_starts_the_guard_directly_in_its_unit(self):
+        with tempfile.TemporaryDirectory() as root, \
+                mock.patch.object(self.module, "properties", return_value=self.props), \
+                mock.patch.object(self.module.os, "execvp") as execvp:
+            self.module.launch(ENCODED, self.unit, "true", root, "-c", "hook")
+
+        program, argv = execvp.call_args.args
+        self.assertEqual(program, "systemd-run")
+        self.assertIn("--property=KillMode=control-group", argv)
+        self.assertEqual(argv[-12:-2], [sys.executable, "-u", "-c", DECODER, ENCODED,
+                                       "guard", self.unit, "true", root, "-c"])
+        self.assertEqual(argv[-1], "hook")
 
     def timeout_stop(self, kill=None):
         clock = SimpleNamespace(monotonic=mock.Mock(side_effect=[0, 0, 5]), sleep=mock.Mock())
@@ -231,23 +223,6 @@ class StopDiagnosticsTests(unittest.TestCase):
             self.assertEqual(self.module.stop(self.unit, self.invocation), 0)
         write.assert_not_called()
 
-    def test_guard_refuses_unverified_instruction_mount_before_handshake(self):
-        for mode in ("session", "hook"):
-            for stat in (SimpleNamespace(f_flag=0), FileNotFoundError("private-path")):
-                with self.subTest(mode=mode, stat=type(stat).__name__), \
-                        mock.patch.object(self.module, "properties", return_value=self.props), \
-                        mock.patch.object(self.module.Path, "read_text", return_value="0::" + self.props["ControlGroup"]), \
-                        mock.patch.object(self.module.os, "statvfs", side_effect=stat if isinstance(stat, OSError) else None,
-                                          return_value=stat), \
-                        mock.patch.object(self.module, "exit_guard", side_effect=SystemExit(3)) as fail, \
-                        mock.patch("builtins.print") as handshake, \
-                        mock.patch.object(self.module.subprocess, "Popen") as child:
-                    with self.assertRaisesRegex(SystemExit, "3"):
-                        self.module.guard(self.unit, "private-command", "/workspace", "-c", [], mode, "/private-path")
-                    fail.assert_called_once_with(3, "SYMPHONY_SESSION_EXIT reason=instructions_not_readonly")
-                    handshake.assert_not_called()
-                    child.assert_not_called()
-
     def test_removed_cgroup_read_race_requires_a_fresh_missing_confirmation(self):
         clock = SimpleNamespace(monotonic=mock.Mock(side_effect=[0, 0, 0.02]), sleep=mock.Mock())
         with mock.patch.object(self.module, "properties", return_value=self.props), \
@@ -305,7 +280,7 @@ class Session:
         fixture = root / "fixture.py"
         fixture.write_text(FIXTURE)
         command = shlex.join([sys.executable, "-u", str(fixture), mode, str(root)])
-        args = [sys.executable, "-u", "-c", DECODER, ENCODED, "launch", self.unit, command, str(root), "-lc", "", "session"]
+        args = [sys.executable, "-u", "-c", DECODER, ENCODED, "launch", self.unit, command, str(root), "-lc", "session"]
         if self.owner:
             args = ["systemd-run", "--user", "--quiet", "--pipe", "--wait", "--collect",
                     "--unit=" + self.owner, "--setenv=SYMPHONY_TEST_SENTINEL"] + args

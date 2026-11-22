@@ -129,7 +129,8 @@ defmodule SymphonyElixir.ProfileBoundariesTest do
     entry = %{
       id: "fe",
       workflow: workflow,
-      instructions_root: Path.join(root, "instructions"),
+      checkout_workflow: "WORKFLOW.md",
+      checkout_upstream: %{repository: "https://github.com/example/fixtures", branch: "main"},
       control_path: control,
       env: %{
         "JIRA_BASE_URL" => "https://jira.example.invalid",

@@ -133,7 +133,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     settings = settings(snapshot)
     dynamic_tool_binding = bind_tools(snapshot)
 
-    with :ok <- validate_instructions_source(snapshot, opts[:instructions], opts[:checkout_prompt]),
+    with :ok <- validate_instructions_source(snapshot, opts[:checkout_prompt]),
          {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host, snapshot),
          {:ok, session_process} <- start_port(expanded_workspace, worker_host, dynamic_tool_binding, opts) do
       port = session_process.port
@@ -174,9 +174,9 @@ defmodule SymphonyElixir.Codex.AppServer do
     with_session(session, fn -> {:error, reason} end)
   end
 
-  defp validate_instructions_source(nil, _pin, _checkout), do: :ok
+  defp validate_instructions_source(nil, _checkout), do: :ok
 
-  defp validate_instructions_source(%{checkout_workflow: path, checkout_upstream: upstream}, nil, checkout) when is_map(upstream) do
+  defp validate_instructions_source(%{checkout_workflow: path, checkout_upstream: upstream}, checkout) when is_map(upstream) do
     case checkout do
       %{workflow_path: ^path, prompt: prompt, source: %{root: root, revision: revision}}
       when is_binary(prompt) and is_binary(root) and is_binary(revision) ->
@@ -187,15 +187,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp validate_instructions_source(%{checkout_workflow: path}, pin, checkout) when is_binary(path) do
-    case {pin, checkout} do
-      {nil, %{workflow_path: ^path, prompt: prompt}} when is_binary(prompt) -> :ok
-      _ -> {:error, :missing_checkout_prompt}
-    end
-  end
-
-  defp validate_instructions_source(%{profile_id: id}, %{profile_id: id, root: root}, nil) when is_binary(root), do: :ok
-  defp validate_instructions_source(_snapshot, _pin, _checkout), do: {:error, :missing_profile_instructions_pin}
+  defp validate_instructions_source(_snapshot, _checkout), do: {:error, :missing_checkout_prompt}
 
   defp checkout_thread_options(%{source: %{root: root, revision: revision}}) do
     %{
@@ -219,7 +211,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     dynamic_tool_binding = bind_tools(snapshot)
     codex = settings(snapshot).codex
     deadline = response_deadline(codex.read_timeout_ms)
-    launch = %{snapshot: snapshot, command: codex.command, instructions_root: nil}
+    launch = %{snapshot: snapshot, command: codex.command}
 
     with {:ok, port} <- open_port(System.tmp_dir!(), nil, dynamic_tool_binding, false, launch) do
       try do
@@ -576,14 +568,7 @@ defmodule SymphonyElixir.Codex.AppServer do
       kind, reason -> exit({:session_not_started, {kind, reason}})
     end
 
-    upstream_root = get_in(opts, [:checkout_prompt, :source, :root])
-
-    launch = %{
-      snapshot: snapshot,
-      command: codex.command,
-      instructions_root: upstream_root || get_in(opts, [:instructions, :root]),
-      upstream_instructions: is_binary(upstream_root)
-    }
+    launch = %{snapshot: snapshot, command: codex.command}
 
     with {:ok, port} <- open_port(workspace, worker_host, dynamic_tool_binding, containment || false, launch) do
       heartbeat = if containment, do: SessionProcess.heartbeat(port, Keyword.get(opts, :lifecycle_owner))
@@ -666,13 +651,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   defp isolated_launch_command(command, false, _workspace, _launch), do: command
 
   defp isolated_launch_command(command, containment, workspace, launch) do
-    opts = [
-      login: is_nil(launch.snapshot),
-      instructions_root: launch.instructions_root,
-      upstream_instructions: launch[:upstream_instructions]
-    ]
-
-    SessionProcess.launch_command(containment, command, workspace, opts)
+    SessionProcess.launch_command(containment, command, workspace, login: is_nil(launch.snapshot))
   end
 
   defp launch_command(dynamic_tool_binding, codex_command) do

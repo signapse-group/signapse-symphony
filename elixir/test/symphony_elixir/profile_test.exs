@@ -26,7 +26,14 @@ defmodule SymphonyElixir.ProfileTest do
     assert {:error, :invalid_or_duplicate_profile_id} = Profile.load(path, %{})
 
     entries = [
-      %{"id" => "fe", "workflow" => "fe.md", "instructions_root" => "instructions/fe", "control_path" => "$FE_DB", "env" => %{"JIRA_API_TOKEN" => "$MISSING"}},
+      %{
+        "id" => "fe",
+        "workflow" => "fe.md",
+        "checkout_workflow" => "WORKFLOW.md",
+        "checkout_upstream" => %{"repository" => "https://github.com/example/fe", "branch" => "dev"},
+        "control_path" => "$FE_DB",
+        "env" => %{"JIRA_API_TOKEN" => "$MISSING"}
+      },
       %{"id" => "be", "control_path" => "relative.sqlite"}
     ]
 
@@ -59,24 +66,29 @@ defmodule SymphonyElixir.ProfileTest do
     assert {:ok, %{workspace: %{root: nil}}} = Schema.parse(%{"workspace" => %{"root" => "$PATH"}}, %{})
   end
 
-  test "checkout workflow makes the package root optional only for a safe relative path", %{root: root} do
+  test "grouped profiles require a safe upstream branch and a relative workflow path", %{root: root} do
     path = Path.join(root, "profiles.json")
     entry = %{"id" => "planning", "workflow" => "planning.md", "control_path" => Path.join(root, "planning.db"), "env" => %{}}
+    workflow = "workflow/symphony/WORKFLOW.md"
+    repository = "https://github.com/example/planning"
 
-    for {attributes, expected} <- [
-          {%{}, %Profile{id: "planning", control_path: entry["control_path"], error: :invalid_profile_entry}},
-          {%{"checkout_workflow" => "../WORKFLOW.md"}, %Profile{id: "planning", control_path: entry["control_path"], error: :invalid_checkout_workflow_path}},
-          {%{"checkout_workflow" => nil}, %Profile{id: "planning", control_path: entry["control_path"], error: :invalid_checkout_workflow_path}},
-          {%{"checkout_workflow" => "workflow/symphony/WORKFLOW.md"},
-           %Profile{id: "planning", instructions_root: nil, checkout_workflow: "workflow/symphony/WORKFLOW.md", workflow_path: Path.join(root, "planning.md"), control_path: entry["control_path"]}}
+    for {attributes, reason} <- [
+          {%{}, :invalid_checkout_workflow_path},
+          {%{"checkout_workflow" => "../WORKFLOW.md"}, :invalid_checkout_workflow_path},
+          {%{"checkout_workflow" => workflow}, :invalid_checkout_upstream},
+          {%{"checkout_workflow" => workflow, "checkout_upstream" => %{"repository" => repository, "branch" => "topic"}}, :invalid_checkout_upstream},
+          {%{"checkout_workflow" => workflow, "checkout_upstream" => %{"repository" => "file:///tmp/planning", "branch" => "main"}}, :invalid_checkout_upstream}
         ] do
       File.write!(path, Jason.encode!(%{"profiles" => [Map.merge(entry, attributes)]}))
-      assert {:ok, [^expected]} = Profile.load(path, %{})
+      assert {:ok, [%Profile{id: "planning", error: ^reason}]} = Profile.load(path, %{})
     end
 
-    profile = fixture(root, "planning")
-    start_supervised!({Profile, [%{profile | checkout_workflow: "workflow/symphony/WORKFLOW.md", instructions_root: nil}]})
-    assert {:error, :checkout_instructions_enabled} = SymphonyElixir.Instructions.pin("planning")
+    valid = Map.merge(entry, %{"checkout_workflow" => workflow, "checkout_upstream" => %{"repository" => repository, "branch" => "main"}})
+    File.write!(path, Jason.encode!(%{"profiles" => [valid]}))
+
+    assert {:ok, [%Profile{id: "planning", error: nil} = planning]} = Profile.load(path, %{})
+    assert planning.checkout_workflow == workflow
+    assert planning.checkout_upstream == %{repository: repository, branch: "main"}
   end
 
   test "missing workflow recovers independently and an invalid reload retains the last good revision", %{root: root} do
@@ -177,7 +189,8 @@ defmodule SymphonyElixir.ProfileTest do
     %Profile{
       id: id,
       workflow_path: workflow_path,
-      instructions_root: Path.join([root, "instructions", id]),
+      checkout_workflow: "WORKFLOW.md",
+      checkout_upstream: %{repository: "https://github.com/example/fixtures", branch: "main"},
       control_path: control_path,
       env: %{
         "JIRA_BASE_URL" => "https://jira.example.invalid",

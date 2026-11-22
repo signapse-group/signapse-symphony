@@ -86,7 +86,6 @@ defmodule SymphonyElixir.LogFile do
       " ",
       {:profile_id, ["profile_id=", :profile_id, " "], []},
       {:workflow_revision, ["workflow_revision=", :workflow_revision, " "], []},
-      {:instructions_revision, ["instructions_revision=", :instructions_revision, " "], []},
       :msg,
       "\n"
     ]

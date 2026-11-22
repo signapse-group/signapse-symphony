@@ -1,8 +1,6 @@
 defmodule SymphonyElixir.GroupedRuntimeTest do
   use ExUnit.Case, async: false
 
-  import SymphonyElixir.TestSupport, only: [instructions_probe_root: 1, mount_instruction_fixture: 2]
-
   alias SymphonyElixir.{AssignmentOwners, HttpServer, Instructions, Orchestrator, Profile, RuntimeControl}
   alias SymphonyElixirWeb.Endpoint
 
@@ -49,31 +47,25 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
   @tag timeout: 120_000
   test "five contained workers load local instructions and wait at their own caps", %{tmp_dir: root} do
     if systemd_user?() do
-      run_probe(instructions_probe_root(root))
+      run_probe(root)
     end
   end
 
   @tag :tmp_dir
   @tag timeout: 120_000
   test "shared quota fences new work and continuations while retaining the running turn", %{tmp_dir: root} do
-    if systemd_user?(), do: run_shared_quota_probe(instructions_probe_root(root))
+    if systemd_user?(), do: run_shared_quota_probe(root)
   end
 
   @tag :tmp_dir
   @tag timeout: 120_000
-  test "repair and Resume reuse the checkout and open a task with its instructions", %{tmp_dir: root} do
-    if systemd_user?(), do: run_checkout_resume_probe(root)
-  end
-
-  @tag :tmp_dir
-  @tag timeout: 120_000
-  test "a resumed task uses the latest read-only instructions while retaining its task cwd", %{tmp_dir: root} do
+  test "a resumed task uses the latest published instructions while retaining its task cwd", %{tmp_dir: root} do
     if systemd_user?(), do: run_upstream_resume_probe(root)
   end
 
   @tag :tmp_dir
   @tag timeout: 120_000
-  test "QA Resume dispatches with read-only instructions when the browser compatibility mount is missing", %{tmp_dir: root} do
+  test "QA Resume uses published instructions without a host instructions mount", %{tmp_dir: root} do
     if systemd_user?() do
       put_test_config(:jira_client_module, JiraFixture)
       repo = Path.join(root, "qa-upstream")
@@ -85,11 +77,7 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
       {_, 0} = System.cmd("git", git ++ ["add", "."])
       {_, 0} = System.cmd("git", git ++ ["commit", "--quiet", "-m", "Publish QA instructions"])
 
-      qa =
-        profile(root, "qa", write_probe_script(root, "fake-codex-qa"), 1, repo)
-        |> Map.put(:checkout_upstream, %{repository: "file://#{repo}", branch: "main"})
-        |> Map.put(:instructions_root, Path.join(root, "missing-browser-mount"))
-        |> put_in([Access.key(:env), "SYMPHONY_QA_SEALED_UPSTREAM"], "1")
+      qa = profile(root, "qa", write_probe_script(root, "fake-codex-qa"), 1, repo)
 
       start_supervised!({Profile, {[qa], Path.join(root, "owners.sqlite3")}})
       assert eventually(fn -> snapshot("qa").readiness.ready end)
@@ -97,7 +85,7 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
 
       assert eventually(fn ->
                case File.read(trace_path(root, "qa")) do
-                 {:ok, trace} -> trace =~ "UPSTREAM-THREAD:readonly" and trace =~ "QA-UPSTREAM SIGN-"
+                 {:ok, trace} -> trace =~ "UPSTREAM-THREAD:unmounted" and trace =~ "QA-UPSTREAM SIGN-"
                  _ -> false
                end
              end),
@@ -113,9 +101,7 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
     provision_checkout_repo(repo)
     {_, 0} = System.cmd("git", ["-C", repo, "branch", "-M", "main"])
 
-    be =
-      profile(root, "be", write_probe_script(root, "fake-codex-upstream"), 1, repo)
-      |> Map.put(:checkout_upstream, %{repository: "file://#{repo}", branch: "main"})
+    be = profile(root, "be", write_probe_script(root, "fake-codex-upstream"), 1, repo)
 
     start_supervised!({Profile, {[be], Path.join(root, "owners.sqlite3")}})
     assert eventually(fn -> snapshot("be").readiness.ready end)
@@ -150,70 +136,33 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
 
     trace = File.read!(trace_path(root, "be"))
     assert trace =~ "THREAD-CWD:#{workspace}"
-    assert trace =~ "UPSTREAM-THREAD:readonly"
+    assert trace =~ "UPSTREAM-THREAD:unmounted"
     assert {:ok, ^original_head} = Instructions.checkout_head(workspace)
     assert {"codex/preserved\n", 0} == System.cmd("git", ["-C", workspace, "branch", "--show-current"])
     assert File.read!(local_agents) == "# Stale uncommitted task instructions"
     assert File.read!(Path.join(workspace, "local-output")) == "retain me"
-  end
+    digest = Base.encode16(:crypto.hash(:sha256, File.read!(Path.join(repo, "WORKFLOW.md"))), case: :lower)
 
-  defp run_checkout_resume_probe(root) do
-    put_test_config(:jira_client_module, JiraFixture)
-    repo = Path.join(root, "checkout-source")
-    provision_checkout_repo(repo)
-
-    be = profile(root, "be", write_probe_script(root, "fake-codex-checkout"), 1, repo)
-    start_supervised!({Profile, {[be], Path.join(root, "owners.sqlite3")}})
-    assert eventually(fn -> snapshot("be").readiness.ready end)
-    resume("be")
-
-    assert eventually(fn ->
-             match?(%{runtime_control: %{mode: :paused, source: "checkout_instructions"}, running: []}, snapshot("be"))
-           end)
-
-    assert %{retrying: [%{workspace_path: workspace, checkout_failure_path: "WORKFLOW.md"}]} = snapshot("be")
-    refute File.exists?(trace_path(root, "be"))
-    assert File.read!(Path.join(workspace, "hook-source")) == "checkout\n"
-
-    local_output = Path.join(workspace, "local-output")
-    File.write!(local_output, "preserve me")
-    workflow = "CHECKOUT-ONLY {{ issue.identifier }} from [local AGENTS](AGENTS.md)."
-    File.write!(Path.join(workspace, "WORKFLOW.md"), workflow)
-    digest = Base.encode16(:crypto.hash(:sha256, workflow), case: :lower)
-
-    resume("be")
-    assert eventually(fn -> checkout_turn_started?(root) end), inspect(snapshot("be"))
-    trace = File.read!(trace_path(root, "be"))
-    assert trace =~ "THREAD-CWD:#{workspace}"
-    assert trace =~ "CHECKOUT-ONLY SIGN-10011"
-    assert trace =~ "relative to WORKFLOW.md in this checkout"
-    refute trace =~ "uses instructions revision"
-
-    {head, 0} = System.cmd("git", ["-C", workspace, "rev-parse", "HEAD"])
-    head = String.trim(head)
-
-    assert %{running: [%{checkout_head: ^head, checkout_prompt_digest: ^digest, workspace_path: ^workspace}]} =
+    assert %{running: [%{checkout_head: ^original_head, checkout_prompt_digest: ^digest, workspace_path: ^workspace}]} =
              snapshot("be")
-
-    assert File.read!(local_output) == "preserve me"
   end
 
-  defp checkout_turn_started?(root) do
-    case File.read(trace_path(root, "be")) do
-      {:ok, trace} -> String.contains?(trace, "CHECKOUT-ONLY SIGN-10011")
-      _ -> false
-    end
-  end
-
-  defp provision_checkout_repo(repo) do
-    {_, 0} = System.cmd("git", ["init", "--quiet", repo])
+  defp provision_checkout_repo(repo, workflow \\ nil) do
+    {_, 0} = System.cmd("git", ["init", "--quiet", "-b", "main", repo])
     File.write!(Path.join(repo, "AGENTS.md"), "# Checkout instructions\n")
     skill = Path.join([repo, ".agents", "skills", "example", "SKILL.md"])
     File.mkdir_p!(Path.dirname(skill))
     File.write!(skill, "# Example skill\n")
+    if workflow, do: File.write!(Path.join(repo, "WORKFLOW.md"), workflow)
+    commit_checkout(repo, "Prepare checkout")
+  end
+
+  defp commit_checkout(repo, message) do
     git = ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
     {_, 0} = System.cmd("git", git ++ ["add", "."])
-    {_, 0} = System.cmd("git", git ++ ["commit", "--quiet", "-m", "Prepare checkout"])
+    {_, 0} = System.cmd("git", git ++ ["commit", "--quiet", "-m", message])
+    {:ok, revision} = Instructions.checkout_head(repo)
+    revision
   end
 
   defp run_shared_quota_probe(root) do
@@ -297,17 +246,10 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
     assert {:ok, {{127, 0, 0, 1}, port}} = Bandit.PhoenixAdapter.server_info(Endpoint, :http)
     assert eventually(fn -> state(port)["health"] == "healthy" end)
 
-    qa_active = Path.join(instructions_path(root, "qa"), "active")
-    File.rename!(qa_active, qa_active <> ".saved")
-    assert eventually(fn -> state(port)["health"] == "partial" end)
     resume("fe")
     assert eventually(fn -> profile_counts(port, "fe", "running") == 2 and profile_counts(port, "fe", "waiting") > 0 end)
     assert profile_counts(port, "be", "running") == 0
     assert profile_counts(port, "qa", "running") == 0
-    assert {:ok, _} = RuntimeControl.pause("QA probe pause while unready", "manual", Profile.via("qa", :runtime_control))
-    File.rename!(qa_active <> ".saved", qa_active)
-    assert eventually(fn -> state(port)["health"] == "healthy" end)
-    assert profile_mode(port, "qa") == "paused"
 
     for id <- @ids -- ["fe"], do: resume(id)
 
@@ -317,12 +259,10 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
 
     for id <- @ids do
       trace = File.read!(trace_path(root, id))
-      package = package_path(root, id)
-      revision = Path.basename(package)
-      file_count = package |> Path.join("**/*") |> Path.wildcard(match_dot: true) |> Enum.count(&File.regular?/1)
-      assert trace =~ "READ:#{revision}:readonly:#{file_count}"
+      assert {:ok, revision} = Instructions.checkout_head(checkout_repo(root, id))
+      assert trace =~ "UPSTREAM-THREAD:unmounted"
       assert trace =~ "ENV:#{id}:unset"
-      assert trace =~ "uses instructions revision #{revision}"
+      assert trace =~ "Use instructions revision #{revision}"
     end
 
     for index <- 0..4 do
@@ -330,7 +270,7 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
       assert {:ok, nil} = AssignmentOwners.owner(key)
     end
 
-    verify_activation_and_restart(root, port)
+    verify_publish_and_restart(root, port)
 
     assert {:ok, _} = RuntimeControl.pause("FE probe drain", "manual", Profile.via("fe", :runtime_control))
     assert profile_mode(port, "fe") in ["paused", "pausing"]
@@ -342,18 +282,13 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
     assert {:ok, %{mode: :checking_quota}} = RuntimeControl.resume(Profile.via(id, :runtime_control))
   end
 
-  defp verify_activation_and_restart(root, port) do
+  defp verify_publish_and_restart(root, port) do
     fe = Profile.via("fe", :orchestrator)
-    old = package_path(root, "fe")
-    old_revision = Path.basename(old)
-    instructions = instructions_path(root, "fe")
-    stage_package(root, "fe", "probe-v2")
-    File.mkdir_p!(Path.join([instructions, "revisions", "invalid"]))
-    assert {:error, _} = Instructions.activate("fe", "invalid")
-    assert {:ok, %{revision: ^old_revision}} = Instructions.status("fe")
-    assert {:ok, %{revision: "probe-v2"}} = Instructions.activate("fe", "probe-v2")
+    repo = checkout_repo(root, "fe")
+    File.write!(Path.join(repo, "WORKFLOW.md"), "UPDATED {{ issue.identifier }} from [local AGENTS](AGENTS.md).")
+    revision = commit_checkout(repo, "Publish newer FE instructions")
     assert profile_counts(port, "fe", "running") == 2
-    refute File.read!(trace_path(root, "fe")) =~ "READ:probe-v2"
+    refute File.read!(trace_path(root, "fe")) =~ revision
 
     workspace = Path.join([root, "workspaces", "fe"])
     output = Path.join([workspace, "SIGN-10001", "local-output"])
@@ -362,7 +297,7 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
     be_pid = GenServer.whereis(Profile.via("be", :orchestrator))
     Process.exit(fe_pid, :kill)
     assert eventually(fn -> GenServer.whereis(fe) not in [nil, fe_pid] end)
-    assert eventually(fn -> File.read!(trace_path(root, "fe")) =~ "READ:probe-v2" end), retry_diagnostics()
+    assert eventually(fn -> File.read!(trace_path(root, "fe")) =~ "Use instructions revision #{revision}" end), retry_diagnostics()
     assert eventually(fn -> profile_counts(port, "fe", "running") == 2 end)
     assert GenServer.whereis(Profile.via("be", :orchestrator)) == be_pid
     assert File.read!(output) == "retain me"
@@ -373,63 +308,52 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
     control = Path.join(root, id <> ".sqlite3")
     workspace = Path.join([root, "workspaces", id])
     workflow = Path.join(root, id <> ".md")
-    instructions = instructions_path(root, id)
+    repo = checkout_repo || checkout_repo(root, id)
+
+    if is_nil(checkout_repo) do
+      provision_checkout_repo(repo, "LOCAL-#{id} {{ issue.identifier }} from [local AGENTS](AGENTS.md).")
+    end
+
     fixture = Path.expand("../fixtures/profiles/#{id}.md", __DIR__)
     contents = File.read!(fixture)
     contents = String.replace(contents, "max_concurrent_agents:", "max_turns: #{max_turns}\n  max_concurrent_agents:")
     contents = String.replace(contents, "\nworkspace:", "\npolling:\n  interval_ms: 100\nworkspace:")
 
-    hook_config = if checkout_repo, do: checkout_fixture_hooks(), else: package_fixture_hooks()
-
     fixture_settings = """
     codex:
       command: #{script}
       read_timeout_ms: 15000
-    #{String.trim_trailing(hook_config)}
+    #{String.trim_trailing(checkout_fixture_hooks())}
     ---
     #{id} fixture
     """
 
     File.write!(workflow, String.replace(contents, "---\n#{id} fixture", String.trim_trailing(fixture_settings)))
 
-    unless checkout_repo, do: prepare_package_fixture(root, id, instructions)
-
     %Profile{
       id: id,
       workflow_path: workflow,
-      instructions_root: if(checkout_repo, do: nil, else: instructions),
-      checkout_workflow: if(checkout_repo, do: "WORKFLOW.md"),
+      checkout_workflow: "WORKFLOW.md",
+      checkout_upstream: %{repository: "file://#{repo}", branch: "main"},
       control_path: control,
-      env:
-        %{
-          "PATH" => System.fetch_env!("PATH"),
-          "HOME" => System.fetch_env!("HOME"),
-          "XDG_RUNTIME_DIR" => System.fetch_env!("XDG_RUNTIME_DIR"),
-          "DBUS_SESSION_BUS_ADDRESS" => System.fetch_env!("DBUS_SESSION_BUS_ADDRESS"),
-          "JIRA_BASE_URL" => "https://jira.example.invalid",
-          "JIRA_EMAIL" => "probe@example.invalid",
-          "JIRA_API_TOKEN" => "should-not-reach-worker",
-          "SYMPHONY_WORKSPACE_ROOT" => workspace,
-          "CONTROL_DB" => control,
-          "PROBE_PROFILE" => id,
-          "PROBE_TRACE" => trace_path(root, id),
-          "PROBE_LIMIT_CANDIDATES" => Path.join(root, "limit-candidates"),
-          "PROBE_QUOTA_EXHAUSTED" => Path.join(root, "quota-exhausted"),
-          "PROBE_QUOTA_TRACE" => quota_trace_path(root, id)
-        }
-        |> Map.merge(if(checkout_repo, do: %{"PROBE_CHECKOUT_REPO" => checkout_repo}, else: %{}))
+      env: %{
+        "PATH" => System.fetch_env!("PATH"),
+        "HOME" => System.fetch_env!("HOME"),
+        "XDG_RUNTIME_DIR" => System.fetch_env!("XDG_RUNTIME_DIR"),
+        "DBUS_SESSION_BUS_ADDRESS" => System.fetch_env!("DBUS_SESSION_BUS_ADDRESS"),
+        "JIRA_BASE_URL" => "https://jira.example.invalid",
+        "JIRA_EMAIL" => "probe@example.invalid",
+        "JIRA_API_TOKEN" => "should-not-reach-worker",
+        "SYMPHONY_WORKSPACE_ROOT" => workspace,
+        "CONTROL_DB" => control,
+        "PROBE_PROFILE" => id,
+        "PROBE_CHECKOUT_REPO" => repo,
+        "PROBE_TRACE" => trace_path(root, id),
+        "PROBE_LIMIT_CANDIDATES" => Path.join(root, "limit-candidates"),
+        "PROBE_QUOTA_EXHAUSTED" => Path.join(root, "quota-exhausted"),
+        "PROBE_QUOTA_TRACE" => quota_trace_path(root, id)
+      }
     }
-  end
-
-  defp package_fixture_hooks do
-    ~S"""
-    hooks:
-      before_run: |
-        test -r "$SYMPHONY_INSTRUCTIONS_ROOT/AGENTS.md" &&
-        test "$PROBE_PROFILE" = "$SYMPHONY_PROFILE_ID" &&
-        test -z "${JIRA_API_TOKEN+x}" &&
-        printf '%s\n' "$SYMPHONY_INSTRUCTIONS_REVISION" > hook-revision
-    """
   end
 
   defp checkout_fixture_hooks do
@@ -439,44 +363,10 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
       before_run: |
         test "$SYMPHONY_INSTRUCTIONS_SOURCE" = checkout &&
         test -z "${JIRA_API_TOKEN+x}" &&
-        if test -n "${SYMPHONY_INSTRUCTIONS_ROOT:-}"; then
-          test -r "$SYMPHONY_INSTRUCTIONS_ROOT/AGENTS.md" && test -n "$SYMPHONY_INSTRUCTIONS_REVISION"
-        else
-          test -z "${SYMPHONY_INSTRUCTIONS_REVISION+x}"
-        fi &&
+        test -r "$SYMPHONY_INSTRUCTIONS_ROOT/AGENTS.md" &&
+        test -n "$SYMPHONY_INSTRUCTIONS_REVISION" &&
         printf '%s\n' "$SYMPHONY_INSTRUCTIONS_SOURCE" > hook-source
     """
-  end
-
-  defp prepare_package_fixture(root, id, instructions) do
-    case System.get_env("SYMPHONY_TEST_PINNED_PACKAGES") do
-      nil ->
-        stage_package(root, id, "pinned-probe-v1")
-        File.write!(Path.join(instructions, "active"), "pinned-probe-v1\n")
-
-      dir ->
-        File.mkdir_p!(Path.dirname(instructions))
-        File.cp_r!(Path.join(dir, id), instructions)
-        mount_instruction_fixture(root, package_path(root, id))
-    end
-  end
-
-  defp stage_package(root, id, revision) do
-    dir = Path.join([instructions_path(root, id), "revisions", revision])
-    File.mkdir_p!(dir)
-    manifest = Jason.encode!(%{profile_id: id, revision: revision, workflow: "WORKFLOW.md", required_files: []})
-
-    for {name, body} <- [
-          {"instructions.json", manifest},
-          {"AGENTS.md", "This is a fixture."},
-          {"WORKFLOW.md", "LOCAL-#{id} {{ issue.identifier }} from [local AGENTS](AGENTS.md)."}
-        ] do
-      file = Path.join(dir, name)
-      File.write!(file, body)
-      File.chmod!(file, 0o444)
-    end
-
-    mount_instruction_fixture(root, dir)
   end
 
   defp write_probe_script(root, name \\ "fake-codex") do
@@ -487,7 +377,6 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
     import json
     import os
     from pathlib import Path
-    import re
     import sys
     import time
 
@@ -505,34 +394,23 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
             result = {"rateLimits": {"primary": {"usedPercent": usage}}}
         elif method == "thread/start":
             thread_started = True
-            if os.environ.get("PROBE_CHECKOUT_REPO"):
-                cwd = msg["params"]["cwd"]
-                assert Path(cwd) == Path.cwd()
-                assert Path("AGENTS.md").is_file()
-                assert Path(".agents/skills/example/SKILL.md").is_file()
-                assert Path("hook-source").read_text().strip() == "checkout"
-                with open(os.environ["PROBE_TRACE"], "a") as trace:
-                    trace.write(f"THREAD-CWD:{cwd}\\n")
-                    if "developerInstructions" in msg["params"]:
-                        assert msg["params"]["config"]["project_doc_max_bytes"] == 0
-                        policy = msg["params"]["developerInstructions"]
-                        source = Path(policy.splitlines()[0].split(" (", 1)[0].removeprefix("Use the pinned repository instructions at "))
-                        assert os.statvfs(source).f_flag & os.ST_RDONLY
-                        assert (source / "AGENTS.md").read_text() == "# Current AGENTS"
-                        trace.write("UPSTREAM-THREAD:readonly\\n")
+            cwd = msg["params"]["cwd"]
+            assert Path(cwd) == Path.cwd()
+            assert Path(".agents/skills/example/SKILL.md").is_file()
+            assert Path("hook-source").read_text().strip() == "checkout"
+            assert msg["params"]["config"]["project_doc_max_bytes"] == 0
+            policy = msg["params"]["developerInstructions"]
+            source = Path(policy.splitlines()[0].split(" (", 1)[0].removeprefix("Use the pinned repository instructions at "))
+            assert source != Path(cwd)
+            assert not os.statvfs(source).f_flag & os.ST_RDONLY
+            assert (source / "AGENTS.md").is_file()
+            with open(os.environ["PROBE_TRACE"], "a") as trace:
+                trace.write(f"THREAD-CWD:{cwd}\\n")
+                trace.write("UPSTREAM-THREAD:unmounted\\n")
             result = {"thread": {"id": f"thread-{os.getpid()}"}}
         elif method == "turn/start":
             prompt = msg["params"]["input"][0]["text"]
             with open(os.environ["PROBE_TRACE"], "a") as trace:
-                if not os.environ.get("PROBE_CHECKOUT_REPO"):
-                    root = Path(re.search(r"Read AGENTS.md and the required phase instructions from (.+)\\.\\n", prompt)[1])
-                    assert os.statvfs(root).f_flag & os.ST_RDONLY
-                    assert (root / "AGENTS.md").read_bytes()
-                    assert Path("hook-revision").read_text().strip() == root.name
-                    files = [path for path in root.rglob("*") if path.is_file()]
-                    for path in files:
-                        path.read_bytes()
-                    trace.write(f"READ:{root.name}:readonly:{len(files)}\\n")
                 trace.write(f"ENV:{os.environ['PROBE_PROFILE']}:{os.environ.get('JIRA_API_TOKEN', 'unset')}\\n")
                 trace.write(prompt + "\\n")
             result = {"turn": {"id": "probe-turn"}}
@@ -567,7 +445,7 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
 
   defp trace_path(root, id), do: Path.join(root, id <> ".trace")
   defp quota_trace_path(root, id), do: Path.join(root, id <> ".quota")
-  defp instructions_path(root, id), do: Path.join([root, "instructions", id])
+  defp checkout_repo(root, id), do: Path.join([root, "upstream", id])
 
   defp quota_checks(root, id, scope, usage) do
     {:ok, trace} = File.read(quota_trace_path(root, id))
@@ -575,12 +453,6 @@ defmodule SymphonyElixir.GroupedRuntimeTest do
   end
 
   defp snapshot(id), do: Orchestrator.snapshot(Profile.via(id, :orchestrator), 5_000)
-
-  defp package_path(root, id) do
-    instructions = instructions_path(root, id)
-    revision = instructions |> Path.join("active") |> File.read!() |> String.trim()
-    Path.join([instructions, "revisions", revision])
-  end
 
   defp state(port), do: get(port, "/api/v1/state")
   defp profile_counts(port, id, key), do: get_in(get(port, "/api/v1/profiles/#{id}/state"), ["counts", key]) || 0

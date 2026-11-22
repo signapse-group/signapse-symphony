@@ -147,7 +147,7 @@ class DeploymentTests(unittest.TestCase):
     def test_grouped_health_requires_all_profiles_and_independent_control(self):
         profiles = [
             {'profile_id': identity, 'health': 'healthy', 'max_concurrent_agents': cap,
-             'workflow_revision': 'workflow-sha', 'instructions_revision': 'instructions-sha',
+             'workflow_revision': 'workflow-sha', 'instructions_source': 'checkout',
              'runtime_control': {'enabled': True, 'mode': 'paused', 'database_error': None,
                                  'services': {identity: {'status': 'online'}}}}
             for identity, cap in deploy.PROFILES.items()
@@ -161,7 +161,6 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(deploy.health({deploy.GROUPED_SERVICE: '/new/symphony'}), ['123'])
             open_url.assert_called_once_with('http://127.0.0.1:4000/api/v1/state', timeout=5)
             checkout = profiles[0]
-            checkout.pop('instructions_revision')
             for source in [None, 'package', 'unknown', 'checkout']:
                 with self.subTest(source=source):
                     checkout.update(instructions_source=source)

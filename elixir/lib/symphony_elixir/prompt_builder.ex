@@ -3,7 +3,7 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from normalized tracker work item data.
   """
 
-  alias SymphonyElixir.{Config, Instructions, Workflow}
+  alias SymphonyElixir.{Config, Workflow}
   alias SymphonyElixir.Tracker.Issue
 
   @render_opts [strict_variables: true, strict_filters: true]
@@ -12,28 +12,6 @@ defmodule SymphonyElixir.PromptBuilder do
   def build_prompt(issue, opts \\ []) do
     template = Workflow.current() |> prompt_template!() |> parse_template!()
     render(template, issue, Keyword.get(opts, :attempt), %{})
-  end
-
-  @spec build_prompt(Issue.t(), non_neg_integer() | nil, Instructions.pin()) :: String.t()
-  def build_prompt(issue, attempt, pin) do
-    """
-    Symphony profile #{pin.profile_id} uses instructions revision #{pin.revision}.
-    Read AGENTS.md and the required phase instructions from #{pin.root}.
-    Resolve instructions links in the following workflow relative to #{pin.workflow_path}.
-    The issue workspace is the working directory for task code and outputs.
-
-    """ <> render_instructions(issue, attempt, pin)
-  end
-
-  @doc false
-  @spec render_instructions(Issue.t(), non_neg_integer() | nil, Instructions.prompt_pin()) :: String.t()
-  def render_instructions(issue, attempt, pin) do
-    template = parse_template!(pin.workflow.prompt_template)
-
-    render(template, issue, attempt, %{
-      "profile" => %{"id" => pin.profile_id},
-      "instructions" => %{"root" => pin.root, "revision" => pin.revision}
-    })
   end
 
   @doc false

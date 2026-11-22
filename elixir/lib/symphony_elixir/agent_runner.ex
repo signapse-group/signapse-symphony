@@ -26,8 +26,7 @@ defmodule SymphonyElixir.AgentRunner do
     if snapshot do
       metadata = [
         profile_id: snapshot.profile_id,
-        workflow_revision: snapshot.revision,
-        instructions_revision: get_in(opts[:instructions], [:revision])
+        workflow_revision: snapshot.revision
       ]
 
       Logger.metadata(metadata)
@@ -213,7 +212,6 @@ defmodule SymphonyElixir.AgentRunner do
     session_opts = [
       worker_host: worker_host,
       profile_snapshot: snapshot,
-      instructions: opts[:instructions],
       checkout_prompt: opts[:checkout_prompt],
       on_started: on_started,
       on_stopped: on_stopped,
@@ -316,10 +314,9 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp build_turn_prompt(issue, opts, 1, _max_turns) do
-    case {opts[:checkout_prompt], opts[:instructions]} do
-      {%{prompt: prompt}, nil} -> recovery_prompt(prompt, opts)
-      {nil, nil} -> PromptBuilder.build_prompt(issue, opts)
-      {nil, pin} -> recovery_prompt(PromptBuilder.build_prompt(issue, opts[:attempt], pin), opts)
+    case opts[:checkout_prompt] do
+      %{prompt: prompt} -> recovery_prompt(prompt, opts)
+      nil -> PromptBuilder.build_prompt(issue, opts)
     end
   end
 
@@ -422,7 +419,6 @@ defmodule SymphonyElixir.AgentRunner do
 
       snapshot ->
         snapshot
-        |> Map.put(:instructions, opts[:instructions])
         |> Map.put(:workspace_prepared, opts[:on_workspace])
         |> Map.put(:hook_started, opts[:on_session_process])
         |> Map.put(:hook_stopped, opts[:on_session_closed])
