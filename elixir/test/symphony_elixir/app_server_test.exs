@@ -3,6 +3,43 @@ defmodule SymphonyElixir.AppServerTest do
 
   alias SymphonyElixir.RuntimeControl
 
+  test "QA child terminals do not end the active parent turn" do
+    script = ~S"""
+    IFS= read -r _line
+    cat <<'JSON'
+    {"id":3,"result":{"turn":{"id":"parent-turn"}}}
+    {"method":"turn/failed","params":{"threadId":"child-thread","turn":{"id":"child-turn","status":"failed"}}}
+    {"method":"turn/cancelled","params":{"threadId":"child-thread"}}
+    {"method":"turn/completed","params":{"threadId":"parent-thread","turn":{"id":"earlier-turn","status":"completed"}}}
+    {"method":"turn/completed","params":{"threadId":"parent-thread","turn":{"id":"parent-turn","status":"completed"}}}
+    JSON
+    """
+
+    port = Port.open({:spawn_executable, "/bin/sh"}, [:binary, :exit_status, {:line, 1_048_576}, {:args, ["-c", script]}])
+
+    session = %{
+      port: port,
+      metadata: %{},
+      approval_policy: "never",
+      auto_approve_requests: false,
+      turn_sandbox_policy: %{"type" => "workspaceWrite"},
+      thread_id: "parent-thread",
+      workspace: System.tmp_dir!(),
+      codex: %{read_timeout_ms: 1_000, turn_timeout_ms: 1_000},
+      profile_snapshot: %{profile_id: "qa"},
+      dynamic_tool_binding: %{}
+    }
+
+    issue = %Issue{id: "qa-turn", identifier: "SIGN-1", title: "Use QA tools", state: "Progress", labels: []}
+
+    assert {:ok, %{turn_id: "parent-turn", result: :turn_completed}} =
+             AppServer.run_turn(session, "Run the QA tools", issue, runtime_control: RuntimeControl, on_message: &send(self(), &1))
+
+    assert_receive %{event: :turn_completed, payload: %{"params" => %{"turn" => %{"id" => "parent-turn"}}}}
+    refute_received %{event: :turn_failed}
+    refute_received %{event: :turn_cancelled}
+  end
+
   test "app server rejects the workspace root and paths outside workspace root" do
     test_root =
       Path.join(

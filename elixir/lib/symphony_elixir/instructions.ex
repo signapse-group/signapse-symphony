@@ -76,12 +76,32 @@ defmodule SymphonyElixir.Instructions do
          :ok <- clone_upstream(root, upstream, path, snapshot),
          {:ok, revision} <- checkout_head(root),
          {:ok, branch} <- git(root, ["symbolic-ref", "--short", "HEAD"]),
-         true <- String.trim(branch) == upstream.branch do
-      run.(%{root: root, revision: revision})
+         true <- String.trim(branch) == upstream.branch,
+         {:ok, source_root} <- checkout_source_root(snapshot, root, revision) do
+      run.(%{root: source_root, revision: revision})
     else
       _ -> checkout_failure(:checkout_upstream_unavailable, path)
     end
   end
+
+  defp checkout_source_root(
+         %{profile_id: "qa", instructions_root: instructions_root, env: %{"SYMPHONY_QA_SEALED_UPSTREAM" => "1"}},
+         _checkout,
+         revision
+       ) do
+    sealed = Path.join([instructions_root, "revisions", revision])
+
+    with {:ok, ^sealed} <- PathSafety.canonicalize(sealed),
+         {:ok, %File.Stat{type: :directory, uid: 0}} <- File.lstat(sealed),
+         {options, 0} <- System.cmd("/usr/bin/findmnt", ["-rn", "-o", "OPTIONS", "--target", sealed]),
+         true <- "ro" in String.split(String.trim(options), ",") do
+      {:ok, sealed}
+    else
+      _ -> {:error, :checkout_upstream_unavailable}
+    end
+  end
+
+  defp checkout_source_root(_snapshot, checkout, _revision), do: {:ok, checkout}
 
   defp clone_upstream(root, %{repository: repository, branch: branch}, path, snapshot) do
     auth = credential_args(snapshot.env)

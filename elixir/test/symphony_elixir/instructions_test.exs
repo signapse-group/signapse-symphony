@@ -2,7 +2,7 @@ defmodule SymphonyElixir.InstructionsTest do
   use ExUnit.Case, async: false
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{Instructions, Profile, PromptBuilder, Workflow}
+  alias SymphonyElixir.{Instructions, Profile, PromptBuilder, TestSupport, Workflow}
   alias SymphonyElixir.Tracker.Issue
 
   @profiles Path.expand("../fixtures/profiles", __DIR__)
@@ -174,6 +174,34 @@ defmodule SymphonyElixir.InstructionsTest do
     assert File.read!(Path.join(workspace, "AGENTS.md")) == "# Unsaved task change"
     assert File.read!(Path.join(workspace, "artifacts/run.json")) == "{}"
     assert File.read!(Path.join(workspace, "WORKFLOW.md")) == "Original {{ issue.identifier }}"
+
+    fixture_root = TestSupport.instructions_probe_root(root)
+    sealed = Path.join(fixture_root, "sealed-instructions")
+
+    sealed_snapshot =
+      snapshot
+      |> Map.merge(%{profile_id: "qa", instructions_root: sealed})
+      |> put_in([:env, "SYMPHONY_QA_SEALED_UPSTREAM"], "1")
+
+    for writable <- [false, true] do
+      if writable, do: checkout_write(sealed, "revisions/#{updated}/AGENTS.md", "# Writable instructions")
+
+      assert {:error, {:checkout_instructions, :checkout_upstream_unavailable, "WORKFLOW.md"}} =
+               Instructions.with_checkout_upstream(sealed_snapshot, nil, fn _ -> flunk("Started without a sealed QA revision") end)
+    end
+
+    if System.get_env("SYMPHONY_TEST_BIND_INSTRUCTIONS") == "1" do
+      pin = Path.join([sealed, "revisions", updated])
+      uid = File.stat!(pin).uid
+      assert {_, 0} = System.cmd("sudo", ["-n", "chown", "root", "--", pin])
+      on_exit(fn -> assert {_, 0} = System.cmd("sudo", ["-n", "chown", to_string(uid), "--", pin]) end)
+
+      assert {:error, {:checkout_instructions, :checkout_upstream_unavailable, "WORKFLOW.md"}} =
+               Instructions.with_checkout_upstream(sealed_snapshot, nil, fn _ -> flunk("Started with a writable QA revision") end)
+
+      TestSupport.mount_instruction_fixture(fixture_root, pin)
+      assert %{root: ^pin, revision: ^updated} = Instructions.with_checkout_upstream(sealed_snapshot, nil, & &1)
+    end
 
     missing = put_in(snapshot.checkout_upstream.branch, "dev")
 
