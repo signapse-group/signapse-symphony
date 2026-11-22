@@ -129,6 +129,9 @@ defmodule SymphonyElixir.ProfileObservabilityTest do
   end
 
   setup context do
+    config = Application.fetch_env!(:symphony_elixir, Endpoint)
+    on_exit(fn -> Application.put_env(:symphony_elixir, Endpoint, config) end)
+
     root = Path.join(System.tmp_dir!(), "symphony-profile-dashboard-#{System.unique_integer([:positive])}")
 
     env =
