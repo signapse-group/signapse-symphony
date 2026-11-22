@@ -175,6 +175,20 @@ defmodule SymphonyElixir.InstructionsTest do
     assert File.read!(Path.join(workspace, "artifacts/run.json")) == "{}"
     assert File.read!(Path.join(workspace, "WORKFLOW.md")) == "Original {{ issue.identifier }}"
 
+    sealed = Path.join(root, "sealed-instructions")
+
+    sealed_snapshot =
+      snapshot
+      |> Map.merge(%{profile_id: "qa", instructions_root: sealed})
+      |> put_in([:env, "SYMPHONY_QA_SEALED_UPSTREAM"], "1")
+
+    for writable <- [false, true] do
+      if writable, do: checkout_write(sealed, "revisions/#{updated}/AGENTS.md", "# Writable instructions")
+
+      assert {:error, {:checkout_instructions, :checkout_upstream_unavailable, "WORKFLOW.md"}} =
+               Instructions.with_checkout_upstream(sealed_snapshot, nil, fn _ -> flunk("Started without a sealed QA revision") end)
+    end
+
     missing = put_in(snapshot.checkout_upstream.branch, "dev")
 
     assert {:error, {:checkout_instructions, :checkout_upstream_unavailable, "WORKFLOW.md"}} =
