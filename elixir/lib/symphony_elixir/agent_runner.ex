@@ -331,8 +331,10 @@ defmodule SymphonyElixir.AgentRunner do
     - This is continuation turn ##{turn_number} of #{max_turns} for the current agent run.
     - Resume from the current workspace and workpad state instead of restarting from scratch.
     - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.
-    - Continue only the assignment given to this session. Finish after its configured phase boundary transition and readback; a new session owns the next phase.
-    - Within the same assignment, focus on the remaining work until it is complete or you are blocked.
+    - Follow this session's phase procedure. If it calls for a transition, finish after reading it back and leave the next phase to its assigned session.
+    - Check the existing handoff for new input. If the phase procedure allows waiting and all remaining actions belong to the handoff recipients,
+      return the handoff reference and end the turn in the current phase while that input is pending.
+    - When new input arrives or independent work remains, continue the work within this session's assignment and authority.
     """
   end
 
