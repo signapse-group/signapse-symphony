@@ -50,6 +50,11 @@ defmodule SymphonyElixir.InstructionsTest do
     assert {:error, {:checkout_instructions, :checkout_required_file_invalid, "CONTRIBUTING.md"}} =
              Instructions.prepare_checkout(workspace, workflow, issue, settings, nil)
 
+    checkout_write(workspace, "docs/runbooks/survey.md", "[Escape](../../../outside.md)")
+
+    assert {:error, {:checkout_instructions, :checkout_required_file_invalid, "docs/runbooks/survey.md"}} =
+             Instructions.prepare_checkout(workspace, workflow, issue, settings, nil)
+
     checkout_write(workspace, workflow, "[Escape](../../../docs/runbooks/survey.md)")
 
     assert {:error, :checkout_required_file_invalid} =
@@ -82,6 +87,7 @@ defmodule SymphonyElixir.InstructionsTest do
     File.mkdir_p!(Path.join(workspace, ".agents/skills"))
     assert {:error, :checkout_skills_invalid} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
     checkout_write(workspace, ".agents/skills/generic/SKILL.md", "# Skill\n")
+    assert {:ok, _} = Instructions.checkout_prompt(workspace, workflow, %{issue | state: "Progress"}, settings)
 
     assert {:error, :checkout_required_file_missing} =
              Instructions.checkout_prompt(workspace, workflow, issue, settings)
@@ -98,7 +104,6 @@ defmodule SymphonyElixir.InstructionsTest do
     assert {:ok, %{prompt: prompt}} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
     assert prompt =~ "Task #{issue.identifier}"
     assert {:error, :checkout_head_unavailable} = Instructions.checkout_head(workspace)
-    assert {:error, :checkout_head_unavailable} = Instructions.checkout_head(Path.join(workspace, "absent"))
     assert {_, 0} = System.cmd("git", ["init", "--quiet", workspace])
     assert {:error, :checkout_head_unavailable} = Instructions.checkout_head(workspace)
     git = ["-C", workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
@@ -185,6 +190,8 @@ defmodule SymphonyElixir.InstructionsTest do
 
     try do
       System.put_env("PATH", root)
+
+      assert {:error, :checkout_head_unavailable} = Instructions.checkout_head(workspace)
 
       assert {:error, {:checkout_instructions, :checkout_upstream_unavailable, "WORKFLOW.md"}} =
                Instructions.with_checkout_upstream(snapshot, nil, fn _ -> flunk("Started without the clone timeout program") end)
