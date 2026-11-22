@@ -20,6 +20,9 @@ defmodule SymphonyElixir.InstructionsTest do
     {% endif %}
     [Dependency](https://github.com/org/repo/blob/main/docs/contract.md).
     [Evidence](../../docs/results/task.md).
+    ~~~markdown
+    [Illustrative link](../../docs/runbooks/not-a-real-runbook.md).
+    ~~~
     """
 
     contents = String.replace(contents, "\n", "\r\n")
@@ -60,6 +63,7 @@ defmodule SymphonyElixir.InstructionsTest do
     issue = issue("In Review", [])
     assert {:error, :checkout_workflow_missing} = Instructions.checkout_template(workspace, workflow)
     assert {:error, :checkout_workflow_invalid} = Instructions.checkout_template(workspace, "../WORKFLOW.md")
+    assert {:error, :checkout_workflow_invalid} = Instructions.checkout_template(workspace, nil)
 
     for content <- [" ", <<255>>, "---\ntracker:\n  kind: attacker\n---\nVisible"] do
       checkout_write(workspace, workflow, content)
@@ -94,7 +98,9 @@ defmodule SymphonyElixir.InstructionsTest do
     assert {:ok, %{prompt: prompt}} = Instructions.checkout_prompt(workspace, workflow, issue, settings)
     assert prompt =~ "Task #{issue.identifier}"
     assert {:error, :checkout_head_unavailable} = Instructions.checkout_head(workspace)
+    assert {:error, :checkout_head_unavailable} = Instructions.checkout_head(Path.join(workspace, "absent"))
     assert {_, 0} = System.cmd("git", ["init", "--quiet", workspace])
+    assert {:error, :checkout_head_unavailable} = Instructions.checkout_head(workspace)
     git = ["-C", workspace, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
     commit = ["commit", "--quiet", "--allow-empty", "-m", "Fixture"]
     assert {_, 0} = System.cmd("git", git ++ commit)

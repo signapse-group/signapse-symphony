@@ -55,8 +55,6 @@ defmodule SymphonyElixir.InstructionReferences do
 
   defp provenance?(label), do: String.starts_with?(String.downcase(label), "provenance:")
 
-  defp resolve_reference_path(root, source, "", anchor), do: resolve_local(root, root, source, anchor)
-
   defp resolve_reference_path(root, source, path, anchor) do
     resolve_local(root, Path.dirname(Path.join(root, source)), path, anchor)
   end
